@@ -23,7 +23,8 @@ target_include_directories(ARMSX3IOSProbe PRIVATE "${ARMSX3_ROOT}/rpcs3")
 target_compile_options(ARMSX3IOSProbe PRIVATE -fobjc-arc -mcpu=apple-a15 -Wall -Wextra)
 target_compile_definitions(ARMSX3IOSProbe PRIVATE ARMSX3_SOURCE_COMMIT="${ARMSX3_SOURCE_COMMIT}")
 target_link_libraries(ARMSX3IOSProbe PRIVATE
-    "-framework UIKit" "-framework Foundation" "-framework Metal" "-framework QuartzCore")
+    "-framework UIKit" "-framework Foundation" "-framework Metal" "-framework QuartzCore"
+    "-framework CoreGraphics")
 set_target_properties(ARMSX3IOSProbe PROPERTIES
     OUTPUT_NAME ARMSX3iOSProbe
     MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/Info.plist.in"
