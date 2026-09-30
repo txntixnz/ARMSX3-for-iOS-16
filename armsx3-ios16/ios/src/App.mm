@@ -3,6 +3,7 @@
 #import <QuartzCore/CAMetalLayer.h>
 #import <Metal/Metal.h>
 #import "Diagnostics.h"
+#include "StartupLog.h"
 #include "Emu/RSX/VK/vkutils/metal_layer.h"
 
 @interface MetalPreview : UIView
@@ -62,6 +63,7 @@
 }
 - (void)viewDidLoad {
     [super viewDidLoad];
+    ARMSX3StartupLog("viewDidLoad entered");
     self.view.backgroundColor = UIColor.systemBackgroundColor;
     self.title = @"ARMSX3 · iOS 16 port";
     NSURL* documents = [[NSFileManager defaultManager] URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask].firstObject;
@@ -73,13 +75,15 @@
     self.output.editable = NO;
     self.output.font = [UIFont monospacedSystemFontOfSize:12 weight:UIFontWeightRegular];
     self.output.text = @"P0 platform diagnostics — the PS3 core is not linked yet.\n\nTarget: iPhone 13 Pro Max (A15), iOS 16.0.\n\nRun platform checks, then share the report. The separate JIT execution test may close the app if iOS rejects generated code; its pending stage is saved first.\n\nA cyan panel shows the UIKit Metal surface.";
+    ARMSX3StartupLog("Creating Metal preview");
     self.preview = [[MetalPreview alloc] initWithFrame:CGRectZero];
+    ARMSX3StartupLog("Metal preview created");
     [self.preview.heightAnchor constraintEqualToConstant:48].active = YES;
     self.runButton = [self button:@"Run platform checks" action:@selector(runChecks)];
     self.jitButton = [self button:@"Test generated code (JIT)" action:@selector(confirmJIT)];
-    self.shareButton = [self button:@"Share diagnostic report" action:@selector(shareReport)];
+    self.shareButton = [self button:@"Share logs / report" action:@selector(shareReport)];
     self.jitButton.enabled = self.report != nil;
-    self.shareButton.enabled = self.report != nil;
+    self.shareButton.enabled = YES;
     UIStackView* stack = [[UIStackView alloc] initWithArrangedSubviews:@[self.preview, self.runButton, self.jitButton, self.shareButton, self.output]];
     stack.axis = UILayoutConstraintAxisVertical;
     stack.spacing = 10;
@@ -92,6 +96,7 @@
         [stack.leadingAnchor constraintEqualToAnchor:safe.leadingAnchor constant:16],
         [stack.trailingAnchor constraintEqualToAnchor:safe.trailingAnchor constant:-16]]];
     if (self.report) [self displayReport];
+    ARMSX3StartupLog("viewDidLoad complete");
 }
 - (void)displayReport {
     NSData* data = [NSJSONSerialization dataWithJSONObject:self.report options:NSJSONWritingPrettyPrinted | NSJSONWritingSortedKeys error:nil];
@@ -108,7 +113,7 @@
 - (void)setBusy:(BOOL)busy {
     self.runButton.enabled = !busy;
     self.jitButton.enabled = !busy && self.report != nil;
-    self.shareButton.enabled = !busy && self.report != nil;
+    self.shareButton.enabled = !busy;
 }
 - (void)runChecks {
     [self setBusy:YES];
@@ -152,8 +157,14 @@
     });
 }
 - (void)shareReport {
-    if (![self saveReport]) return;
-    UIActivityViewController* share = [[UIActivityViewController alloc] initWithActivityItems:@[self.reportURL] applicationActivities:nil];
+    if (self.report && ![self saveReport]) return;
+    NSMutableArray* items = [NSMutableArray array];
+    NSURL* startupURL = [[self.reportURL URLByDeletingLastPathComponent] URLByAppendingPathComponent:@"ARMSX3-startup.log"];
+    for (NSURL* url in @[startupURL, self.reportURL]) {
+        if ([[NSFileManager defaultManager] fileExistsAtPath:url.path]) [items addObject:url];
+    }
+    if (!items.count) { self.output.text = @"No log files available yet."; return; }
+    UIActivityViewController* share = [[UIActivityViewController alloc] initWithActivityItems:items applicationActivities:nil];
     share.popoverPresentationController.sourceView = self.shareButton;
     share.popoverPresentationController.sourceRect = self.shareButton.bounds;
     [self presentViewController:share animated:YES completion:nil];
@@ -165,12 +176,20 @@
 @end
 @implementation AppDelegate
 - (BOOL)application:(UIApplication*)application didFinishLaunchingWithOptions:(NSDictionary*)options {
+    ARMSX3StartupLog("didFinishLaunching entered");
     self.window = [[UIWindow alloc] initWithFrame:UIScreen.mainScreen.bounds];
     self.window.rootViewController = [[UINavigationController alloc] initWithRootViewController:[ProbeController new]];
+    ARMSX3StartupLog("Window and root controller created");
     [self.window makeKeyAndVisible];
+    ARMSX3StartupLog("Window visible");
     return YES;
 }
 @end
 int main(int argc, char* argv[]) {
-    @autoreleasepool { return UIApplicationMain(argc, argv, nil, NSStringFromClass(AppDelegate.class)); }
+    ARMSX3StartupLog("=== P0.1 build 2: main entered ===");
+    @autoreleasepool {
+        ARMSX3InstallExceptionLogger();
+        ARMSX3StartupLog("Entering UIApplicationMain");
+        return UIApplicationMain(argc, argv, nil, NSStringFromClass(AppDelegate.class));
+    }
 }

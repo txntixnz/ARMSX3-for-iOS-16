@@ -41,3 +41,16 @@ or inspect on-device diagnostic JSON if build succeeds. Then wire the actual cor
 and cross-compiled dependencies. A passing JIT test executes only mov w0,#42;ret
 through RW->RX memory; it does not establish full RPCS3 JIT compatibility.
 Do not shrink guest reservations blindly to fit a small address window.
+
+
+## P0.1 update
+- User confirmed the third Actions run succeeded, then reported instant launch exit
+  on iPhone with no Analytics log.
+- Removed dynamic-codesigning from signing entitlements (documented TrollStore
+  launch-crash risk), plus irrelevant macOS JIT entitlement keys.
+- Added final signed-entitlement validation, build number 2, persistent startup
+  checkpoints from main(), uncaught Objective-C exception logging, and log sharing
+  before any tests. No pre-main or SIGKILL logging claim.
+- Removed unused sysinfo_darwin.mm from probe: it had a global Foundation initializer.
+- Cause is a strong signing hypothesis, not proven from a device crash report.
+- Next: user checks new workflow result and installs build 2, sends startup log.

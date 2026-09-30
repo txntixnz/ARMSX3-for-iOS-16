@@ -23,7 +23,7 @@ No Android binary or prebuilt iOS emulator is repackaged.
 
 A jailbreak enables the intended JIT deployment path, but the selected installer,
 process signing state and memory APIs still have to work together. The entitlement
-file requests extended virtual addressing and JIT-related capabilities; including
+file requests extended virtual addressing and get-task-allow; including
 an entitlement does not itself prove that iOS grants it. Tests report observations.
 
 ## Implemented
@@ -78,3 +78,24 @@ native dependencies. Do not turn on Android macros to bypass missing dependencie
 ARMSX3/RPCS3 license: GPL-2.0-only; source patch and new code are supplied under
 that license. Upstream has individually licensed dependencies; preserve their terms.
 No PS3 firmware, games or proprietary drivers are included.
+
+## P0.1 startup repair (build 2)
+
+The first on-device build was reported to exit instantly with no Analytics log.
+The initial entitlement template incorrectly included `dynamic-codesigning`.
+TrollStore's [banned entitlement documentation](https://github.com/opa334/TrollStore#banned-entitlements)
+identifies this as a launch-crash risk on A12+ devices. P0.1 removes it, also removes
+irrelevant macOS JIT entitlements, and checks the final signed app for all three
+TrollStore-banned keys. Device confirmation is still needed; no crash report was available.
+
+Startup checkpoints now append to **Documents/ARMSX3-startup.log**, beginning in
+`main()` before UIKit startup. The **Share logs / report** button works before running
+any tests. Uncaught Objective-C exceptions are logged; OS termination before `main()`,
+SIGKILL and arbitrary memory faults are not caught by that handler. No log is guaranteed
+if signing or dynamic loading prevents the app from entering `main()`.
+The unused upstream process-info translation unit was removed from the probe target
+so its global Foundation initializer does not run before the new startup logger.
+
+Install the new IPA over the old app in TrollStore. First check that it opens and
+share the startup log. There is no need to repeat the JIT or large-memory tests until
+the initial screen appears. The PS3 core is still not linked.

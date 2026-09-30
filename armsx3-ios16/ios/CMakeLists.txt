@@ -16,9 +16,8 @@ get_filename_component(ARMSX3_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/UPSTREAM_COMMIT" ARMSX3_SOURCE_COMMIT)
 string(STRIP "${ARMSX3_SOURCE_COMMIT}" ARMSX3_SOURCE_COMMIT)
 add_executable(ARMSX3IOSProbe MACOSX_BUNDLE
-    src/App.mm src/Diagnostics.mm
-    "${ARMSX3_ROOT}/rpcs3/Emu/RSX/VK/vkutils/metal_layer.mm"
-    "${ARMSX3_ROOT}/darwin/util/sysinfo_darwin.mm")
+    src/App.mm src/Diagnostics.mm src/StartupLog.mm
+    "${ARMSX3_ROOT}/rpcs3/Emu/RSX/VK/vkutils/metal_layer.mm")
 target_include_directories(ARMSX3IOSProbe PRIVATE "${ARMSX3_ROOT}/rpcs3")
 target_compile_options(ARMSX3IOSProbe PRIVATE -fobjc-arc -mcpu=apple-a15 -Wall -Wextra)
 target_compile_definitions(ARMSX3IOSProbe PRIVATE ARMSX3_SOURCE_COMMIT="${ARMSX3_SOURCE_COMMIT}")

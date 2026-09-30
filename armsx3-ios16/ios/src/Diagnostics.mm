@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 #import "Diagnostics.h"
+#include "StartupLog.h"
 #import <Metal/Metal.h>
 #import <UIKit/UIKit.h>
 #import <sys/utsname.h>
@@ -10,6 +11,7 @@
 #include "VMProbe.hpp"
 
 static NSDictionary* MetalProbe() {
+    ARMSX3StartupLog("Platform test: Metal clear/readback");
     id<MTLDevice> device = MTLCreateSystemDefaultDevice();
     if (!device) return @{ @"passed": @NO, @"error": @"No Metal device" };
     MTLTextureDescriptor* descriptor = [MTLTextureDescriptor
@@ -50,6 +52,7 @@ static NSDictionary* MetalProbe() {
 NSDictionary* ARMSX3RunPlatformDiagnostics() {
     struct utsname machine{};
     uname(&machine);
+    ARMSX3StartupLog("Platform test: reserving core address layout");
     auto layout = armsx3::ios::probeCoreLayout();
     NSMutableArray* regions = [NSMutableArray array];
     for (const auto& row : layout.regions) {
@@ -58,14 +61,16 @@ NSDictionary* ARMSX3RunPlatformDiagnostics() {
             @"attempts": @(row.attempts), @"errno": @(row.error),
             @"error": row.error ? @(strerror(row.error)) : @"" }];
     }
+    ARMSX3StartupLog("Platform test: shared memory aliases");
     auto mirror = armsx3::ios::probeSharedMirror();
     const size_t page = static_cast<size_t>(getpagesize());
     errno = 0;
+    ARMSX3StartupLog("Platform test: MAP_JIT allocation");
     void* mapping = mmap(nullptr, page, PROT_READ | PROT_WRITE,
                         MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0);
     int jitError = mapping == MAP_FAILED ? errno : 0;
     if (mapping != MAP_FAILED) munmap(mapping, page);
-    return @{ @"schema": @1, @"build": @"ARMSX3 iOS16 P0",
+    return @{ @"schema": @1, @"build": @"ARMSX3 iOS16 P0.1",
         @"source_commit": @ARMSX3_SOURCE_COMMIT,
         @"emulator_core_linked": @NO, @"game_boot_supported": @NO,
         @"timestamp": [[NSISO8601DateFormatter new] stringFromDate:[NSDate date]],
@@ -84,6 +89,7 @@ NSDictionary* ARMSX3RunPlatformDiagnostics() {
 }
 
 NSDictionary* ARMSX3RunJITExecutionTest() {
+    ARMSX3StartupLog("JIT execution test entered");
 #if defined(__aarch64__) || defined(__arm64__)
     // Test a separate RW -> RX allocation without MAP_JIT. This is a baseline
     // for the device's actual signing/JIT state, NOT a replacement for the
@@ -100,8 +106,10 @@ NSDictionary* ARMSX3RunJITExecutionTest() {
         int error = errno; munmap(memory, page);
         return @{ @"passed": @NO, @"stage": @"mprotect_rx", @"errno": @(error) };
     }
+    ARMSX3StartupLog("JIT test: invoking generated ARM64 code");
     int returned = reinterpret_cast<int(*)()>(memory)();
     munmap(memory, page);
+    ARMSX3StartupLog("JIT test: returned from generated code");
     return @{ @"passed": @(returned == 42), @"stage": @"executed",
               @"returned": @(returned), @"scope": @"One RW-to-RX code page, not RPCS3 JIT compatibility" };
 #else
