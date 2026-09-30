@@ -1,0 +1,61 @@
+name: ARMSX3 iOS 16 - P0 platform probe
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'armsx3-ios16/**'
+      - '.github/workflows/build-armsx3-ios16.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: armsx3-ios16-probe-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  build:
+    name: Compile A15 iOS 16 diagnostic IPA
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - name: Checkout port overlay
+        uses: actions/checkout@v4
+      - name: Checkout pinned ARMSX3 source
+        uses: actions/checkout@v4
+        with:
+          repository: ARMSX2/ARMSX3
+          ref: 92b931b9fb5eef7f1317cb482917dfc19aceebd9
+          path: upstream-armsx3
+          submodules: false
+      - name: Apply iOS source overlay
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -C upstream-armsx3 apply --check ../armsx3-ios16/patches/0001-uikit-metal-surface.patch
+          git -C upstream-armsx3 apply ../armsx3-ios16/patches/0001-uikit-metal-surface.patch
+          cp -R armsx3-ios16/ios upstream-armsx3/ios
+          test "$(git -C upstream-armsx3 rev-parse HEAD)" = "$(cat armsx3-ios16/ios/UPSTREAM_COMMIT)"
+      - name: Show Apple toolchain
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          cmake --version
+      - name: Compile and package diagnostic IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash upstream-armsx3/ios/scripts/build-probe.sh 2>&1 | tee armsx3-build.log
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: ARMSX3_iOS16_P0_PLATFORM_PROBE
+          path: upstream-armsx3/dist-ios/*
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ARMSX3_iOS16_P0_BUILD_LOG
+          path: armsx3-build.log
+          if-no-files-found: warn
+          retention-days: 14

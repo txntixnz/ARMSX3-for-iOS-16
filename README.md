@@ -1,5 +1,15 @@
 # ARMSX3 for iOS 16
 
-Experimental port for iPhone 13 Pro Max / A15 / iOS 16 / Dopamine.
+Experimental ARMSX3 port targeting **iPhone 13 Pro Max · A15 · iOS 16 · Dopamine**.
 
-P0 source and build workflow are being added. PS3 game boot is not implemented yet.
+**Current stage: P0 platform diagnostics. PS3 game boot is not implemented yet.**
+
+The GitHub Actions workflow builds a native iOS test app to check Metal, virtual
+memory and JIT behavior before integrating the emulator core.
+
+- [Builds and IPA artifacts](https://github.com/txntixnz/ARMSX3-for-iOS-16/actions/workflows/build-armsx3-ios16.yml)
+- [Installation, tests and port status](armsx3-ios16/README.md)
+- [Development handoff](armsx3-ios16/HANDOFF_TO_NEW_CHAT.md)
+- [Upstream ARMSX3](https://github.com/ARMSX2/ARMSX3)
+
+GPL-2.0-only. No firmware or games included. Not an official ARMSX3 or RPCS3 release.

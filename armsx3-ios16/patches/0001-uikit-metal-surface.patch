@@ -1,0 +1,41 @@
+diff --git a/rpcs3/Emu/RSX/VK/vkutils/metal_layer.mm b/rpcs3/Emu/RSX/VK/vkutils/metal_layer.mm
+index 5c593bc..8cbac3e 100644
+--- a/rpcs3/Emu/RSX/VK/vkutils/metal_layer.mm
++++ b/rpcs3/Emu/RSX/VK/vkutils/metal_layer.mm
+@@ -3,8 +3,22 @@
+ #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+ #pragma GCC diagnostic ignored "-Wmissing-declarations"
+ #import <Foundation/Foundation.h>
++#import <TargetConditionals.h>
++#if TARGET_OS_IOS
++#import <UIKit/UIKit.h>
++#else
+ #import <AppKit/AppKit.h>
++#endif
+ #import <QuartzCore/QuartzCore.h>
+ 
+-void* GetCAMetalLayerFromMetalView(void* view) { return ((NSView*)view).layer; }
++void* GetCAMetalLayerFromMetalView(void* view)
++{
++#if TARGET_OS_IOS
++    // UIKit views must be created with CAMetalLayer as their backing layer.
++    // Ownership stays with the view; the renderer only borrows this pointer.
++    return (__bridge void*)((__bridge UIView*)view).layer;
++#else
++    return ((NSView*)view).layer;
++#endif
++}
+ #pragma GCC diagnostic pop
+diff --git a/rpcs3/Emu/RSX/display.h b/rpcs3/Emu/RSX/display.h
+index 191a111..10be0ff 100644
+--- a/rpcs3/Emu/RSX/display.h
++++ b/rpcs3/Emu/RSX/display.h
+@@ -18,7 +18,7 @@ using Window  = unsigned long;
+ #ifdef _WIN32
+ using display_handle_t = HWND;
+ #elif defined(__APPLE__)
+-using display_handle_t = void*; // NSView
++using display_handle_t = void*; // NSView on macOS, UIView with CAMetalLayer on iOS
+ #else
+ #include <variant>
+ using display_handle_t = std::variant<

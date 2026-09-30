@@ -1,0 +1,90 @@
+// SPDX-License-Identifier: GPL-2.0-only
+#pragma once
+#include <sys/mman.h>
+#include <unistd.h>
+#include <cerrno>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <string>
+#include <vector>
+
+namespace armsx3::ios {
+struct Reservation {
+    void* address = nullptr;
+    size_t size = 0;
+    Reservation(void* p, size_t n) : address(p), size(n) {}
+    ~Reservation() { if (address) munmap(address, size); }
+    Reservation(const Reservation&) = delete;
+    Reservation& operator=(const Reservation&) = delete;
+    Reservation(Reservation&& other) noexcept : address(other.address), size(other.size) {
+        other.address = nullptr;
+    }
+};
+struct RegionResult {
+    std::string name;
+    uint64_t size = 0;
+    uintptr_t address = 0;
+    unsigned attempts = 0;
+    int error = 0;
+};
+struct VMResult {
+    std::vector<RegionResult> regions;
+    bool complete = false;
+};
+// Mirrors vm.cpp's hint-only, exact-address reservations. Never MAP_FIXED:
+// a hint may overlap an existing mapping, which must not be overwritten.
+// The bounded scan differs from upstream's 32768-slot loop to avoid long
+// device hangs when extended virtual addressing is unavailable.
+inline VMResult probeCoreLayout(unsigned maxAttempts = 256, int protection = PROT_READ | PROT_WRITE) {
+    constexpr uint64_t GiB = uint64_t{1} << 30;
+    const char* names[] = {"base+sudo", "exec", "hook", "stat"};
+    const uint64_t sizes[] = {8*GiB, 12*GiB, 32*GiB, 4*GiB};
+    VMResult result;
+    std::vector<Reservation> held;
+    uintptr_t previous = 8*GiB;
+    for (unsigned i = 0; i != 4; ++i) {
+        RegionResult row{names[i], sizes[i]};
+        uintptr_t candidate = previous + 4*GiB;
+        for (unsigned attempt = 0; attempt < maxAttempts; ++attempt, candidate += 4*GiB) {
+            ++row.attempts;
+            errno = 0;
+            void* wanted = reinterpret_cast<void*>(candidate);
+            // Apple ARM64 upstream reserves RW, with no physical pages touched.
+            void* p = mmap(wanted, sizes[i], protection,
+                          MAP_PRIVATE | MAP_ANON, -1, 0);
+            if (p == MAP_FAILED) { row.error = errno; continue; }
+            if (p != wanted) { munmap(p, sizes[i]); row.error = EADDRNOTAVAIL; continue; }
+            row.address = candidate;
+            row.error = 0;
+            held.emplace_back(p, sizes[i]);
+            break;
+        }
+        result.regions.push_back(row);
+        if (!row.address) return result; // Held regions are released on every exit.
+        previous = row.address + (i == 0 ? 4*GiB : 0);
+    }
+    result.complete = true;
+    return result;
+}
+struct MirrorResult { bool passed = false; int error = 0; };
+// Two shared views of one host page, exercising the basic aliasing requirement.
+// This does not validate the core's fixed aliases, 4 KiB tracking or fault handler.
+inline MirrorResult probeSharedMirror() {
+    const size_t page = static_cast<size_t>(sysconf(_SC_PAGESIZE));
+    FILE* file = tmpfile();
+    if (!file) return {false, errno};
+    if (ftruncate(fileno(file), page) != 0) {
+        int error = errno; fclose(file); return {false, error};
+    }
+    void* a = mmap(nullptr, page, PROT_READ | PROT_WRITE, MAP_SHARED, fileno(file), 0);
+    if (a == MAP_FAILED) { int error = errno; fclose(file); return {false, error}; }
+    Reservation first(a, page);
+    void* b = mmap(nullptr, page, PROT_READ | PROT_WRITE, MAP_SHARED, fileno(file), 0);
+    if (b == MAP_FAILED) { int error = errno; fclose(file); return {false, error}; }
+    Reservation second(b, page);
+    fclose(file);
+    *static_cast<volatile uint32_t*>(a) = 0x41524d53;
+    return {*static_cast<volatile uint32_t*>(b) == 0x41524d53, 0};
+}
+}
