@@ -68,7 +68,7 @@ NSDictionary* ARMSX3RunPlatformDiagnostics() {
     return @{ @"schema": @1, @"build": @"ARMSX3 iOS16 P0",
         @"source_commit": @ARMSX3_SOURCE_COMMIT,
         @"emulator_core_linked": @NO, @"game_boot_supported": @NO,
-        @"timestamp": [NSISO8601DateFormatter.new stringFromDate:NSDate.date],
+        @"timestamp": [[NSISO8601DateFormatter new] stringFromDate:[NSDate date]],
         @"machine": @(machine.machine), @"os": NSProcessInfo.processInfo.operatingSystemVersionString,
         @"physical_memory_bytes": @(NSProcessInfo.processInfo.physicalMemory),
         @"host_page_bytes": @(page),
