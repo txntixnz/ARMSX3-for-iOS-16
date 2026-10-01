@@ -100,3 +100,13 @@ P1 run 36852284123: iOS FFmpeg compiled successfully; CMake generation failed
 because patch 0003 named libusb os/null.c instead of os/null_usb.c. Corrected
 and checked all three selected backend files against pinned libusb 87a55632.
 P0 run 36852284004 succeeded. No core compiler results yet.
+
+P1 run 36852920200 passed generation and reached real compilation. Patch 0004:
+- Disable pinned cubeb macOS AudioUnit backend for iOS (no audio device yet).
+- Supply asmjit Apple cache-control header; exclude Android Oboe source.
+- Make fmt::throw_exception destructor explicitly non-returning, addressing
+  Apple Clang return/fallthrough diagnostics without disabling warnings.
+- Use classic-locale round-trip float formatting on iOS 16.0 (to_chars needs16.3).
+- Guard desktop disk ioctls and Linux sysfs capacity affinity code.
+Build uses ninja -k0 to report all remaining independent compilation failures.
+These fixes have local patch and small C++ checks, not Xcode validation yet.

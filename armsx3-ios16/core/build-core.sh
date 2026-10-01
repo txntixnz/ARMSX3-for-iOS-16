@@ -31,4 +31,4 @@ cmake -S "$source_dir" -B "$build_dir" -G Ninja \
   -DBUILD_RPCS3_TESTS=OFF
 # Keep going across independent units to collect useful compiler diagnostics,
 # but preserve a failing exit status. No placeholder implementations are added.
-cmake --build "$build_dir" --target rpcs3_emu --parallel 3 -- -k 30
+cmake --build "$build_dir" --target rpcs3_emu --parallel 3 -- -k 0

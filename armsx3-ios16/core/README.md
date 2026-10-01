@@ -10,7 +10,8 @@ and unused hook-arena patches, excludes the Qt desktop frontend and uses
 libusb's null backend (physical USB passthrough unavailable). It does not
 use Android defines or link macOS FFmpeg prebuilts. LLVM, Vulkan, SDL, FAudio,
 OpenAL and OpenCV are disabled for this initial core compilation pass.
-Other core dependencies are compiled from the pinned upstream submodules.
+The pinned cubeb desktop AudioUnit backend is also disabled; device audio
+remains pending. Other core dependencies are compiled from the pinned upstream submodules.
 
 The archive verification checks every object for arm64, iPhoneOS platform
 metadata and a deployment target no newer than iOS 16.0. Static archive
