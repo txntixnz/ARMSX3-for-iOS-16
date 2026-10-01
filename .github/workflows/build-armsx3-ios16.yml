@@ -3,7 +3,9 @@ on:
   push:
     branches: [main]
     paths:
-      - 'armsx3-ios16/**'
+      - 'armsx3-ios16/ios/**'
+      - 'armsx3-ios16/patches/0001-uikit-metal-surface.patch'
+      - 'armsx3-ios16/patches/0002-ios-omit-unused-hook-arena.patch'
       - '.github/workflows/build-armsx3-ios16.yml'
   workflow_dispatch:
 permissions:

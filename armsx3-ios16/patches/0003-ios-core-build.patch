@@ -1,0 +1,432 @@
+diff --git a/3rdparty/CMakeLists.txt b/3rdparty/CMakeLists.txt
+index 0a37e61..1445a79 100644
+--- a/3rdparty/CMakeLists.txt
++++ b/3rdparty/CMakeLists.txt
+@@ -118,8 +118,12 @@ else()
+ endif()
+ 
+ 
+-# hidapi
+-add_subdirectory(hidapi)
++# hidapi: desktop input handlers are not part of the iOS core archive.
++if(ARMSX3_IOS)
++    add_library(3rdparty_hidapi INTERFACE)
++else()
++    add_subdirectory(hidapi)
++endif()
+ 
+ # glslang
+ add_subdirectory(glslang EXCLUDE_FROM_ALL)
+@@ -279,7 +283,7 @@ if(USE_SDL)
+ endif()
+ 
+ # OpenAL
+-if (NOT ANDROID)
++if (NOT ANDROID AND NOT ARMSX3_IOS)
+ 	add_subdirectory(OpenAL EXCLUDE_FROM_ALL)
+ else()
+ 	add_library(3rdparty_openal INTERFACE)
+@@ -331,7 +335,7 @@ set_property(TARGET ${FAUDIO_TARGET} PROPERTY FOLDER "3rdparty/")
+ 
+ 
+ # FFMPEG
+-if(NOT ANDROID)
++if(NOT ANDROID AND NOT ARMSX3_IOS)
+ 	add_library(3rdparty_ffmpeg INTERFACE)
+ 
+ 	# Select the version of ffmpeg to use, default is builtin
+diff --git a/3rdparty/libusb/os.cmake b/3rdparty/libusb/os.cmake
+index dc87180..0a9baa6 100644
+--- a/3rdparty/libusb/os.cmake
++++ b/3rdparty/libusb/os.cmake
+@@ -36,6 +36,11 @@ elseif(WIN32)
+ 	)
+ 
+ 	list(APPEND PLATFORM_SRC threads_windows.c)
++elseif (CMAKE_SYSTEM_NAME STREQUAL "iOS")
++    # libusb's supported null backend: no physical USB passthrough.
++    # Do not set OS_DARWIN, which pulls desktop IOKit headers into libusbi.h.
++    add_compile_definitions(PLATFORM_POSIX=1 HAVE_CLOCK_GETTIME)
++    set(PLATFORM_SRC null.c threads_posix.c events_posix.c)
+ elseif (APPLE)
+ 	# Apple != OSX alone
+ 	add_compile_definitions(PLATFORM_POSIX=1 HAVE_CLOCK_GETTIME)
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 8487ab6..a009011 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -9,6 +9,15 @@ endif()
+ 
+ project(rpcs3 LANGUAGES C CXX)
+ 
++# Compile the actual core without the desktop Qt frontend on iOS.
++set(ARMSX3_IOS OFF)
++if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
++    set(ARMSX3_IOS ON)
++    enable_language(OBJCXX)
++    set(CMAKE_OBJCXX_STANDARD 23)
++    include(${CMAKE_CURRENT_SOURCE_DIR}/ios-core/ffmpeg.cmake)
++endif()
++
+ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+ 
+@@ -117,7 +126,7 @@ if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
+     message(FATAL_ERROR "RPCS3 can only be compiled on 64-bit platforms.")
+ endif()
+ 
+-if(APPLE AND CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
++if(APPLE AND NOT ARMSX3_IOS AND CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
+     list(APPEND CMAKE_PREFIX_PATH "/opt/homebrew")
+     list(APPEND CMAKE_SYSTEM_PREFIX_PATH "/opt/homebrew")
+ endif()
+diff --git a/Utilities/JIT.h b/Utilities/JIT.h
+index c00816c..3e87c4e 100644
+--- a/Utilities/JIT.h
++++ b/Utilities/JIT.h
+@@ -1,3 +1,4 @@
++#include "util/apple_jit.hpp"
+ #pragma once
+ 
+ #include "util/types.hpp"
+@@ -438,7 +439,7 @@ struct jit_write_guard
+ {
+ 	jit_write_guard() noexcept
+ 	{
+-		pthread_jit_write_protect_np(false);
++		utils::apple_jit_write_protect(false);
+ 
+ 		// Ensure stores are not reordered by the compiler
+ 		atomic_fence_acq_rel();
+@@ -449,7 +450,7 @@ struct jit_write_guard
+ 		// Ensure stores are not reordered by the compiler
+ 		atomic_fence_seq_cst();
+ 
+-		pthread_jit_write_protect_np(true);
++		utils::apple_jit_write_protect(true);
+ 	}
+ };
+ #else
+diff --git a/Utilities/JITASM.cpp b/Utilities/JITASM.cpp
+index d074786..14ec83b 100644
+--- a/Utilities/JITASM.cpp
++++ b/Utilities/JITASM.cpp
+@@ -1,3 +1,4 @@
++#include "util/apple_jit.hpp"
+ #include "util/types.hpp"
+ #include "util/sysinfo.hpp"
+ #include "JIT.h"
+@@ -319,7 +320,7 @@ void jit_runtime::initialize()
+ void jit_runtime::finalize() noexcept
+ {
+ #ifdef __APPLE__
+-	pthread_jit_write_protect_np(false);
++	utils::apple_jit_write_protect(false);
+ #endif
+ 	// Reset JIT memory
+ #ifdef CAN_OVERCOMMIT
+@@ -338,7 +339,7 @@ void jit_runtime::finalize() noexcept
+ 	std::memcpy(alloc(s_data_init.size(), 1, false), s_data_init.data(), s_data_init.size());
+ 
+ #ifdef __APPLE__
+-	pthread_jit_write_protect_np(true);
++	utils::apple_jit_write_protect(true);
+ #endif
+ #ifdef ARCH_ARM64
+ 	// The restored range is executable code rewritten in place: perform real
+diff --git a/Utilities/JITLLVM.cpp b/Utilities/JITLLVM.cpp
+index 3335a67..4c89573 100644
+--- a/Utilities/JITLLVM.cpp
++++ b/Utilities/JITLLVM.cpp
+@@ -1,3 +1,4 @@
++#include "util/apple_jit.hpp"
+ #include "util/types.hpp"
+ #include "util/sysinfo.hpp"
+ #include "Utilities/Thread.h"
+@@ -71,7 +72,7 @@ namespace
+ 		named_thread worker("LLVM JIT", [&]()
+ 		{
+ #if defined(__APPLE__)
+-			pthread_jit_write_protect_np(false);
++			utils::apple_jit_write_protect(false);
+ #endif
+ 			g_llvm_fatal_message = &error;
+ 
+@@ -79,7 +80,7 @@ namespace
+ 
+ 			g_llvm_fatal_message = nullptr;
+ #if defined(__APPLE__)
+-			pthread_jit_write_protect_np(true);
++			utils::apple_jit_write_protect(true);
+ #endif
+ 		});
+ 
+diff --git a/Utilities/Thread.cpp b/Utilities/Thread.cpp
+index ee0cfbb..d678d4d 100644
+--- a/Utilities/Thread.cpp
++++ b/Utilities/Thread.cpp
+@@ -1,3 +1,4 @@
++#include "util/apple_jit.hpp"
+ #include "stdafx.h"
+ #include "Emu/System.h"
+ #include "Emu/Cell/SPUThread.h"
+@@ -3728,7 +3729,7 @@ static void signal_handler(int sig, siginfo_t* info, void* uct) noexcept
+ 		{
+ 			s_tls_last_cause_is_executing = is_executing;
+ 			s_tls_is_attempting_recovery = true;
+-			pthread_jit_write_protect_np(is_executing ? true : false);
++			utils::apple_jit_write_protect(is_executing ? true : false);
+ 
+ 			sys_log.error("\n%s", msg);
+ 			sys_log.notice("\n%s", dump_useful_thread_info());
+diff --git a/rpcs3/CMakeLists.txt b/rpcs3/CMakeLists.txt
+index cafc53b..13ad1da 100644
+--- a/rpcs3/CMakeLists.txt
++++ b/rpcs3/CMakeLists.txt
+@@ -23,7 +23,7 @@ if(UNIX AND NOT APPLE AND NOT ANDROID)
+     endif()
+ endif()
+ 
+-if (NOT ANDROID)
++if (NOT ANDROID AND NOT ARMSX3_IOS)
+     # Qt
+     # finds Qt libraries and setups custom commands for MOC and UIC
+     # Must be done here because generated MOC and UIC targets cant
+@@ -34,13 +34,13 @@ endif()
+ # subdirectories
+ add_subdirectory(Emu)
+ 
+-if (NOT ANDROID)
++if (NOT ANDROID AND NOT ARMSX3_IOS)
+     add_subdirectory(rpcs3qt)
+ endif()
+ 
+ gen_git_version(${CMAKE_CURRENT_SOURCE_DIR})
+ 
+-if (NOT ANDROID)
++if (NOT ANDROID AND NOT ARMSX3_IOS)
+     # Build rpcs3_lib
+     add_library(rpcs3_lib STATIC)
+ 
+diff --git a/rpcs3/Emu/Cell/PPUThread.cpp b/rpcs3/Emu/Cell/PPUThread.cpp
+index ba22818..36173ac 100644
+--- a/rpcs3/Emu/Cell/PPUThread.cpp
++++ b/rpcs3/Emu/Cell/PPUThread.cpp
+@@ -1,3 +1,4 @@
++#include "util/apple_jit.hpp"
+ #include "stdafx.h"
+ #include "Utilities/JIT.h"
+ #include "Utilities/StrUtil.h"
+@@ -3119,7 +3120,7 @@ void ppu_thread::exec_task()
+ {
+ #ifdef __APPLE__
+ 	// Ensure correct state before executing JIT code
+-	pthread_jit_write_protect_np(true);
++	utils::apple_jit_write_protect(true);
+ #endif
+ 
+ 	if (g_cfg.core.ppu_decoder != ppu_decoder_type::_static)
+@@ -6016,7 +6017,7 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
+ 
+ #ifdef __APPLE__
+ 		// Restore write-protection state (modified by build_function_asm)
+-		pthread_jit_write_protect_np(false);
++		utils::apple_jit_write_protect(false);
+ #endif
+ 
+ 		// Full sample may exist already, but is very far away
+@@ -6459,7 +6460,7 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
+ 				thread_ctrl::scoped_priority low_prio(-1);
+ 
+ #ifdef __APPLE__
+-				pthread_jit_write_protect_np(false);
++				utils::apple_jit_write_protect(false);
+ #endif
+ 				for (usz i = (*work_cv)++; i < workload.size(); i = (*work_cv)++, (*work_done)++, g_progr_pdone++)
+ 				{
+@@ -6827,7 +6828,7 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
+ 
+ 	// Jit can be null if the loop doesn't ever enter.
+ #ifdef __APPLE__
+-	pthread_jit_write_protect_np(false);
++	utils::apple_jit_write_protect(false);
+ #endif
+ 	// Try to patch all single and unregistered BLRs with the same function (TODO: Maybe generalize it into PIC code detection and patching)
+ 	ppu_intrp_func_t BLR_func = nullptr;
+@@ -6860,7 +6861,7 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
+ 		named_thread sym_worker("PPU Symbol Resolver", [&]()
+ 		{
+ 			// jit_compiler::get() may write to executable memory (relocations)
+-			pthread_jit_write_protect_np(false);
++			utils::apple_jit_write_protect(false);
+ #else
+ 		{
+ #endif
+@@ -6899,7 +6900,7 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
+ 
+ #ifdef __APPLE__
+ 			// Virtual memory mapped by MAP_JIT cannot be executed until pthread_jit_write_protect_np(true)
+-			pthread_jit_write_protect_np(true);
++			utils::apple_jit_write_protect(true);
+ #endif
+ 
+ 			index = umax;
+diff --git a/rpcs3/Emu/Cell/SPUCommonRecompiler.cpp b/rpcs3/Emu/Cell/SPUCommonRecompiler.cpp
+index 103070b..021535b 100644
+--- a/rpcs3/Emu/Cell/SPUCommonRecompiler.cpp
++++ b/rpcs3/Emu/Cell/SPUCommonRecompiler.cpp
+@@ -1,3 +1,4 @@
++#include "util/apple_jit.hpp"
+ #include "stdafx.h"
+ 
+ #include <charconv>
+@@ -2596,7 +2597,7 @@ spu_function_t spu_runtime::make_branch_patchpoint(u16 data) const
+ 	return reinterpret_cast<spu_function_t>(raw);
+ #elif defined(ARCH_ARM64)
+ #if defined(__APPLE__)
+-	pthread_jit_write_protect_np(false);
++	utils::apple_jit_write_protect(false);
+ #endif
+ 
+ 	u8* const patch_fn = ensure(jit_runtime::alloc(36, 16));
+@@ -2637,7 +2638,7 @@ spu_function_t spu_runtime::make_branch_patchpoint(u16 data) const
+ 	*raw++ = static_cast<u8>(data & 0xff);
+ 
+ #if defined(__APPLE__)
+-	pthread_jit_write_protect_np(true);
++	utils::apple_jit_write_protect(true);
+ #endif
+ 
+ 	// ISB/DSB alone performs no D->I cache maintenance; the asmjit helper does the
+@@ -2702,11 +2703,11 @@ void spu_recompiler_base::dispatch(spu_thread& spu, void*, u8* rip)
+ 		const u64 target = reinterpret_cast<u64>(spu_runtime::tr_all);
+ 		std::memcpy(bytes + 8, &target, 8);
+ #if defined(__APPLE__)
+-		pthread_jit_write_protect_np(false);
++		utils::apple_jit_write_protect(false);
+ #endif
+ 		atomic_storage<u128>::release(*reinterpret_cast<u128*>(rip), result);
+ #if defined(__APPLE__)
+-		pthread_jit_write_protect_np(true);
++		utils::apple_jit_write_protect(true);
+ #endif
+ 
+ 		// ISB/DSB alone performs no D->I cache maintenance and is mis-ordered for
+@@ -2760,7 +2761,7 @@ void spu_recompiler_base::dispatch(spu_thread& spu, void*, u8* rip)
+ #endif
+ 
+ #if defined(__APPLE__)
+-	pthread_jit_write_protect_np(false);
++	utils::apple_jit_write_protect(false);
+ #endif
+ 	auto program = spu.jit->analyse(spu._ptr<u32>(0), spu.pc);
+ #ifdef ARCH_ARM64
+@@ -2775,7 +2776,7 @@ void spu_recompiler_base::dispatch(spu_thread& spu, void*, u8* rip)
+ 		if (spu_interpreter_fallback_available())
+ 		{
+ #if defined(__APPLE__)
+-			pthread_jit_write_protect_np(true);
++			utils::apple_jit_write_protect(true);
+ #endif
+ 			// The analysed extent is in scope here, so a block that reached the fallback without
+ 			// being recorded is still recorded whole rather than four bytes at a time.
+@@ -2799,7 +2800,7 @@ void spu_recompiler_base::dispatch(spu_thread& spu, void*, u8* rip)
+ 		}
+ 	}
+ #if defined(__APPLE__)
+-	pthread_jit_write_protect_np(true);
++	utils::apple_jit_write_protect(true);
+ #endif
+ 
+ #if defined(ARCH_ARM64)
+@@ -2889,11 +2890,11 @@ void spu_recompiler_base::branch(spu_thread& spu, void*, u8* rip)
+ 	const u64 target = reinterpret_cast<u64>(func);
+ 	std::memcpy(bytes + 8, &target, 8);
+ #if defined(__APPLE__)
+-	pthread_jit_write_protect_np(false);
++	utils::apple_jit_write_protect(false);
+ #endif
+ 	atomic_storage<u128>::release(*reinterpret_cast<u128*>(rip), result);
+ #if defined(__APPLE__)
+-	pthread_jit_write_protect_np(true);
++	utils::apple_jit_write_protect(true);
+ #endif
+ 
+ 	// See the matching site above: real icache maintenance for the rewritten
+diff --git a/rpcs3/Emu/Cell/SPULLVMRecompiler.cpp b/rpcs3/Emu/Cell/SPULLVMRecompiler.cpp
+index 14e69e1..01128fe 100644
+--- a/rpcs3/Emu/Cell/SPULLVMRecompiler.cpp
++++ b/rpcs3/Emu/Cell/SPULLVMRecompiler.cpp
+@@ -1,3 +1,4 @@
++#include "util/apple_jit.hpp"
+ #include "stdafx.h"
+ #include <charconv>
+ #include "SPURecompiler.h"
+@@ -4225,13 +4226,13 @@ public:
+ 		// it with an RAII guard so execute mode is restored on every
+ 		// exit path (the early "return nullptr" below would otherwise
+ 		// leave the thread in write mode permanently).
+-		pthread_jit_write_protect_np(false);
++		utils::apple_jit_write_protect(false);
+ 
+ 		struct jit_write_guard
+ 		{
+ 			~jit_write_guard()
+ 			{
+-				pthread_jit_write_protect_np(true);
++				utils::apple_jit_write_protect(true);
+ 			}
+ 		} _jit_guard;
+ #endif
+@@ -4379,7 +4380,7 @@ public:
+ 		}
+ 
+ #if defined(__APPLE__)
+-		pthread_jit_write_protect_np(true);
++		utils::apple_jit_write_protect(true);
+ #endif
+ #if defined(ARCH_ARM64)
+ 		// Flush all cache lines after potentially writing executable code
+diff --git a/rpcs3/Emu/Cell/SPUThread.cpp b/rpcs3/Emu/Cell/SPUThread.cpp
+index 2d35f47..7ec8b47 100644
+--- a/rpcs3/Emu/Cell/SPUThread.cpp
++++ b/rpcs3/Emu/Cell/SPUThread.cpp
+@@ -1,3 +1,4 @@
++#include "util/apple_jit.hpp"
+ #include "stdafx.h"
+ #include <charconv>
+ #include <cstring>
+@@ -1711,7 +1712,7 @@ extern thread_local std::string(*g_tls_log_prefix)();
+ void spu_thread::cpu_task()
+ {
+ #ifdef __APPLE__
+-	pthread_jit_write_protect_np(true);
++	utils::apple_jit_write_protect(true);
+ #endif
+ 	start_time = 0;
+ 
+diff --git a/rpcs3/Emu/System.cpp b/rpcs3/Emu/System.cpp
+index c3f2350..15b9245 100644
+--- a/rpcs3/Emu/System.cpp
++++ b/rpcs3/Emu/System.cpp
+@@ -1,3 +1,4 @@
++#include "util/apple_jit.hpp"
+ #include "stdafx.h"
+ #include "VFS.h"
+ #include "Utilities/bin_patch.h"
+@@ -2528,13 +2529,13 @@ game_boot_result Emulator::Load(const std::string& title_id, bool is_disc_patch,
+ 				// crashes ~12s into boot at 0x300010000). Pair the enable
+ 				// with an RAII guard so execute mode is restored on every
+ 				// exit path (return, exception, etc.).
+-				pthread_jit_write_protect_np(false);
++				utils::apple_jit_write_protect(false);
+ 
+ 				struct jit_write_guard
+ 				{
+ 					~jit_write_guard() noexcept
+ 					{
+-						pthread_jit_write_protect_np(true);
++						utils::apple_jit_write_protect(true);
+ 					}
+ 				} _jit_guard;
+ #endif

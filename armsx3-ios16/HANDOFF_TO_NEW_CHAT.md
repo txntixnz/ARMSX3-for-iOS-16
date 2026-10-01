@@ -78,3 +78,20 @@ Local patch checks: clean pinned checkout accepts both patches; diff --check;
 source consumer audit; plist/schema and workflow parse. iOS device results pending.
 Next analyze build 3 JSON, then implement the actual core build/dependencies and
 JIT integration strategy rather than assuming W^X publication solves live patching.
+
+## P1 core compilation bring-up
+
+User authorized real core integration after successful P0.2 device logs:
+24 GiB RW and PROT_NONE layouts, 16 KiB page lifecycle, shared aliases, Metal,
+and 32 joined-thread JIT rewrites all passed. MAP_JIT EINVAL, pthread JIT
+symbol absent. No concurrent patching or game execution established.
+
+Added separate build-armsx3-ios16-core.yml. It builds iOS FFmpeg from pinned
+8.0 source and targets the actual rpcs3_emu archive with LLVM/Vulkan disabled
+initially. Patch 0003 separates iOS from desktop Qt/host deps and routes Apple
+JIT protection calls through util/apple_jit.hpp, which fails closed if the
+symbol is absent on iOS. This is NOT the eventual JIT implementation.
+No core IPA yet, no link/boot claim. macOS compilation can only be checked in
+Actions; Linux local checks cover patch application, scripts and metadata
+validation. Inspect the user's reported workflow result next; do not poll.
+See core/README.md for remaining integration requirements.

@@ -13,3 +13,7 @@ memory and JIT behavior before integrating the emulator core.
 - [Upstream ARMSX3](https://github.com/ARMSX2/ARMSX3)
 
 GPL-2.0-only. No firmware or games included. Not an official ARMSX3 or RPCS3 release.
+
+A separate **P1 core compilation** workflow now targets the actual upstream
+`rpcs3_emu` library for iOS 16 arm64. This is compilation bring-up, not a
+playable IPA. See [core build scope](armsx3-ios16/core/README.md).

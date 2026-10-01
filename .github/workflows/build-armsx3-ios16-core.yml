@@ -1,0 +1,106 @@
+name: ARMSX3 iOS 16 - P1 core compilation
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'armsx3-ios16/core/**'
+      - 'armsx3-ios16/patches/**'
+      - '.github/workflows/build-armsx3-ios16-core.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: armsx3-ios16-core-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  core:
+    name: Cross-compile real rpcs3_emu for iOS 16 arm64
+    runs-on: macos-15
+    timeout-minutes: 120
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+      - name: Checkout pinned ARMSX3
+        uses: actions/checkout@v4
+        with:
+          repository: ARMSX2/ARMSX3
+          ref: 92b931b9fb5eef7f1317cb482917dfc19aceebd9
+          path: upstream-armsx3
+          submodules: false
+      - name: Checkout pinned FFmpeg 8.0 source
+        uses: actions/checkout@v4
+        with:
+          repository: FFmpeg/FFmpeg
+          ref: 140fd653aed8cad774f991ba083e2d01e86420c7
+          path: ffmpeg-source
+      - name: Fetch pinned core dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import subprocess
+          root = 'upstream-armsx3'
+          entries = subprocess.check_output(['git', '-C', root, 'config', '--file', '.gitmodules', '--get-regexp', 'path'], text=True)
+          # Exclude large unused backends. Every selected dependency stays at its gitlink SHA.
+          excluded = {'3rdparty/llvm/llvm', '3rdparty/ffmpeg', '3rdparty/FAudio', '3rdparty/libsdl-org/SDL', '3rdparty/oboe/oboe', '3rdparty/opencv/opencv', '3rdparty/feralinteractive/feralinteractive'}
+          paths = [line.split(None, 1)[1] for line in entries.splitlines() if line.split(None, 1)[1] not in excluded]
+          subprocess.run(['git', '-C', root, 'submodule', 'update', '--init', '--recursive', '--depth', '1', '--jobs', '4', '--', *paths], check=True)
+          PY
+      - name: Apply iOS core patches
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 armsx3-ios16/ios/scripts/audit-hook-consumers.py upstream-armsx3
+          for patch in armsx3-ios16/patches/*.patch; do
+            git -C upstream-armsx3 apply --check "../$patch"
+            git -C upstream-armsx3 apply "../$patch"
+          done
+          cp -R armsx3-ios16/core upstream-armsx3/ios-core
+          cp armsx3-ios16/core/apple_jit.hpp upstream-armsx3/rpcs3/util/apple_jit.hpp
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          cmake --version
+          ninja --version
+      - name: Build iOS FFmpeg libraries
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash armsx3-ios16/core/build-ffmpeg.sh ffmpeg-source "$GITHUB_WORKSPACE/ffmpeg-ios" 2>&1 | tee ffmpeg-ios-build.log
+      - name: Compile emulator core archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash armsx3-ios16/core/build-core.sh upstream-armsx3 ffmpeg-ios 2>&1 | tee armsx3-core-build.log
+      - name: Verify and collect iOS archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 armsx3-ios16/core/verify-archive.py upstream-armsx3/build-ios-core/rpcs3/Emu/librpcs3_emu.a
+          mkdir -p core-artifacts
+          cp upstream-armsx3/build-ios-core/rpcs3/Emu/librpcs3_emu.a core-artifacts/
+          cp armsx3-ios16/core/README.md core-artifacts/
+          git -C upstream-armsx3 rev-parse HEAD > core-artifacts/UPSTREAM_COMMIT
+          git -C upstream-armsx3 submodule status --recursive > core-artifacts/DEPENDENCIES.txt
+      - name: Upload compile-only core archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: ARMSX3_iOS16_P1_CORE_ARCHIVE_NOT_AN_IPA
+          path: core-artifacts/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload diagnostics even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ARMSX3_iOS16_P1_CORE_BUILD_LOGS
+          path: |
+            *-build.log
+            ffmpeg-source/ffbuild/config.log
+            upstream-armsx3/build-ios-core/CMakeCache.txt
+            upstream-armsx3/build-ios-core/CMakeFiles/CMakeConfigureLog.yaml
+            upstream-armsx3/build-ios-core/compile_commands.json
+          if-no-files-found: warn
+          retention-days: 14
