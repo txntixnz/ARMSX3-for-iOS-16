@@ -95,3 +95,8 @@ No core IPA yet, no link/boot claim. macOS compilation can only be checked in
 Actions; Linux local checks cover patch application, scripts and metadata
 validation. Inspect the user's reported workflow result next; do not poll.
 See core/README.md for remaining integration requirements.
+
+P1 run 36852284123: iOS FFmpeg compiled successfully; CMake generation failed
+because patch 0003 named libusb os/null.c instead of os/null_usb.c. Corrected
+and checked all three selected backend files against pinned libusb 87a55632.
+P0 run 36852284004 succeeded. No core compiler results yet.

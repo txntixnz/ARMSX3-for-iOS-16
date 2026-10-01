@@ -47,7 +47,7 @@ index dc87180..0a9baa6 100644
 +    # libusb's supported null backend: no physical USB passthrough.
 +    # Do not set OS_DARWIN, which pulls desktop IOKit headers into libusbi.h.
 +    add_compile_definitions(PLATFORM_POSIX=1 HAVE_CLOCK_GETTIME)
-+    set(PLATFORM_SRC null.c threads_posix.c events_posix.c)
++    set(PLATFORM_SRC null_usb.c threads_posix.c events_posix.c)
  elseif (APPLE)
  	# Apple != OSX alone
  	add_compile_definitions(PLATFORM_POSIX=1 HAVE_CLOCK_GETTIME)
