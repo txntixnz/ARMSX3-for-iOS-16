@@ -2,7 +2,7 @@
 
 Experimental ARMSX3 port targeting **iPhone 13 Pro Max · A15 · iOS 16 · Dopamine**.
 
-**Current stage: P0 platform diagnostics. PS3 game boot is not implemented yet.**
+**Current stage: P0.2 memory/JIT adaptation tests. PS3 game boot is not implemented yet.**
 
 The GitHub Actions workflow builds a native iOS test app to check Metal, virtual
 memory and JIT behavior before integrating the emulator core.

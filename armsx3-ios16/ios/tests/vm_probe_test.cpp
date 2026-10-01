@@ -5,6 +5,7 @@
 int main() {
     using namespace armsx3::ios;
     assert(probeSharedMirror().passed);
+    assert(probePageLifecycle().passed);
     auto noAttempts = probeCoreLayout(0);
     assert(!noAttempts.complete && noAttempts.regions.size() == 1);
     assert(noAttempts.regions[0].address == 0 && noAttempts.regions[0].attempts == 0);
@@ -31,5 +32,17 @@ int main() {
         assert(errno == ENOMEM);
     }
     assert(total == (uint64_t{56} << 30));
-    std::cout << "PASS: shared aliases, bounded failure, no mapping clobber, 56 GiB layout, cleanup\n";
+    auto compact = probeCoreLayout(256, PROT_NONE, true);
+    assert(compact.complete && compact.regions.size() == 3);
+    assert(compact.regions[0].size == (uint64_t{8} << 30));
+    assert(compact.regions[1].size == (uint64_t{12} << 30));
+    assert(compact.regions[2].name == "stat" && compact.regions[2].size == (uint64_t{4} << 30));
+    assert(compact.regions[2].address >= compact.regions[1].address + compact.regions[1].size);
+    for (const auto& region : compact.regions) {
+        unsigned char residency = 0;
+        errno = 0;
+        assert(mincore(reinterpret_cast<void*>(region.address), page, &residency) == -1);
+        assert(errno == ENOMEM);
+    }
+    std::cout << "PASS: shared aliases, bounded failure, no mapping clobber, 56/24 GiB layouts, page reset canaries, cleanup\n";
 }

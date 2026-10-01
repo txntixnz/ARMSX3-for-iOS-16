@@ -1,0 +1,86 @@
+diff --git a/rpcs3/Emu/Memory/vm.cpp b/rpcs3/Emu/Memory/vm.cpp
+index 07f90d5..947b98e 100644
+--- a/rpcs3/Emu/Memory/vm.cpp
++++ b/rpcs3/Emu/Memory/vm.cpp
+@@ -20,6 +20,15 @@
+ 
+ #include <thread>
+ 
++#if defined(__APPLE__)
++#include <TargetConditionals.h>
++#endif
++#if defined(__APPLE__) && TARGET_OS_IOS
++#define ARMSX3_IOS_OMIT_HOOK_ARENA 1
++#else
++#define ARMSX3_IOS_OMIT_HOOK_ARENA 0
++#endif
++
+ #ifdef ANDROID
+ #include <atomic>
+ #include <chrono>
+@@ -64,10 +73,18 @@ namespace vm
+ 	u8* const g_exec_addr = memory_reserve_4GiB(g_sudo_addr, 0x300000000);
+ 
+ 	// Hooks for memory R/W interception (default: zero offset to some function with only ret instructions)
++#if ARMSX3_IOS_OMIT_HOOK_ARENA
++	// At pinned ARMSX3 revision 92b931b9, this arena has no readers or writers
++	// outside its own allocation, mapping, logging and cleanup in this file.
++	// Omit both the virtual reservation and backing object on iOS. Re-audit
++	// consumers when updating upstream; never shrink guest-addressed regions.
++	u8* const g_hook_addr = nullptr;
++#else
+ 	u8* const g_hook_addr = memory_reserve_4GiB(g_exec_addr, 0x800000000);
++#endif
+ 
+ 	// Stats for debugging
+-	u8* const g_stat_addr = memory_reserve_4GiB(g_hook_addr);
++	u8* const g_stat_addr = memory_reserve_4GiB(g_hook_addr ? g_hook_addr : g_exec_addr);
+ 
+ 	// For SPU
+ 	u8* const g_free_addr = g_stat_addr + 0x1'0000'0000;
+@@ -2719,7 +2736,9 @@ namespace vm
+ 
+ 	inline namespace ps3_
+ 	{
++#if !ARMSX3_IOS_OMIT_HOOK_ARENA
+ 		static utils::shm s_hook{0x800000000, ""};
++#endif
+ 
+ 		void init()
+ 		{
+@@ -2733,7 +2752,7 @@ namespace vm
+ 			g_base_addr, g_base_addr + 0xffff'ffff,
+ 			g_sudo_addr, g_sudo_addr + 0xffff'ffff,
+ 			g_exec_addr, g_exec_addr + 0x200000000 - 1,
+-			g_hook_addr, g_hook_addr + 0x800000000 - 1,
++			g_hook_addr, g_hook_addr ? g_hook_addr + 0x800000000 - 1 : nullptr,
+ 			g_stat_addr, g_stat_addr + 0xffff'ffff,
+ 			g_reservations, g_reservations + sizeof(g_reservations) - 1);
+ 
+@@ -2755,10 +2774,12 @@ namespace vm
+ 			std::memset(g_range_lock_set, 0, sizeof(g_range_lock_set));
+ 			std::memset(g_range_lock_bits, 0, sizeof(g_range_lock_bits));
+ 
++#if !ARMSX3_IOS_OMIT_HOOK_ARENA
+ #ifdef _WIN32
+ 			utils::memory_release(g_hook_addr, 0x800000000);
+ #endif
+ 			ensure(s_hook.map(g_hook_addr, utils::protection::rw, true));
++#endif
+ 		}
+ 	}
+ 
+@@ -2782,11 +2803,13 @@ namespace vm
+ 		utils::memory_decommit(g_exec_addr, 0x200000000);
+ 		utils::memory_decommit(g_stat_addr, 0x100000000);
+ 
++#if !ARMSX3_IOS_OMIT_HOOK_ARENA
+ #ifdef _WIN32
+ 		s_hook.unmap(g_hook_addr);
+ 		ensure(utils::memory_reserve(0x800000000, g_hook_addr));
+ #else
+ 		utils::memory_decommit(g_hook_addr, 0x800000000);
++#endif
+ #endif
+ 
+ 		std::memset(g_range_lock_set, 0, sizeof(g_range_lock_set));

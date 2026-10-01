@@ -36,7 +36,7 @@ struct VMResult {
 // a hint may overlap an existing mapping, which must not be overwritten.
 // The bounded scan differs from upstream's 32768-slot loop to avoid long
 // device hangs when extended virtual addressing is unavailable.
-inline VMResult probeCoreLayout(unsigned maxAttempts = 256, int protection = PROT_READ | PROT_WRITE) {
+inline VMResult probeCoreLayout(unsigned maxAttempts = 256, int protection = PROT_READ | PROT_WRITE, bool omitUnusedHooks = false) {
     constexpr uint64_t GiB = uint64_t{1} << 30;
     const char* names[] = {"base+sudo", "exec", "hook", "stat"};
     const uint64_t sizes[] = {8*GiB, 12*GiB, 32*GiB, 4*GiB};
@@ -44,6 +44,7 @@ inline VMResult probeCoreLayout(unsigned maxAttempts = 256, int protection = PRO
     std::vector<Reservation> held;
     uintptr_t previous = 8*GiB;
     for (unsigned i = 0; i != 4; ++i) {
+        if (omitUnusedHooks && i == 2) continue;
         RegionResult row{names[i], sizes[i]};
         uintptr_t candidate = previous + 4*GiB;
         for (unsigned attempt = 0; attempt < maxAttempts; ++attempt, candidate += 4*GiB) {
@@ -66,6 +67,29 @@ inline VMResult probeCoreLayout(unsigned maxAttempts = 256, int protection = PRO
     }
     result.complete = true;
     return result;
+}
+// Exercise commit/reset inside an allocation owned by this probe. MAP_FIXED
+// is used only for a page already reserved by us; adjacent pages stay mapped.
+struct LifecycleResult { bool passed = false; int error = 0; const char* stage = "reserve"; };
+inline LifecycleResult probePageLifecycle() {
+    const size_t page = static_cast<size_t>(getpagesize());
+    void* allocation = mmap(nullptr, page * 4, PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    if (allocation == MAP_FAILED) return {false, errno, "reserve"};
+    Reservation owned(allocation, page * 4);
+    auto* base = static_cast<unsigned char*>(allocation);
+    if (mprotect(base, page * 4, PROT_READ | PROT_WRITE) != 0)
+        return {false, errno, "commit"};
+    *reinterpret_cast<volatile uint32_t*>(base) = 0x12345678;
+    *reinterpret_cast<volatile uint32_t*>(base + page) = 0xabcdef12;
+    *reinterpret_cast<volatile uint32_t*>(base + page * 3) = 0x87654321;
+    if (mmap(base + page, page, PROT_NONE, MAP_FIXED | MAP_PRIVATE | MAP_ANON, -1, 0) == MAP_FAILED)
+        return {false, errno, "reset"};
+    if (mprotect(base + page, page, PROT_READ | PROT_WRITE) != 0)
+        return {false, errno, "recommit"};
+    bool valid = *reinterpret_cast<volatile uint32_t*>(base + page) == 0 &&
+                 *reinterpret_cast<volatile uint32_t*>(base) == 0x12345678 &&
+                 *reinterpret_cast<volatile uint32_t*>(base + page * 3) == 0x87654321;
+    return {valid, 0, "verified"};
 }
 struct MirrorResult { bool passed = false; int error = 0; };
 // Two shared views of one host page, exercising the basic aliasing requirement.

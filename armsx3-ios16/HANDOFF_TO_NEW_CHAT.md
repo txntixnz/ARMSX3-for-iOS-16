@@ -54,3 +54,27 @@ Do not shrink guest reservations blindly to fit a small address window.
 - Removed unused sysinfo_darwin.mm from probe: it had a global Foundation initializer.
 - Cause is a strong signing hypothesis, not proven from a device crash report.
 - Next: user checks new workflow result and installs build 2, sends startup log.
+
+
+## P0.2 / build 3
+User said continue after P0.1 device report. No need to poll Actions after enqueue.
+P0.1 evidence: native Metal and shared aliases passed; iPhone host pages 16 KiB;
+RW->RX ARM64 execution returned 42; MAP_JIT EINVAL and pthread JIT symbol absent;
+8+12 GiB reservations passed, 32 GiB hook failed ENOMEM.
+
+Source-wide audit at pinned upstream finds g_hook_addr/s_hook only in vm.cpp:
+reservation, backing object, logging, mapping and cleanup. Added iOS-only source
+patch omitting those lifecycle operations and anchoring stat search after exec.
+The patch is applied and audited by CI but vm.cpp is NOT compiled by the probe.
+Do not claim an integrated or compiled full emulator memory patch yet.
+
+P0.2 device tests: 24 GiB RW, 24 GiB NONE, original 56 GiB NONE, host-page
+reset with neighboring canaries, 32 sequential RW->RX rewrites on the same page
+with a fresh joined execution worker for each. ExecutablePage/JITProbe are new
+reusable/test helpers; not wired into RPCS3's JIT machinery. No concurrent live
+patching is attempted. Tested native host versions with g++ warnings as errors.
+
+Local patch checks: clean pinned checkout accepts both patches; diff --check;
+source consumer audit; plist/schema and workflow parse. iOS device results pending.
+Next analyze build 3 JSON, then implement the actual core build/dependencies and
+JIT integration strategy rather than assuming W^X publication solves live patching.

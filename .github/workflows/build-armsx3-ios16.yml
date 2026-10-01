@@ -12,7 +12,22 @@ concurrency:
   group: armsx3-ios16-probe-${{ github.ref }}
   cancel-in-progress: false
 jobs:
+  checks:
+    name: Validate memory and JIT helpers
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test reservations, cleanup and page lifecycle
+        run: |
+          g++ -std=c++20 -Wall -Wextra -Werror armsx3-ios16/ios/tests/vm_probe_test.cpp -o /tmp/armsx3-vm-test
+          /tmp/armsx3-vm-test
+      - name: Test code rewrite and worker handoff
+        run: |
+          g++ -std=c++20 -Wall -Wextra -Werror -pthread armsx3-ios16/ios/tests/jit_page_test.cpp -o /tmp/armsx3-jit-test
+          /tmp/armsx3-jit-test
   build:
+    needs: checks
     name: Compile A15 iOS 16 diagnostic IPA
     runs-on: macos-15
     timeout-minutes: 30
@@ -32,6 +47,9 @@ jobs:
           set -euo pipefail
           git -C upstream-armsx3 apply --check ../armsx3-ios16/patches/0001-uikit-metal-surface.patch
           git -C upstream-armsx3 apply ../armsx3-ios16/patches/0001-uikit-metal-surface.patch
+          python3 armsx3-ios16/ios/scripts/audit-hook-consumers.py upstream-armsx3
+          git -C upstream-armsx3 apply --check ../armsx3-ios16/patches/0002-ios-omit-unused-hook-arena.patch
+          git -C upstream-armsx3 apply ../armsx3-ios16/patches/0002-ios-omit-unused-hook-arena.patch
           cp -R armsx3-ios16/ios upstream-armsx3/ios
           test "$(git -C upstream-armsx3 rev-parse HEAD)" = "$(cat armsx3-ios16/ios/UPSTREAM_COMMIT)"
       - name: Show Apple toolchain

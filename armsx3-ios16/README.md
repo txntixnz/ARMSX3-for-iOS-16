@@ -55,6 +55,8 @@ On macOS with Xcode, CMake >= 3.28 and the iPhoneOS SDK:
 git clone https://github.com/ARMSX2/ARMSX3.git core
 git -C core checkout 92b931b9fb5eef7f1317cb482917dfc19aceebd9
 git -C core apply ../armsx3-ios16/patches/0001-uikit-metal-surface.patch
+python3 armsx3-ios16/ios/scripts/audit-hook-consumers.py core
+git -C core apply ../armsx3-ios16/patches/0002-ios-omit-unused-hook-arena.patch
 cp -R armsx3-ios16/ios core/ios
 bash core/ios/scripts/build-probe.sh
 ```
@@ -99,3 +101,38 @@ so its global Foundation initializer does not run before the new startup logger.
 Install the new IPA over the old app in TrollStore. First check that it opens and
 share the startup log. There is no need to repeat the JIT or large-memory tests until
 the initial screen appears. The PS3 core is still not linked.
+
+## P0.2 memory and JIT adaptation (build 3)
+
+P0.1 ran on the target phone. Metal clear/readback, the UIKit surface, shared
+aliases and one RW-to-RX generated ARM64 function passed. MAP_JIT returned EINVAL;
+the macOS JIT write-protection symbol was absent. The original layout failed at
+the 32 GiB hook arena, after the 8 and 12 GiB reservations succeeded.
+
+This revision introduces:
+
+- `0002-ios-omit-unused-hook-arena.patch`: an **iOS-only core source candidate**
+  omitting the unused hook reservation, backing object, mapping and cleanup.
+  The other regions remain 8 + 12 + 4 = 24 GiB. It is applied to the pinned
+  checkout, but `vm.cpp` is **not compiled or linked by the probe target** yet.
+- A pinned-source audit that rejects external uses of `g_hook_addr` or `s_hook`.
+  Desktop/Android retain the original arena. Re-audit before changing upstream.
+- Device comparisons of 24 GiB RW, 24 GiB PROT_NONE and original 56 GiB PROT_NONE.
+  Each variant holds its regions concurrently, then releases them before the next.
+- Host-page commit/reset/recommit testing with adjacent-page canaries.
+- A reusable `ExecutablePage` candidate that uses RW → RX publication, never MAP_JIT
+  or the absent pthread API. It is exercised by 32 alternating code rewrites and
+  execution on a joined worker after each publication.
+- Linux helper tests as a CI gate before building the iOS IPA.
+
+**Next device procedure:** install build 3, tap **Run platform checks**, then
+**Test JIT rewrites**, then **Share logs / report**. If it closes, share existing
+logs before rerunning. Reports now use schema 2 and include `layouts` and
+`page_lifecycle` fields. Passing tests establish only these primitives, not a
+working PS3 core. RW→RX is process-wide protection: callers must quiesce all
+executors before writing; this is not a drop-in replacement for RPCS3's live
+multi-threaded code patching. That integration remains to be designed and tested.
+
+The existing 16 KiB host page size versus 4 KiB guest tracking also remains a
+separate integration issue. No firmware, guest memory sizes or game behavior have
+been changed by these standalone tests.

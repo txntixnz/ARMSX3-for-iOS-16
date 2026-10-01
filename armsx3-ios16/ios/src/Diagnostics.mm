@@ -9,6 +9,7 @@
 #import <dlfcn.h>
 #include <cstring>
 #include "VMProbe.hpp"
+#include "JITProbe.hpp"
 
 static NSDictionary* MetalProbe() {
     ARMSX3StartupLog("Platform test: Metal clear/readback");
@@ -49,11 +50,7 @@ static NSDictionary* MetalProbe() {
               @"scope": @"Native Metal clear and GPU readback; does not test Vulkan/RSX" };
 }
 
-NSDictionary* ARMSX3RunPlatformDiagnostics() {
-    struct utsname machine{};
-    uname(&machine);
-    ARMSX3StartupLog("Platform test: reserving core address layout");
-    auto layout = armsx3::ios::probeCoreLayout();
+static NSDictionary* LayoutResult(const armsx3::ios::VMResult& layout, unsigned gib, NSString* protection) {
     NSMutableArray* regions = [NSMutableArray array];
     for (const auto& row : layout.regions) {
         [regions addObject:@{ @"name": @(row.name.c_str()), @"bytes": @(row.size),
@@ -61,6 +58,22 @@ NSDictionary* ARMSX3RunPlatformDiagnostics() {
             @"attempts": @(row.attempts), @"errno": @(row.error),
             @"error": row.error ? @(strerror(row.error)) : @"" }];
     }
+    return @{ @"passed": @(layout.complete), @"regions": regions,
+              @"total_requested_GiB": @(gib), @"protection": protection,
+              @"scope": @"Concurrent untouched virtual reservations; released after each variant" };
+}
+
+NSDictionary* ARMSX3RunPlatformDiagnostics() {
+    struct utsname machine{};
+    uname(&machine);
+    ARMSX3StartupLog("Layout test: 24 GiB without unused hook arena, RW");
+    auto compactRW = armsx3::ios::probeCoreLayout(256, PROT_READ | PROT_WRITE, true);
+    ARMSX3StartupLog("Layout test: 24 GiB without unused hook arena, PROT_NONE");
+    auto compactNone = armsx3::ios::probeCoreLayout(256, PROT_NONE, true);
+    ARMSX3StartupLog("Layout test: original 56 GiB, PROT_NONE comparison");
+    auto fullNone = armsx3::ios::probeCoreLayout(256, PROT_NONE, false);
+    ARMSX3StartupLog("Host-page test: commit, reset, recommit, adjacent canaries");
+    auto lifecycle = armsx3::ios::probePageLifecycle();
     ARMSX3StartupLog("Platform test: shared memory aliases");
     auto mirror = armsx3::ios::probeSharedMirror();
     const size_t page = static_cast<size_t>(getpagesize());
@@ -70,16 +83,19 @@ NSDictionary* ARMSX3RunPlatformDiagnostics() {
                         MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0);
     int jitError = mapping == MAP_FAILED ? errno : 0;
     if (mapping != MAP_FAILED) munmap(mapping, page);
-    return @{ @"schema": @1, @"build": @"ARMSX3 iOS16 P0.1",
+    return @{ @"schema": @2, @"build": @"ARMSX3 iOS16 P0.2",
         @"source_commit": @ARMSX3_SOURCE_COMMIT,
         @"emulator_core_linked": @NO, @"game_boot_supported": @NO,
         @"timestamp": [[NSISO8601DateFormatter new] stringFromDate:[NSDate date]],
         @"machine": @(machine.machine), @"os": NSProcessInfo.processInfo.operatingSystemVersionString,
         @"physical_memory_bytes": @(NSProcessInfo.processInfo.physicalMemory),
         @"host_page_bytes": @(page),
-        @"layout": @{ @"passed": @(layout.complete), @"regions": regions,
-             @"scan_limit_per_region": @256, @"total_requested_GiB": @56,
-             @"scope": @"Untouched concurrent virtual reservations; not physical RAM or full core initialization" },
+        @"layouts": @{ @"ios_24GiB_rw": LayoutResult(compactRW, 24, @"RW"),
+                       @"ios_24GiB_none": LayoutResult(compactNone, 24, @"NONE"),
+                       @"upstream_56GiB_none": LayoutResult(fullNone, 56, @"NONE") },
+        @"page_lifecycle": @{ @"passed": @(lifecycle.passed), @"errno": @(lifecycle.error),
+                             @"stage": @(lifecycle.stage),
+                             @"scope": @"Host-page commit/reset with adjacent canaries; not guest 4 KiB fault handling" },
         @"shared_alias": @{ @"passed": @(mirror.passed), @"errno": @(mirror.error) },
         @"jit_mapping": @{ @"map_jit_rw_passed": @(jitError == 0), @"errno": @(jitError),
              @"write_protect_symbol_present": @(dlsym(RTLD_DEFAULT, "pthread_jit_write_protect_np") != nullptr),
@@ -89,30 +105,11 @@ NSDictionary* ARMSX3RunPlatformDiagnostics() {
 }
 
 NSDictionary* ARMSX3RunJITExecutionTest() {
-    ARMSX3StartupLog("JIT execution test entered");
-#if defined(__aarch64__) || defined(__arm64__)
-    // Test a separate RW -> RX allocation without MAP_JIT. This is a baseline
-    // for the device's actual signing/JIT state, NOT a replacement for the
-    // upstream multi-threaded MAP_JIT allocator and write-protection protocol.
-    const size_t page = static_cast<size_t>(getpagesize());
-    void* memory = mmap(nullptr, page, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
-    if (memory == MAP_FAILED)
-        return @{ @"passed": @NO, @"stage": @"mmap_rw", @"errno": @(errno) };
-    // mov w0, #42; ret
-    const uint32_t code[] = {0x52800540u, 0xd65f03c0u};
-    std::memcpy(memory, code, sizeof(code));
-    sys_icache_invalidate(memory, sizeof(code));
-    if (mprotect(memory, page, PROT_READ | PROT_EXEC) != 0) {
-        int error = errno; munmap(memory, page);
-        return @{ @"passed": @NO, @"stage": @"mprotect_rx", @"errno": @(error) };
-    }
-    ARMSX3StartupLog("JIT test: invoking generated ARM64 code");
-    int returned = reinterpret_cast<int(*)()>(memory)();
-    munmap(memory, page);
-    ARMSX3StartupLog("JIT test: returned from generated code");
-    return @{ @"passed": @(returned == 42), @"stage": @"executed",
-              @"returned": @(returned), @"scope": @"One RW-to-RX code page, not RPCS3 JIT compatibility" };
-#else
-    return @{ @"passed": @NO, @"stage": @"unsupported_architecture" };
-#endif
+    ARMSX3StartupLog("JIT rewrite test: 32 publications and joined execution workers");
+    const auto result = armsx3::ios::probeJITRewrites();
+    ARMSX3StartupLog(result.passed ? "JIT rewrite test passed" : "JIT rewrite test failed");
+    return @{ @"passed": @(result.passed), @"stage": @(result.stage),
+              @"errno": @(result.error), @"iterations": @(result.iterations),
+              @"expected_iterations": @32, @"last_returned": @(result.returned),
+              @"scope": @"Same code page rewritten 32 times and executed on joined workers; no concurrent live patching or core integration" };
 }

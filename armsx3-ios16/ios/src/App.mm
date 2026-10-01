@@ -74,13 +74,13 @@
     self.output = [[UITextView alloc] init];
     self.output.editable = NO;
     self.output.font = [UIFont monospacedSystemFontOfSize:12 weight:UIFontWeightRegular];
-    self.output.text = @"P0 platform diagnostics — the PS3 core is not linked yet.\n\nTarget: iPhone 13 Pro Max (A15), iOS 16.0.\n\nRun platform checks, then share the report. The separate JIT execution test may close the app if iOS rejects generated code; its pending stage is saved first.\n\nA cyan panel shows the UIKit Metal surface.";
+    self.output.text = @"P0.2 memory/JIT diagnostics — the PS3 core is not linked yet.\n\nTarget: iPhone 13 Pro Max (A15), iOS 16.0.\n\nRun platform checks, then share the report. The separate JIT execution test may close the app if iOS rejects generated code; its pending stage is saved first.\n\nA cyan panel shows the UIKit Metal surface.";
     ARMSX3StartupLog("Creating Metal preview");
     self.preview = [[MetalPreview alloc] initWithFrame:CGRectZero];
     ARMSX3StartupLog("Metal preview created");
     [self.preview.heightAnchor constraintEqualToConstant:48].active = YES;
     self.runButton = [self button:@"Run platform checks" action:@selector(runChecks)];
-    self.jitButton = [self button:@"Test generated code (JIT)" action:@selector(confirmJIT)];
+    self.jitButton = [self button:@"Test JIT rewrites" action:@selector(confirmJIT)];
     self.shareButton = [self button:@"Share logs / report" action:@selector(shareReport)];
     self.jitButton.enabled = self.report != nil;
     self.shareButton.enabled = YES;
@@ -117,7 +117,7 @@
 }
 - (void)runChecks {
     [self setBusy:YES];
-    self.report = [@{ @"build": @"ARMSX3 iOS16 P0", @"status": @"platform_checks_pending",
+    self.report = [@{ @"build": @"ARMSX3 iOS16 P0.2", @"status": @"platform_checks_pending",
                       @"emulator_core_linked": @NO } mutableCopy];
     if (![self saveReport]) { [self setBusy:NO]; return; }
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
@@ -135,7 +135,7 @@
 }
 - (void)confirmJIT {
     UIAlertController* alert = [UIAlertController alertControllerWithTitle:@"Run JIT test?"
-        message:@"This executes two generated ARM64 instructions. If iOS denies execution, the app may close. Reopen it and share the saved report; a pending result does not prove why it closed."
+        message:@"This rewrites a code page 32 times and executes each version on a worker thread. If iOS denies execution, the app may close. Reopen it and share the saved report; a pending result does not prove why it closed."
         preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
     [alert addAction:[UIAlertAction actionWithTitle:@"Run test" style:UIAlertActionStyleDefault handler:^(UIAlertAction*) { [self runJIT]; }]];
@@ -186,7 +186,7 @@
 }
 @end
 int main(int argc, char* argv[]) {
-    ARMSX3StartupLog("=== P0.1 build 2: main entered ===");
+    ARMSX3StartupLog("=== P0.2 build 3: main entered ===");
     @autoreleasepool {
         ARMSX3InstallExceptionLogger();
         ARMSX3StartupLog("Entering UIApplicationMain");
