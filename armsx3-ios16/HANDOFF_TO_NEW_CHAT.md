@@ -234,3 +234,13 @@ constructor branch on Linux with filesystem/logging stubs: 64 KiB and 256 MiB
 backing sizes, bidirectional alias byte checks and FD_CLOEXEC passed. This
 validates POSIX lifecycle, not iPhone mapping behavior; build 11 repeats P5.
 No PS3 program, guest page-fault handler or concurrent mutable JIT is tested.
+
+
+## Build 12: select guest backing with Apple SDK platform macros
+
+Device build 11 still aborted at the original shm_open errno==EEXIST check,
+now vm_native.cpp:837. Its line number shifted by exactly the patch size,
+but the branch was excluded: IOS was not defined for vm_native.cpp.
+Corrected patch 0011 to include Apple's TargetConditionals.h and select
+`defined(__APPLE__) && TARGET_OS_IPHONE`. No project IOS define is required.
+Build 12 repeats P5; no successful on-device guest mapping claimed yet.

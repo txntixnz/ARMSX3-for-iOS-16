@@ -1,11 +1,21 @@
 --- a/rpcs3/util/vm_native.cpp
 +++ b/rpcs3/util/vm_native.cpp
-@@ -756,7 +756,40 @@
+@@ -2,6 +2,9 @@
+ #include "Emu/RSX/rsx_profiler.h"
+ #include "util/vm.hpp"
+ #include "util/asm.hpp"
++#ifdef __APPLE__
++#include <TargetConditionals.h>
++#endif
+ #ifdef _WIN32
+ #include "Utilities/File.h"
+ #include "util/dyn_lib.hpp"
+@@ -756,7 +759,40 @@
  		}
  #else
  
 -#ifdef __linux__
-+#if defined(IOS)
++#if defined(__APPLE__) && TARGET_OS_IPHONE
 +		// iOS can deny POSIX shm_open even when generated-code execution works.
 +		// Use a unique, unlinked cache file for all shared views of this object.
 +		// Keep the descriptor alive until ~shm; MAP_SHARED preserves aliasing.
