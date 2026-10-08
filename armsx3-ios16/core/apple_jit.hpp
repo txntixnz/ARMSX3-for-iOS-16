@@ -7,6 +7,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <dlfcn.h>
+// Implemented by the iOS frontend; safe to call during dylib constructors.
+extern "C" void armsx3_record_jit_failure(const char* message);
 #endif
 
 namespace utils
@@ -23,7 +25,9 @@ inline void apple_jit_write_protect(bool enabled)
         dlsym(RTLD_DEFAULT, "pthread_jit_write_protect_np"));
     if (!protect)
     {
-        std::fputs("ARMSX3: iOS core JIT backend is not implemented; refusing unsafe execution.\n", stderr);
+        constexpr const char* reason = "P2 JIT boundary: pthread_jit_write_protect_np is absent; iOS core JIT backend is not implemented";
+        armsx3_record_jit_failure(reason);
+        std::fputs(reason, stderr);
         std::abort();
     }
     protect(enabled ? 1 : 0);

@@ -111,10 +111,17 @@ P1 run 36852920200 passed generation and reached real compilation. Patch 0004:
 Build uses ninja -k0 to report all remaining independent compilation failures.
 These fixes have local patch and small C++ checks, not Xcode validation yet.
 
-## P1 optional-backend guards (2026-10-08)
-Latest failed run 36892715528 has only three failed translation units: AArch64ASM.cpp, AArch64JIT.cpp, and overlay_perf_metrics.cpp. Patch 0005 adds WITH_LLVM source guards for the two LLVM helpers and HAVE_VULKAN guards for the frame-generation overlay include/call. Common ARM64 and signal sources remain enabled. These are fixes for the existing compile-only configuration, not LLVM or renderer integration. Patch application and both Vulkan preprocessing branches checked locally; Xcode validation remains in Actions. Preserve the user's minimal root README. Do not monitor builds after enqueueing.
 
-## P2 linking and load-test app (2026-10-08)
-P1 run 37787482875 succeeded; verifier confirmed 453 arm64 iPhoneOS objects, min OS <=16.0. New patch 0006 and core/loadtest add a force-loaded shared core target with unresolved symbols forbidden, plus a separate UIKit app (org.armsx3.experimental.ios16coretest). The app logs before button-triggered dlopen, retains the handle, queries Emu.GetStatus(false), and shares persistent startup logs. No Emulator::Init/game boot, LLVM or Vulkan yet. Core constructors may themselves trigger JIT or VM work. Workflow preserves P1 archive upload then attempts full linking and packages P2 IPA only on success. Local shell/YAML/plist/patch checks passed; next Actions result determines linker dependencies. Do not monitor after enqueue.
-
-P2 run 37816661548: core archive passed again; full dylib link failed on input/frontend/version/Fusion symbols, SPU LLVM context and libusb clocks. Added real upstream pad thread, product data, PS Move config/tracker, mouse gyro non-Qt code and version source; link Fusion. Patch 0007 excludes desktop HID/Qt handlers on iOS and fails explicitly if the disabled LLVM compiler is requested. FrontendHooks owns configuration globals, logs and aborts fatal errors, and provides a headless polling wait. LibusbClock supplies real clock_gettime-backed functions for the null backend. Controller and UIKit lifecycle integration remain pending. Patch-chain, preprocessing and host clock checks passed; Xcode link must be validated in next Actions run.
+## P2 device crash — 2026-10-08
+Build 4 installed and reached Load core. Startup log ends BEFORE dlopen.
+Device IPS reports SIGABRT in _GLOBAL__sub_I_PPUThread.cpp.cold.12 during
+dyld constructor execution (core UUID 3642d885-ccbe-32b4-b6c7-f463ca97cbee).
+PPU globals generate native gateway/escape trampolines through build_function_asm;
+its jit_write_guard calls the portability boundary. The prior device report says
+pthread_jit_write_protect_np is absent. This is the likely deliberate abort,
+not a proven iOS code-signing rejection. Build 5 persists this boundary reason
+and call-stack image offsets, and CI uploads a matching line-table dSYM and
+unsigned core separately from the installable IPA. It intentionally preserves
+fail-closed behavior; this is diagnostic instrumentation, not a functional JIT fix.
+Do not claim a successful load or bypass the guard with a no-op. A proper iOS
+JIT allocator/publication and concurrency design remains required.

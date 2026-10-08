@@ -14,8 +14,8 @@ cmake -S "$source_dir" -B "$build_dir" -G Ninja \
   -DCMAKE_C_COMPILER="$(xcrun --sdk iphoneos --find clang)" \
   -DCMAKE_CXX_COMPILER="$(xcrun --sdk iphoneos --find clang++)" \
   -DCMAKE_OBJCXX_COMPILER="$(xcrun --sdk iphoneos --find clang++)" \
-  -DCMAKE_C_FLAGS=-mcpu=apple-a15 -DCMAKE_CXX_FLAGS=-mcpu=apple-a15 \
-  -DCMAKE_OBJCXX_FLAGS=-mcpu=apple-a15 \
+  -DCMAKE_C_FLAGS="-mcpu=apple-a15 -gline-tables-only" -DCMAKE_CXX_FLAGS="-mcpu=apple-a15 -gline-tables-only" \
+  -DCMAKE_OBJCXX_FLAGS="-mcpu=apple-a15 -gline-tables-only" \
   -DCMAKE_FIND_ROOT_PATH="$sdk;$ffmpeg_dir" \
   -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY \
   -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=ONLY \

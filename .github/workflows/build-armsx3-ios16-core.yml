@@ -107,6 +107,13 @@ jobs:
           path: upstream-armsx3/dist-ios-core/
           if-no-files-found: error
           retention-days: 14
+      - name: Upload matching core symbols
+        uses: actions/upload-artifact@v4
+        with:
+          name: ARMSX3_iOS16_P2_CORE_SYMBOLS_NOT_AN_IPA
+          path: upstream-armsx3/core-symbols/
+          if-no-files-found: error
+          retention-days: 14
       - name: Upload diagnostics even on failure
         if: always()
         uses: actions/upload-artifact@v4
