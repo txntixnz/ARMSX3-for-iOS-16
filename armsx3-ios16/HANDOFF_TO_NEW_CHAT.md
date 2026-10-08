@@ -142,3 +142,15 @@ Host validation with the pinned actual asmjit generated and executed 401 functio
 across four workers, preserving the original RX function. All 8 patches apply
 cleanly. Full iPhoneOS compilation and device execution remain unverified locally.
 Next test: build 6 Load core, share startup log and crash report if any.
+
+
+## P2 build 7: SPU startup publication
+Build 6 iPhone startup log proves six immutable functions were published as RX.
+Next abort is SPUCommonRecompiler global initialization: outer jit_write_guard
+remained around ARM64 builders already converted by patch 8. Patch 9 removes
+these redundant outer guards only on iOS in tr_dispatch, tr_branch,
+tr_interpreter and tr_all. Their completed code still uses isolated immutable
+publication. g_dispatcher is pointer data, so allocate the real 2^20-entry
+atomic function table in ordinary 64-byte-aligned heap memory, fill with
+tr_dispatch, keep for loaded-core lifetime. No executable mapping for the table.
+Other runtime guards remain; do not claim complete mutable JIT support.

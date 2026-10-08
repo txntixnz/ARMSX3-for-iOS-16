@@ -104,7 +104,7 @@ jobs:
       - name: Upload P2 load-test IPA
         uses: actions/upload-artifact@v4
         with:
-          name: ARMSX3_iOS16_P2_CORE_LOAD_TEST
+          name: ARMSX3_iOS16_INSTALL_THIS_IPA
           path: upstream-armsx3/dist-ios-core/
           if-no-files-found: error
           retention-days: 14
