@@ -154,3 +154,19 @@ publication. g_dispatcher is pointer data, so allocate the real 2^20-entry
 atomic function table in ordinary 64-byte-aligned heap memory, fill with
 tr_dispatch, keep for loaded-core lifetime. No executable mapping for the table.
 Other runtime guards remain; do not claim complete mutable JIT support.
+
+
+## P2 device success / build 8 next execution probe
+2026-10-08 device build 7: user reports no crash. Uploaded startup log confirms
+3887 immutable publications, AFTER dlopen, core state returned 0 (stopped).
+This proves loading and read-only state inspection, not guest execution.
+Build 8 adds Test core JIT execution after load. Uses actual core
+build_function_asm for a synthetic ARM64 return-42 function, executes it, then
+64 additional immutable functions published/executed by four joined workers
+while checking original still returns 42. UI runs this probe off-main; no
+Emulator::Init, guest instructions, mutable JIT or game boot. Share startup log.
+Existing verified startup baseline remains the parent commit 76158904f5cff0c934a6b9866d4f8ae448685f8f.
+
+Local validation for build 8: pinned asmjit host build emitted exactly ARM64
+MOV W0,#42 (0x52800540) and RET X30 (0xd65f03c0) for the probe; metadata
+parses. Full UIKit/iPhoneOS compile and actual ARM64 execution require CI/device.

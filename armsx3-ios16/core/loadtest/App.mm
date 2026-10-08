@@ -7,6 +7,8 @@
 @interface LoadController : UIViewController
 @property(nonatomic,strong) UITextView* output;
 @property(nonatomic,strong) UIButton* loadButton;
+@property(nonatomic,strong) UIButton* jitButton;
+@property(nonatomic,assign) void* coreHandle;
 @end
 @implementation LoadController
 - (void)viewDidLoad {
@@ -27,6 +29,11 @@
     [self.loadButton setTitle:@"Load emulator core" forState:UIControlStateNormal];
     [self.loadButton addTarget:self action:@selector(loadCore) forControlEvents:UIControlEventTouchUpInside];
     [stack addArrangedSubview:self.loadButton];
+    self.jitButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    [self.jitButton setTitle:@"Test core JIT execution" forState:UIControlStateNormal];
+    self.jitButton.enabled = NO;
+    [self.jitButton addTarget:self action:@selector(testJit) forControlEvents:UIControlEventTouchUpInside];
+    [stack addArrangedSubview:self.jitButton];
     UIButton* share = [UIButton buttonWithType:UIButtonTypeSystem];
     [share setTitle:@"Share startup log" forState:UIControlStateNormal];
     [share addTarget:self action:@selector(shareLog) forControlEvents:UIControlEventTouchUpInside];
@@ -53,6 +60,7 @@
             self.output.text = [NSString stringWithFormat:@"Core load failed:\n%s\n\nShare the startup log.", error ?: "Unknown error"];
             return;
         }
+        self.coreHandle = handle;
         // Keep the handle for process lifetime: unloading could invalidate core globals.
         ARMSX3StartupLog("P2 AFTER dlopen: core constructors returned");
         auto state = reinterpret_cast<int (*)()>(dlsym(handle, "armsx3_core_state"));
@@ -66,7 +74,27 @@
         char message[96];
         snprintf(message, sizeof(message), "P2 core state query returned %d", value);
         ARMSX3StartupLog(message);
-        self.output.text = [NSString stringWithFormat:@"Core loaded. State: %d (0 = stopped).\n\nShare the startup log. No game or JIT execution was requested.", value];
+        self.jitButton.enabled = YES;
+        self.output.text = [NSString stringWithFormat:@"Core loaded. State: %d (0 = stopped).\n\nTap Test core JIT execution, then share the log. This executes small test functions; game boot is not available.", value];
+    });
+}
+- (void)testJit {
+    self.jitButton.enabled = NO;
+    auto test = reinterpret_cast<int (*)()>(dlsym(self.coreHandle, "armsx3_core_test_immutable_jit"));
+    if (!test) {
+        ARMSX3StartupLog("P3 missing immutable JIT test export");
+        self.output.text = @"JIT test export missing. Share the log.";
+        return;
+    }
+    self.output.text = @"Testing generated code…";
+    ARMSX3StartupLog("P3 user requested core JIT execution test; worker pending");
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        const int result = test();
+        dispatch_async(dispatch_get_main_queue(), ^{
+            self.output.text = result == 0
+                ? @"PASS: generated core code executed correctly across four workers.\n\nShare the startup log. Emulator initialization and game boot are still pending."
+                : [NSString stringWithFormat:@"Core JIT execution test failed (%d). Share the startup log.", result];
+        });
     });
 }
 - (void)shareLog {
