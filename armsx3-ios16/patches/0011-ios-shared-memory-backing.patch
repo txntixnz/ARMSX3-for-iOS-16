@@ -1,0 +1,44 @@
+--- a/rpcs3/util/vm_native.cpp
++++ b/rpcs3/util/vm_native.cpp
+@@ -756,7 +756,40 @@
+ 		}
+ #else
+ 
+-#ifdef __linux__
++#if defined(IOS)
++		// iOS can deny POSIX shm_open even when generated-code execution works.
++		// Use a unique, unlinked cache file for all shared views of this object.
++		// Keep the descriptor alive until ~shm; MAP_SHARED preserves aliasing.
++		const std::string directory = fs::get_cache_dir();
++		if (!fs::create_path(directory))
++		{
++			fmt::throw_exception("iOS guest memory: cannot create cache directory '%s'", directory);
++		}
++
++		std::string path = directory + "rpcs3-shm-XXXXXX";
++		const int fd = ::mkstemp(path.data());
++		if (fd < 0)
++		{
++			fmt::throw_exception("iOS guest memory: mkstemp failed (errno=%d)", errno);
++		}
++
++		if (::unlink(path.c_str()) != 0)
++		{
++			const int error = errno;
++			::close(fd);
++			fmt::throw_exception("iOS guest memory: unlink failed (errno=%d)", error);
++		}
++
++		if (::fcntl(fd, F_SETFD, FD_CLOEXEC) == -1 || ::ftruncate(fd, m_size) != 0)
++		{
++			const int error = errno;
++			::close(fd);
++			fmt::throw_exception("iOS guest memory: backing file setup failed (size=%u, errno=%d)", m_size, error);
++		}
++
++		m_file = fd;
++		return;
++#elif defined(__linux__)
+ #ifdef ANDROID
+ 		if constexpr (constexpr char c = '?')
+ #else

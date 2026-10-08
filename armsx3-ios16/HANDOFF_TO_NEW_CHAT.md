@@ -212,3 +212,25 @@ Previous passing initialization baseline is 59ffc5c0254c966de4c9ad73441166dccee8
 Local build-10 check: the actual new guest-memory probe compiles with
 g++ -std=c++23 -fsyntax-only against the pinned patched vm.h and utility
 headers. UIKit and Apple memory mapping behavior still require CI/device.
+
+
+## P5 guest memory: iOS shared-memory creation fix (build 11)
+
+Build 10 on iPhone14,3 / iOS 16.0 passed load, immutable JIT execution,
+and Emu.Init, then aborted inside utils::shm::shm during vm::init.
+Startup log and .ips agree: vm_native.cpp:804, shm_open returned EPERM.
+This is a shared-memory creation failure; generated-code execution passed.
+
+Patch 0011 selects an iOS-only unique mkstemp cache file, immediately unlinks
+it, sets FD_CLOEXEC and ftruncates to the requested size. The live descriptor
+continues through the existing MAP_SHARED mapping/alias/destructor paths.
+It leaves desktop POSIX shm and Android memfd paths unchanged. Setup failures
+close the descriptor and throw a stage/errno message rather than aborting
+on the old shm_open assertion. The anonymous backing file is reclaimed after
+its descriptor and mappings are closed; this path uses file-backed storage.
+
+Verified 0011 applies after patches 1–10. Compiled/executed the exact iOS
+constructor branch on Linux with filesystem/logging stubs: 64 KiB and 256 MiB
+backing sizes, bidirectional alias byte checks and FD_CLOEXEC passed. This
+validates POSIX lifecycle, not iPhone mapping behavior; build 11 repeats P5.
+No PS3 program, guest page-fault handler or concurrent mutable JIT is tested.
