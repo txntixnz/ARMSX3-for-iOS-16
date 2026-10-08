@@ -1,0 +1,132 @@
+--- a/rpcs3/Input/pad_thread.cpp
++++ b/rpcs3/Input/pad_thread.cpp
+@@ -1,11 +1,13 @@
+ #include "stdafx.h"
+ #include "pad_thread.h"
+ #include "product_info.h"
++#ifndef ARMSX3_IOS
+ #include "ds3_pad_handler.h"
+ #include "ds4_pad_handler.h"
+ #include "dualsense_pad_handler.h"
+ #include "skateboard_pad_handler.h"
+ #include "ps_move_handler.h"
++#endif
+ #ifdef __ANDROID__
+ #include "virtual_pad_handler.h"
+ #endif
+@@ -18,7 +20,7 @@
+ #ifdef HAVE_SDL3
+ #include "sdl_pad_handler.h"
+ #endif
+-#ifndef ANDROID
++#if !defined(ANDROID) && !defined(ARMSX3_IOS)
+ #include "keyboard_pad_handler.h"
+ #endif
+ #include "Emu/Io/Null/NullPadHandler.h"
+@@ -160,7 +162,7 @@
+ 
+ 	input_log.trace("Using pad config:\n%s", g_cfg_input);
+ 
+-#ifndef ANDROID
++#if !defined(ANDROID) && !defined(ARMSX3_IOS)
+ 	std::shared_ptr<keyboard_pad_handler> keyptr;
+ #endif
+ 
+@@ -183,7 +185,7 @@
+ 		{
+ 			if (handler_type == pad_handler::keyboard)
+ 			{
+-#ifndef ANDROID
++#if !defined(ANDROID) && !defined(ARMSX3_IOS)
+ 				keyptr = std::make_shared<keyboard_pad_handler>();
+ 				keyptr->moveToThread(static_cast<QThread*>(m_curthread));
+ 				keyptr->SetTargetWindow(static_cast<QWindow*>(m_curwindow));
+@@ -941,11 +943,12 @@
+ 	case pad_handler::null:
+ 		return std::make_shared<NullPadHandler>();
+ 	case pad_handler::keyboard:
+-#ifdef ANDROID
++#if defined(ANDROID) || defined(ARMSX3_IOS)
+ 		return std::make_shared<NullPadHandler>();
+ #else
+ 		return std::make_shared<keyboard_pad_handler>();
+ #endif
++#ifndef ARMSX3_IOS
+ 	case pad_handler::ds3:
+ 		return std::make_shared<ds3_pad_handler>();
+ 	case pad_handler::ds4:
+@@ -956,6 +959,15 @@
+ 		return std::make_shared<skateboard_pad_handler>();
+ 	case pad_handler::move:
+ 		return std::make_shared<ps_move_handler>();
++#else
++    case pad_handler::ds3:
++    case pad_handler::ds4:
++    case pad_handler::dualsense:
++    case pad_handler::skateboard:
++    case pad_handler::move:
++        input_log.error("Desktop HID pad backend is unavailable in the iOS load test");
++        return std::make_shared<NullPadHandler>();
++#endif
+ #ifdef _WIN32
+ 	case pad_handler::xinput:
+ 		return std::make_shared<xinput_pad_handler>();
+--- a/rpcs3/Input/mouse_gyro_handler.cpp
++++ b/rpcs3/Input/mouse_gyro_handler.cpp
+@@ -5,7 +5,7 @@
+ // QEvent/QWindow). pad_thread holds a mouse_gyro_handler BY VALUE and calls
+ // set_enabled()/apply_gyro(), so Android needs this translation unit even
+ // though it has no mouse -- just not the Qt half.
+-#ifndef __ANDROID__
++#if !defined(__ANDROID__) && !defined(ARMSX3_IOS)
+ #include <QEvent>
+ #include <QMouseEvent>
+ #include <QWheelEvent>
+@@ -68,7 +68,7 @@
+ 	m_gyro_y = static_cast<u16>(std::clamp(m_gyro_y + steps, 0, DEFAULT_MOTION_Y * 2 - 1));
+ }
+ 
+-#ifndef __ANDROID__
++#if !defined(__ANDROID__) && !defined(ARMSX3_IOS)
+ void mouse_gyro_handler::handle_event(QEvent* ev, const QWindow& win)
+ {
+ 	if (!m_enabled)
+--- a/rpcs3/Emu/Cell/SPUCommonRecompiler.cpp
++++ b/rpcs3/Emu/Cell/SPUCommonRecompiler.cpp
+@@ -91,6 +91,7 @@
+ #ifdef ARCH_ARM64
+ constexpr const char s_spu_llvm_reg_scavenge_error[] = "Cannot scavenge register without an emergency spill slot";
+ 
++#ifdef LLVM_AVAILABLE
+ class spu_llvm_compile_scope
+ {
+ public:
+@@ -107,6 +108,8 @@
+ 		spu_llvm_set_compile_context(nullptr);
+ 	}
+ };
++
++#endif
+ 
+ static spu_program analyse_spu_llvm_program(spu_recompiler_base& compiler, const spu_program& program)
+ {
+@@ -343,6 +346,11 @@
+ 
+ static spu_function_t compile_spu_llvm_with_retry(std::unique_ptr<spu_recompiler_base>& compiler, const spu_program& program)
+ {
++#ifndef LLVM_AVAILABLE
++    (void)compiler;
++    (void)program;
++    fmt::throw_exception("SPU LLVM compilation requested in a build without LLVM");
++#else
+ 	// ARMSX3_SPU_INTERP_RANGE also has to bite here, not only in dispatch. Most functions are
+ 	// built ahead of time by the SPU Worker threads straight from the cache list, and those never
+ 	// reach dispatch -- so a window that only guarded dispatch left the code it named compiled
+@@ -502,6 +510,7 @@
+ 	spu_mark_block_compile_failed(program.entry_point, program.lower_bound, ::size32(program.data) * 4);
+ 
+ 	return nullptr;
++#endif // LLVM_AVAILABLE
+ }
+ #endif
+ 
