@@ -5,6 +5,10 @@
 #include "Utilities/File.h"
 #include "Emu/system_config_types.h"
 #include "Emu/Memory/vm.h"
+#include "Emu/Cell/PPUThread.h"
+#include "Emu/Cell/PPUInterpreter.h"
+#include "Emu/IdManager.h"
+#include <array>
 #include <cstdio>
 #include "util/logs.hpp"
 #include <exception>
@@ -190,6 +194,105 @@ extern "C" __attribute__((visibility("default"))) int armsx3_core_test_guest_mem
             ARMSX3StartupLog("P5 cleaning up VM after failed memory test");
             vm::close();
         }
+        return -1;
+    }
+}
+
+
+// Real core PPU decoder/handlers, bounded straight-line instruction chain.
+// No firmware, scheduler, guest syscalls, renderer or mutable JIT is entered.
+extern "C" __attribute__((visibility("default"))) int armsx3_core_test_ppu_instructions()
+{
+    ARMSX3StartupLog("P6 BEFORE guest VM setup for PPU instruction test");
+    bool initialized = false;
+    try
+    {
+        vm::init();
+        initialized = true;
+        if (!vm::reserve_map(vm::main, 0x10000, 0x20000))
+            throw std::runtime_error("P6 main memory block unavailable");
+        const u32 address = vm::alloc(0x10000, vm::main, 0x10000);
+        if (!address) throw std::runtime_error("P6 guest allocation failed");
+        ARMSX3StartupLog("P6 AFTER guest allocation; BEFORE PPU context construction");
+        {
+            const ppu_thread_params params{static_cast<vm::addr_t>(address + 0x1000), 0x8000, 0, {}, 0, 0};
+            auto ppu = idm::make_ptr<ppu_thread>(params, "iOS PPU instruction probe", 1000);
+            if (!ppu) throw std::runtime_error("P6 PPU context allocation failed");
+            struct RemoveContext
+            {
+                u32 id;
+                ~RemoveContext()
+                {
+                    idm::remove<ppu_thread>(id);
+                    // A direct diagnostic context never enters cpu_task's
+                    // thread_cleanup_t, which normally balances this counter.
+                    cpu_thread::g_threads_deleted++;
+                }
+            } remove{ppu->id};
+            ARMSX3StartupLog("P6 AFTER PPU context; BEFORE core interpreter decoder");
+            ppu_interpreter_rt interpreter;
+            const auto dform = [](u32 primary, u32 reg, u32 base, u32 immediate)
+            {
+                return (primary << 26) | (reg << 21) | (base << 16) | (immediate & 0xffff);
+            };
+            const std::array<u32, 11> program{
+                dform(14, 3, 0, 42),        // addi r3,r0,42
+                dform(14, 4, 0, 0xfff9),    // addi r4,r0,-7
+                (31u << 26) | (5u << 21) | (3u << 16) | (4u << 11) | (266u << 1), // add r5,r3,r4
+                dform(36, 5, 6, 0),         // stw r5,0(r6)
+                dform(32, 7, 6, 0),         // lwz r7,0(r6)
+                dform(24, 7, 8, 0x100),     // ori r8,r7,0x100
+                dform(14, 11, 0, 0xffff),   // addi r11,r0,-1
+                dform(15, 9, 0, 0x8000),    // addis r9,r0,0x8000
+                dform(24, 9, 9, 1),         // ori r9,r9,1
+                dform(36, 9, 6, 4),         // stw r9,4(r6)
+                dform(32, 10, 6, 4),        // lwz r10,4(r6)
+            };
+            // One readable padding opcode is consumed when the last handler
+            // advances to our terminating callback; it is never executed.
+            auto* code = reinterpret_cast<be_t<u32>*>(vm::base(address));
+            std::array<ppu_intrp_func, program.size() + 1> functions{};
+            for (std::size_t index = 0; index < program.size(); ++index)
+            {
+                code[index] = program[index];
+                functions[index].fn = interpreter.decode(program[index]);
+                if (!functions[index].fn) throw std::runtime_error("P6 instruction decode failed");
+            }
+            code[program.size()] = 0;
+            functions.back().fn = +[](ppu_thread& context, ppu_opcode_t, be_t<u32>*, ppu_intrp_func*)
+            {
+                // Dedicated unused register records that the bounded chain ended.
+                context.gpr[31] = 0x5036494f53ull;
+            };
+            ppu->gpr[6] = address + 0x100;
+            ppu->gpr[31] = 0;
+            ppu->cia = address;
+            ARMSX3StartupLog("P6 BEFORE executing 11 guest PowerPC instructions via core PPU interpreter");
+            functions[0].fn(*ppu, {program[0]}, code, functions.data() + 1);
+            ARMSX3StartupLog("P6 AFTER core PPU instruction chain returned");
+            if (ppu->gpr[3] != 42 || ppu->gpr[4] != 0xfffffffffffffff9ull ||
+                ppu->gpr[5] != 35 || ppu->gpr[7] != 35 || ppu->gpr[8] != 0x123 ||
+                ppu->gpr[11] != 0xffffffffffffffffull || ppu->gpr[9] != 0xffffffff80000001ull ||
+                ppu->gpr[10] != 0x80000001ull || ppu->gpr[31] != 0x5036494f53ull)
+                throw std::runtime_error("P6 guest register result mismatch");
+            const auto* data = static_cast<const unsigned char*>(vm::base(address + 0x100));
+            const std::array<unsigned char, 8> expected{0, 0, 0, 35, 0x80, 0, 0, 1};
+            for (std::size_t index = 0; index < expected.size(); ++index)
+                if (data[index] != expected[index]) throw std::runtime_error("P6 big-endian guest store mismatch");
+            ARMSX3StartupLog("P6 PASS: arithmetic, sign extension, logical operations, guest stores and zero-extending loads");
+        }
+        ARMSX3StartupLog("P6 AFTER PPU context cleanup; BEFORE guest VM cleanup");
+        if (vm::dealloc(address, vm::main) != 0x10000)
+            throw std::runtime_error("P6 guest deallocation failed");
+        vm::close();
+        initialized = false;
+        ARMSX3StartupLog("P6 PASS: 11 real PPU instructions and VM cleanup completed; no game boot tested");
+        return 0;
+    }
+    catch (const std::exception& error)
+    {
+        ARMSX3StartupLog(error.what());
+        if (initialized) vm::close();
         return -1;
     }
 }

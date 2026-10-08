@@ -10,6 +10,7 @@
 @property(nonatomic,strong) UIButton* jitButton;
 @property(nonatomic,strong) UIButton* initializeButton;
 @property(nonatomic,strong) UIButton* memoryButton;
+@property(nonatomic,strong) UIButton* cpuButton;
 @property(nonatomic,assign) void* coreHandle;
 @end
 @implementation LoadController
@@ -46,6 +47,11 @@
     self.memoryButton.enabled = NO;
     [self.memoryButton addTarget:self action:@selector(testMemory) forControlEvents:UIControlEventTouchUpInside];
     [stack addArrangedSubview:self.memoryButton];
+    self.cpuButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    [self.cpuButton setTitle:@"Test PS3 PPU instructions" forState:UIControlStateNormal];
+    self.cpuButton.enabled = NO;
+    [self.cpuButton addTarget:self action:@selector(testCPU) forControlEvents:UIControlEventTouchUpInside];
+    [stack addArrangedSubview:self.cpuButton];
     UIButton* share = [UIButton buttonWithType:UIButtonTypeSystem];
     [share setTitle:@"Share startup log" forState:UIControlStateNormal];
     [share addTarget:self action:@selector(shareLog) forControlEvents:UIControlEventTouchUpInside];
@@ -143,9 +149,29 @@
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         const int result = test();
         dispatch_async(dispatch_get_main_queue(), ^{
+            self.cpuButton.enabled = result == 0;
             self.output.text = result == 0
-                ? @"PASS: core guest memory allocation, shared mappings and cleanup.\n\nShare the startup log. PS3 program execution is still pending."
+                ? @"PASS: core guest memory allocation, shared mappings and cleanup.\n\nTap Test PS3 PPU instructions next."
                 : [NSString stringWithFormat:@"Guest memory test failed (%d). Share the startup log.", result];
+        });
+    });
+}
+- (void)testCPU {
+    self.cpuButton.enabled = NO;
+    auto test = reinterpret_cast<int (*)()>(dlsym(self.coreHandle, "armsx3_core_test_ppu_instructions"));
+    if (!test) {
+        ARMSX3StartupLog("P6 missing PPU instruction test export");
+        self.output.text = @"PPU instruction test export missing. Share the log.";
+        return;
+    }
+    self.output.text = @"Testing PS3 PPU instructions…";
+    ARMSX3StartupLog("P6 user requested PPU instruction test; worker pending");
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        const int result = test();
+        dispatch_async(dispatch_get_main_queue(), ^{
+            self.output.text = result == 0
+                ? @"PASS: 11 real PPU instructions, register results, big-endian memory and cleanup.\n\nShare the startup log. Game boot is still pending."
+                : [NSString stringWithFormat:@"PPU instruction test failed (%d). Share the startup log.", result];
         });
     });
 }

@@ -244,3 +244,28 @@ but the branch was excluded: IOS was not defined for vm_native.cpp.
 Corrected patch 0011 to include Apple's TargetConditionals.h and select
 `defined(__APPLE__) && TARGET_OS_IPHONE`. No project IOS define is required.
 Build 12 repeats P5; no successful on-device guest mapping claimed yet.
+
+
+## Build 13: P5 passed; P6 real PPU instruction probe
+
+Device build 12 passed vm::init, 64 KiB allocation, bidirectional shared
+alias writes/reads, deallocation and vm::close on iPhone14,3 / iOS 16.0.
+Attached ARMSX3-startup.log pid 80782 confirms the entire P5 sequence.
+
+Build 13 adds Test PS3 PPU instructions after P5 passes. It reinitializes
+VM, allocates a guest code/data/stack region, registers a direct ppu_thread
+context through idm (no named_thread or scheduler), and uses the actual
+ppu_interpreter_rt decoder/handlers. Eleven straight-line instructions:
+ADDI, ADDI, ADD, STW, LWZ, ORI, ADDI, ADDIS, ORI, STW, LWZ.
+Checks arithmetic, 64-bit signed immediate extension, ORI, zero extension
+of high-bit LWZ data, exact big-endian guest store bytes, and an explicit
+terminating callback. An extra readable opcode pads the tail transition;
+the callback never dispatches it. Context ID, diagnostic CPU lifecycle
+counter and guest allocation/VM are cleaned up after the run.
+
+Local actual-header syntax check passed without the precompiled header.
+Actual core opcode decoder matched all eleven encodings; signed immediate
+fields and ORI source/destination fields checked. Decoder-only host harness
+stubs log registration and fatal verification helpers, not decode logic.
+Full Apple link/compile remains CI; device execution is pending. No branch,
+syscall, CPU scheduler, firmware, SPU instruction or game boot tested here.
