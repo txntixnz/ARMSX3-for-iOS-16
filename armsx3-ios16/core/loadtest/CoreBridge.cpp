@@ -4,8 +4,11 @@
 #include "StartupLog.h"
 #include "Utilities/File.h"
 #include "Emu/system_config_types.h"
+#include "Emu/Memory/vm.h"
+#include <cstdio>
 #include "util/logs.hpp"
 #include <exception>
+#include <stdexcept>
 #include <string>
 #include <atomic>
 #include <thread>
@@ -129,6 +132,64 @@ extern "C" __attribute__((visibility("default"))) int armsx3_core_initialize()
     catch (...)
     {
         ARMSX3StartupLog("P4 initialization threw an unknown exception");
+        return -1;
+    }
+}
+
+extern "C" __attribute__((visibility("default"))) int armsx3_core_test_guest_memory()
+{
+    ARMSX3StartupLog("P5 BEFORE vm::init; no PS3 program requested");
+    bool initialized = false;
+    try
+    {
+        vm::init();
+        initialized = true;
+        ARMSX3StartupLog("P5 AFTER vm::init; guest allocator setup pending");
+        // Reserve a small test region through the real core API. No guest
+        // threads run, and no compiled guest instructions are entered.
+        if (!vm::reserve_map(vm::main, 0x10000, 0x20000))
+            throw std::runtime_error("P5 could not reserve test guest region");
+        const u32 address = vm::alloc(0x10000, vm::main, 0x10000);
+        if (!address)
+            throw std::runtime_error("P5 guest allocation returned zero");
+        char message[128];
+        std::snprintf(message, sizeof(message), "P5 allocated 64 KiB at guest address 0x%08x", address);
+        ARMSX3StartupLog(message);
+        if (!vm::check_addr(address, vm::page_readable | vm::page_writable, 0x10000))
+            throw std::runtime_error("P5 guest page flags are not readable/writable");
+        auto* normal = static_cast<volatile unsigned char*>(vm::base(address));
+        auto* alias = reinterpret_cast<volatile unsigned char*>(vm::g_sudo_addr + address);
+        // Exercise every 4 KiB guest boundary, including the four subpages of
+        // each 16 KiB iPhone host page, in both directions through shared aliases.
+        for (unsigned offset = 0; offset < 0x10000; ++offset)
+            normal[offset] = static_cast<unsigned char>((offset * 17 + 42) & 255);
+        for (unsigned offset = 0; offset < 0x10000; ++offset)
+            if (alias[offset] != static_cast<unsigned char>((offset * 17 + 42) & 255))
+                throw std::runtime_error("P5 normal-to-alias data mismatch");
+        for (unsigned offset = 0; offset < 0x10000; ++offset)
+            alias[offset] = static_cast<unsigned char>((offset * 29 + 84) & 255);
+        for (unsigned offset = 0; offset < 0x10000; ++offset)
+            if (normal[offset] != static_cast<unsigned char>((offset * 29 + 84) & 255))
+                throw std::runtime_error("P5 alias-to-normal data mismatch");
+        ARMSX3StartupLog("P5 PASS: 64 KiB guest allocation shares data through both core aliases");
+        if (vm::dealloc(address, vm::main) != 0x10000)
+            throw std::runtime_error("P5 deallocation returned unexpected size");
+        if (vm::check_addr(address, vm::page_readable))
+            throw std::runtime_error("P5 guest page remains logically allocated after free");
+        ARMSX3StartupLog("P5 AFTER guest deallocation; BEFORE vm::close");
+        vm::close();
+        initialized = false;
+        ARMSX3StartupLog("P5 PASS: guest allocation, shared data, deallocation and VM cleanup completed");
+        return 0;
+    }
+    catch (const std::exception& error)
+    {
+        ARMSX3StartupLog(error.what());
+        if (initialized)
+        {
+            ARMSX3StartupLog("P5 cleaning up VM after failed memory test");
+            vm::close();
+        }
         return -1;
     }
 }

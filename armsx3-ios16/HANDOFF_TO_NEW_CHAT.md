@@ -194,3 +194,21 @@ at property initButton: Objective-C infers init method family when init is
 followed by uppercase B; getter returning UIButton is invalid for LoadController.
 Rename property initializeButton (init followed by lowercase i) throughout UI.
 Initialization probe behavior unchanged.
+
+
+## P4 device success / build 10 guest-memory probe
+Device log confirms real Emu.Init returned with zero core errors and config.yml
+created. VFS mounts and default user 00000001 are configured inside sandbox.
+Null renderer/headless initialization only; no game or renderer initialization.
+Build 10 adds Test PS3 guest memory after Initialize emulator succeeds. Calls
+real vm::init, reserve_map main test region at 0x10000/128 KiB, alloc 64 KiB,
+validates logical readable/writable flags, writes/checks every byte through
+normal and sudo aliases in both directions, deallocates and verifies logical
+page removal, vm::close. Logs before risky steps. No guest threads/instructions.
+This tests existing core shared-mapping plumbing, not fault-handler correctness
+or individual 4 KiB protection on the 16 KiB host. Full device test still needed.
+Previous passing initialization baseline is 59ffc5c0254c966de4c9ad73441166dccee8ab34.
+
+Local build-10 check: the actual new guest-memory probe compiles with
+g++ -std=c++23 -fsyntax-only against the pinned patched vm.h and utility
+headers. UIKit and Apple memory mapping behavior still require CI/device.

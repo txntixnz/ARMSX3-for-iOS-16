@@ -9,6 +9,7 @@
 @property(nonatomic,strong) UIButton* loadButton;
 @property(nonatomic,strong) UIButton* jitButton;
 @property(nonatomic,strong) UIButton* initializeButton;
+@property(nonatomic,strong) UIButton* memoryButton;
 @property(nonatomic,assign) void* coreHandle;
 @end
 @implementation LoadController
@@ -40,6 +41,11 @@
     self.initializeButton.enabled = NO;
     [self.initializeButton addTarget:self action:@selector(initializeCore) forControlEvents:UIControlEventTouchUpInside];
     [stack addArrangedSubview:self.initializeButton];
+    self.memoryButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    [self.memoryButton setTitle:@"Test PS3 guest memory" forState:UIControlStateNormal];
+    self.memoryButton.enabled = NO;
+    [self.memoryButton addTarget:self action:@selector(testMemory) forControlEvents:UIControlEventTouchUpInside];
+    [stack addArrangedSubview:self.memoryButton];
     UIButton* share = [UIButton buttonWithType:UIButtonTypeSystem];
     [share setTitle:@"Share startup log" forState:UIControlStateNormal];
     [share addTarget:self action:@selector(shareLog) forControlEvents:UIControlEventTouchUpInside];
@@ -117,9 +123,29 @@
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         const int result = initialize();
         dispatch_async(dispatch_get_main_queue(), ^{
+            self.memoryButton.enabled = result == 0;
             self.output.text = result == 0
-                ? @"Emulator initialization passed.\n\nShare the startup log. Game boot and graphics initialization are still pending."
+                ? @"Emulator initialization passed.\n\nTap Test PS3 guest memory, then share the startup log. Game boot is still pending."
                 : [NSString stringWithFormat:@"Emulator initialization reported an error (%d). Share the startup log.", result];
+        });
+    });
+}
+- (void)testMemory {
+    self.memoryButton.enabled = NO;
+    auto test = reinterpret_cast<int (*)()>(dlsym(self.coreHandle, "armsx3_core_test_guest_memory"));
+    if (!test) {
+        ARMSX3StartupLog("P5 missing guest memory test export");
+        self.output.text = @"Memory test export missing. Share the log.";
+        return;
+    }
+    self.output.text = @"Testing PS3 guest memory…";
+    ARMSX3StartupLog("P5 user requested guest memory test; worker pending");
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        const int result = test();
+        dispatch_async(dispatch_get_main_queue(), ^{
+            self.output.text = result == 0
+                ? @"PASS: core guest memory allocation, shared mappings and cleanup.\n\nShare the startup log. PS3 program execution is still pending."
+                : [NSString stringWithFormat:@"Guest memory test failed (%d). Share the startup log.", result];
         });
     });
 }
