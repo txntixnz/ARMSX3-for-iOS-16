@@ -62,6 +62,7 @@ jobs:
           cp -R armsx3-ios16/core upstream-armsx3/ios-core
           cp -R armsx3-ios16/ios upstream-armsx3/ios
           cp armsx3-ios16/core/apple_jit.hpp upstream-armsx3/rpcs3/util/apple_jit.hpp
+          cp armsx3-ios16/core/immutable_jit.hpp upstream-armsx3/rpcs3/util/immutable_jit.hpp
       - name: Show toolchain
         run: |
           xcodebuild -version

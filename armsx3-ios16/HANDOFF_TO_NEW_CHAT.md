@@ -125,3 +125,20 @@ unsigned core separately from the installable IPA. It intentionally preserves
 fail-closed behavior; this is diagnostic instrumentation, not a functional JIT fix.
 Do not claim a successful load or bypass the guard with a no-op. A proper iOS
 JIT allocator/publication and concurrency design remains required.
+
+
+## P2 build 6: immutable startup trampolines
+Build 5 device log confirms pthread_jit_write_protect_np absent, abort in
+jit_write_guard constructor within PPUThread global initialization. Patch 8
+changes only the default (no custom runtime) build_function_asm iOS route to
+an independent immutable allocator. Fresh anonymous RW host-page-sized mapping
+per function, asmjit resolution/relocation/section copy, instruction cache flush,
+then mprotect RX before publishing. Never rewrites existing RX pages and keeps
+them until process exit. Uses no MAP_JIT and no RWX mapping. Each successful
+publication is logged; errors persist the stage and abort. Custom runtime builders
+and other direct jit_write_guard calls retain the fail-closed macOS API boundary.
+This is startup code publication, not complete concurrent PPU/SPU JIT support.
+Host validation with the pinned actual asmjit generated and executed 401 functions
+across four workers, preserving the original RX function. All 8 patches apply
+cleanly. Full iPhoneOS compilation and device execution remain unverified locally.
+Next test: build 6 Load core, share startup log and crash report if any.

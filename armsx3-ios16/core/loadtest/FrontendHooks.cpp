@@ -63,3 +63,10 @@ extern "C" void armsx3_record_jit_failure(const char* message)
         ARMSX3StartupLog(line);
     }
 }
+
+extern "C" void armsx3_record_immutable_jit(size_t bytes)
+{
+    char line[160];
+    std::snprintf(line, sizeof(line), "P2 immutable JIT published: %zu code bytes, isolated RX pages", bytes);
+    ARMSX3StartupLog(line);
+}

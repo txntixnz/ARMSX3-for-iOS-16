@@ -1,0 +1,52 @@
+--- a/Utilities/JIT.h
++++ b/Utilities/JIT.h
+@@ -36,6 +36,11 @@
+ #include <asmjit/a64.h>
+ #endif
+ #pragma GCC diagnostic pop
++#endif
++
++#if defined(__APPLE__) && TARGET_OS_IOS
++#include "util/immutable_jit.hpp"
++#include <optional>
+ #endif
+ 
+ #include <array>
+@@ -461,14 +466,20 @@
+ template <typename FT, typename Asm = native_asm, typename F>
+ inline FT build_function_asm(std::string_view name, F&& builder, ::jit_runtime* custom_runtime = nullptr, bool reduced_size = false)
+ {
++	using namespace asmjit;
++#if defined(__APPLE__) && TARGET_OS_IOS
++	// Custom runtimes can rewrite live code; retain the original fail-closed
++	// boundary there. Default functions use isolated, immutable RX pages.
++	std::optional<jit_write_guard> jit_guard;
++	if (custom_runtime) jit_guard.emplace();
++	CodeHolder code;
++	code.init(Environment::host());
++#else
+ 	jit_write_guard jit_guard;
+-
+-	using namespace asmjit;
+-
+ 	auto& rt = custom_runtime ? *custom_runtime : get_global_runtime();
+-
+ 	CodeHolder code;
+ 	code.init(rt.environment());
++#endif
+ 
+ #if defined(ARCH_X64)
+ 	native_args args;
+@@ -510,7 +521,12 @@
+ 		compiler();
+ 	}
+ 
++#if defined(__APPLE__) && TARGET_OS_IOS
++	const auto result = custom_runtime ? custom_runtime->_add(&code, reduced_size ? 16 : 64)
++		: utils::publish_immutable_jit(code, reduced_size ? 16 : 64);
++#else
+ 	const auto result = rt._add(&code, reduced_size ? 16 : 64);
++#endif
+ 	jit_announce(result, code.codeSize(), name);
+ 	return reinterpret_cast<FT>(uptr(result));
+ }
