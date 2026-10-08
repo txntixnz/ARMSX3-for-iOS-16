@@ -1,0 +1,44 @@
+--- a/rpcs3/Emu/CMakeLists.txt
++++ b/rpcs3/Emu/CMakeLists.txt
+@@ -409,11 +409,16 @@
+ 
+ if(CMAKE_SYSTEM_PROCESSOR MATCHES "ARM64|arm64|aarch64")
+     target_sources(rpcs3_emu PRIVATE
+-        CPU/Backends/AArch64/AArch64ASM.cpp
+         CPU/Backends/AArch64/AArch64Common.cpp
+-        CPU/Backends/AArch64/AArch64JIT.cpp
+         CPU/Backends/AArch64/AArch64Signal.cpp
+     )
++    # These helpers use LLVM IR types; common and signal code does not.
++    if(WITH_LLVM)
++        target_sources(rpcs3_emu PRIVATE
++            CPU/Backends/AArch64/AArch64ASM.cpp
++            CPU/Backends/AArch64/AArch64JIT.cpp
++        )
++    endif()
+ endif()
+ 
+ 
+--- a/rpcs3/Emu/RSX/Overlays/overlay_perf_metrics.cpp
++++ b/rpcs3/Emu/RSX/Overlays/overlay_perf_metrics.cpp
+@@ -1,5 +1,7 @@
+ #include "stdafx.h"
++#ifdef HAVE_VULKAN
+ #include "Emu/RSX/VK/VKFrameGen.h"
++#endif
+ #include "overlay_manager.h"
+ #include "overlay_perf_metrics.h"
+ #include "Emu/RSX/RSXThread.h"
+@@ -636,10 +638,12 @@
+ 				//
+ 				// Absent entirely when frame generation is off, so the overlay is unchanged for anyone
+ 				// not using it.
++#ifdef HAVE_VULKAN
+ 				if (const std::string lsfg = vk::frame_gen::status_text(); !lsfg.empty())
+ 				{
+ 					fmt::append(perf_text, "%s%s", perf_text.empty() ? "" : "\n", lsfg);
+ 				}
++#endif
+ 
+ 				// Device temperatures, for the same reason and in the same place: appended after
+ 				// the switch so every detail level gets them without four format strings and

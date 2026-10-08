@@ -110,3 +110,6 @@ P1 run 36852920200 passed generation and reached real compilation. Patch 0004:
 - Guard desktop disk ioctls and Linux sysfs capacity affinity code.
 Build uses ninja -k0 to report all remaining independent compilation failures.
 These fixes have local patch and small C++ checks, not Xcode validation yet.
+
+## P1 optional-backend guards (2026-10-08)
+Latest failed run 36892715528 has only three failed translation units: AArch64ASM.cpp, AArch64JIT.cpp, and overlay_perf_metrics.cpp. Patch 0005 adds WITH_LLVM source guards for the two LLVM helpers and HAVE_VULKAN guards for the frame-generation overlay include/call. Common ARM64 and signal sources remain enabled. These are fixes for the existing compile-only configuration, not LLVM or renderer integration. Patch application and both Vulkan preprocessing branches checked locally; Xcode validation remains in Actions. Preserve the user's minimal root README. Do not monitor builds after enqueueing.
