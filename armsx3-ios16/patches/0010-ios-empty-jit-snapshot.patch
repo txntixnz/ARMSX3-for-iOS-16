@@ -1,0 +1,15 @@
+--- a/Utilities/JITASM.cpp
++++ b/Utilities/JITASM.cpp
+@@ -305,6 +305,12 @@
+ 
+ void jit_runtime::initialize()
+ {
++#if defined(__APPLE__) && TARGET_OS_IOS
++	// Immutable iOS startup functions and the SPU heap table do not use this
++	// mutable 2 GiB arena. Avoid creating it for a zero-length snapshot.
++	if (!s_code_pos.load() && !s_data_pos.load())
++		return;
++#endif
+ 	if (!s_code_init.empty() || !s_data_init.empty())
+ 	{
+ 		return;

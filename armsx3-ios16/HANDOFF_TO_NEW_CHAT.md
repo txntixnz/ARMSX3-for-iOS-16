@@ -170,3 +170,19 @@ Existing verified startup baseline remains the parent commit 76158904f5cff0c934a
 Local validation for build 8: pinned asmjit host build emitted exactly ARM64
 MOV W0,#42 (0x52800540) and RET X30 (0xd65f03c0) for the probe; metadata
 parses. Full UIKit/iPhoneOS compile and actual ARM64 execution require CI/device.
+
+
+## P3 execution success / build 9 emulator initialization
+2026-10-08 build 8 device log confirms first generated function returned 42;
+P3 PASS: all 65 generated functions executed correctly, four workers, original
+function retained value 42. This validates immutable code publication/execution
+on iOS 16 A15, not mutable guest recompilation.
+Build 9 adds Initialize emulator after successful JIT test. Calls real Emu.Init
+off-main, headless/null renderer, logs core messages synchronously to startup
+log, reports exceptions, core errors and missing config.yml. No game/VM/renderer
+boot requested. Configuration uses existing upstream Apple sandbox paths under
+HOME/Library/Application Support/rpcs3 and HOME/Library/Caches/rpcs3.
+Patch 10 avoids reserving the unused mutable 2 GiB JIT arena solely to memcpy
+zero bytes during initialize when both allocation counters are zero. Real
+nonempty snapshot path and runtime write guards remain unchanged.
+Successful device baseline: parent 2d82e5739a0fa8a08599b8b8b5f1684de0533dc7.
