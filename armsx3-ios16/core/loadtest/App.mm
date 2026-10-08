@@ -8,7 +8,7 @@
 @property(nonatomic,strong) UITextView* output;
 @property(nonatomic,strong) UIButton* loadButton;
 @property(nonatomic,strong) UIButton* jitButton;
-@property(nonatomic,strong) UIButton* initButton;
+@property(nonatomic,strong) UIButton* initializeButton;
 @property(nonatomic,assign) void* coreHandle;
 @end
 @implementation LoadController
@@ -35,11 +35,11 @@
     self.jitButton.enabled = NO;
     [self.jitButton addTarget:self action:@selector(testJit) forControlEvents:UIControlEventTouchUpInside];
     [stack addArrangedSubview:self.jitButton];
-    self.initButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    [self.initButton setTitle:@"Initialize emulator" forState:UIControlStateNormal];
-    self.initButton.enabled = NO;
-    [self.initButton addTarget:self action:@selector(initializeCore) forControlEvents:UIControlEventTouchUpInside];
-    [stack addArrangedSubview:self.initButton];
+    self.initializeButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    [self.initializeButton setTitle:@"Initialize emulator" forState:UIControlStateNormal];
+    self.initializeButton.enabled = NO;
+    [self.initializeButton addTarget:self action:@selector(initializeCore) forControlEvents:UIControlEventTouchUpInside];
+    [stack addArrangedSubview:self.initializeButton];
     UIButton* share = [UIButton buttonWithType:UIButtonTypeSystem];
     [share setTitle:@"Share startup log" forState:UIControlStateNormal];
     [share addTarget:self action:@selector(shareLog) forControlEvents:UIControlEventTouchUpInside];
@@ -97,7 +97,7 @@
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         const int result = test();
         dispatch_async(dispatch_get_main_queue(), ^{
-            self.initButton.enabled = result == 0;
+            self.initializeButton.enabled = result == 0;
             self.output.text = result == 0
                 ? @"PASS: generated core code executed correctly across four workers.\n\nTap Initialize emulator, then share the startup log. Game boot is still pending."
                 : [NSString stringWithFormat:@"Core JIT execution test failed (%d). Share the startup log.", result];
@@ -105,7 +105,7 @@
     });
 }
 - (void)initializeCore {
-    self.initButton.enabled = NO;
+    self.initializeButton.enabled = NO;
     auto initialize = reinterpret_cast<int (*)()>(dlsym(self.coreHandle, "armsx3_core_initialize"));
     if (!initialize) {
         ARMSX3StartupLog("P4 missing initialization export");

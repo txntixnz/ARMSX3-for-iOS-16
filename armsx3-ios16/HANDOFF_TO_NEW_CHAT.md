@@ -186,3 +186,11 @@ Patch 10 avoids reserving the unused mutable 2 GiB JIT arena solely to memcpy
 zero bytes during initialize when both allocation counters are zero. Real
 nonempty snapshot path and runtime write guards remain unchanged.
 Successful device baseline: parent 2d82e5739a0fa8a08599b8b8b5f1684de0533dc7.
+
+
+## Build 9 UI compilation fix
+Run 37840553352: core archive and dylib compile/link passed. App.mm failed
+at property initButton: Objective-C infers init method family when init is
+followed by uppercase B; getter returning UIButton is invalid for LoadController.
+Rename property initializeButton (init followed by lowercase i) throughout UI.
+Initialization probe behavior unchanged.
