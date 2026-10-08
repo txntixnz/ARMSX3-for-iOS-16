@@ -4,6 +4,9 @@ on:
     branches: [main]
     paths:
       - 'armsx3-ios16/core/**'
+      - 'armsx3-ios16/ios/src/StartupLog.*'
+      - 'armsx3-ios16/ios/Entitlements.plist'
+      - 'armsx3-ios16/ios/scripts/verify-bundle.py'
       - 'armsx3-ios16/patches/**'
       - '.github/workflows/build-armsx3-ios16-core.yml'
   workflow_dispatch:
@@ -57,6 +60,7 @@ jobs:
             git -C upstream-armsx3 apply "../$patch"
           done
           cp -R armsx3-ios16/core upstream-armsx3/ios-core
+          cp -R armsx3-ios16/ios upstream-armsx3/ios
           cp armsx3-ios16/core/apple_jit.hpp upstream-armsx3/rpcs3/util/apple_jit.hpp
       - name: Show toolchain
         run: |
@@ -89,6 +93,18 @@ jobs:
         with:
           name: ARMSX3_iOS16_P1_CORE_ARCHIVE_NOT_AN_IPA
           path: core-artifacts/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Link full core and package P2 load-test IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash armsx3-ios16/core/package-loadtest.sh upstream-armsx3 2>&1 | tee armsx3-core-link-build.log
+      - name: Upload P2 load-test IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: ARMSX3_iOS16_P2_CORE_LOAD_TEST
+          path: upstream-armsx3/dist-ios-core/
           if-no-files-found: error
           retention-days: 14
       - name: Upload diagnostics even on failure

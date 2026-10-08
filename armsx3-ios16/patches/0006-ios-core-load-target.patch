@@ -1,0 +1,10 @@
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -183,3 +183,7 @@
+ endif()
+ 
+ set_directory_properties(PROPERTIES VS_STARTUP_PROJECT rpcs3)
++
++if(ARMSX3_IOS AND ARMSX3_BUILD_LOADTEST)
++    add_subdirectory(ios-core/loadtest)
++endif()

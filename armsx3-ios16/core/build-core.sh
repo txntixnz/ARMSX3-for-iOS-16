@@ -28,7 +28,7 @@ cmake -S "$source_dir" -B "$build_dir" -G Ninja \
   -DUSE_DISCORD_RPC=OFF -DUSE_GAMEMODE=OFF \
   -DUSE_SYSTEM_CURL=OFF -DUSE_SYSTEM_ZLIB=OFF -DUSE_SYSTEM_OPENCV=OFF \
   -Dprotobuf_FORCE_FETCH_DEPENDENCIES=ON \
-  -DBUILD_RPCS3_TESTS=OFF
+  -DBUILD_RPCS3_TESTS=OFF -DARMSX3_BUILD_LOADTEST=ON
 # Keep going across independent units to collect useful compiler diagnostics,
 # but preserve a failing exit status. No placeholder implementations are added.
 cmake --build "$build_dir" --target rpcs3_emu --parallel 3 -- -k 0

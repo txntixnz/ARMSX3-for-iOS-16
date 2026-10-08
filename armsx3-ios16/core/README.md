@@ -42,3 +42,19 @@ not evidence that the full emulator memory or JIT subsystem works.
 
 Run **ARMSX3 iOS 16 - P1 core compilation** in Actions. Report completion or
 failure; the agent does not poll the workflow after enqueueing it.
+
+## P2 full link and on-device load test
+
+After archive verification, the workflow now links all core objects into an
+embedded dylib with undefined symbols treated as errors. It packages an IPA
+only if that link and bundle verification succeed. LLVM and Vulkan remain
+disabled at this stage. A link failure is not a core compilation regression.
+
+Install the P2 IPA through TrollStore. It has a separate bundle ID. Tap
+**Load emulator core**, then **Share startup log**. If loading closes the app,
+reopen it and share the log before tapping Load again. The dylib is loaded on
+request so main/UI logging is available before its constructors. The test
+queries the core state after loading; it does not call Emulator::Init or boot
+a title. Core constructors may themselves allocate memory or generate code;
+that behavior remains unvalidated on-device. Do not treat a successful link
+or load as working emulation.
