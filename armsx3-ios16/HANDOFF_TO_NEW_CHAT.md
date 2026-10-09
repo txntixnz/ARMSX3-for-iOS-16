@@ -394,3 +394,31 @@ atomic reservation commands, production CPU scheduler, firmware or games.
 New P9 function compiled against actual pinned core headers with GCC C++23.
 No raw SPU registry initializer is introduced. Apple compilation/linking and
 real DMA execution remain pending CI and the new device test.
+
+
+## Build 19: SPU channel submission and completion tags
+
+ARMSX3-startup(4).log pid 82129 confirms P9 passed all 16 GET/PUT pairs
+(32 transfers), sizes 1 through 16384, two rounds, guards/aliases/mirrors,
+range-lock release, private context teardown and VM cleanup. P5–P8 pass.
+
+P10 repeats those transfers through real set_ch_value(MFC_LSA/EAH/EAL/
+Size/TagID/Cmd), invoking production process_mfc_cmd rather than the direct
+DMA routine. Checks full command capacity before/after each synchronous
+submission and empty fence/barrier masks afterward. Rotates tags 0/7/31;
+for every transfer checks IMMEDIATE/ANY/ALL tag updates via real read/write
+APIs, tag mask readback, exact completion status and consumed status count.
+Also checks empty-mask IMMEDIATE and a combined three-tag ALL request.
+Ready-count guards prevent entering an empty channel's production wait path.
+
+Calls real spu_thread::cpu_init before channels: constructor-only state has
+mfc_barrier/mfc_fence = -1 and must be initialized before submission. This
+reset is safe for the private raw-style context and does not start a CPU.
+Scoped settings restore accurate DMA, strict rendering, FIFO, command
+shuffling and preferred SPU threads. Shuffling/preferred are temporarily
+zero, ensuring synchronous commands without competing CPU/renderer work.
+
+GCC C++23 compilation against pinned real headers passed. Device/Apple CI
+validation pending. No queued DMA, MFC list/atomic operations, blocking
+waits, WRCH/RDCH guest instructions, production scheduler or game boot is
+claimed. Next button: Test SPU DMA channels / tags, enabled after P9 PASS.
