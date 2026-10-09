@@ -740,3 +740,43 @@ OPD/BSS and every byte of64KiB mapped memory PASS. Host harness does not
 execute PPU handlers or exercise Apple on-disk fs/VM/CPU integration.
 Catalog symbols/count and whitespace verified. Apple CI and device
 integration pending. Next: device P18 result, fuller loader/admission.
+
+
+## Build 29: production PPU code registration and core decoder
+
+Device startup(20261009-212347).log pid88876 confirms P18 core on-disk
+ELF parsing, malformed rejection, bounded mapping, OPD/BSS, six loaded
+instructions and cleanup PASS. Final AUTO PASS confirms all17 stages.
+
+Inspection: full ppu_load_exec also creates process/HLE modules and system
+threads, requiring staged initialization beyond the private P18 probe.
+P19 first tests its actual ppu_register_range/ppu_register_function_at
+path with the same trusted diagnostic ELF. No full loader call yet.
+Reuses P18 file parse and bounded mapper, initializes only core-owned
+ppu_interpreter_rt in g_fxo if absent (requires existing P4 object table).
+This decoder is retained under normal core object ownership until the next
+Emu reset; no manual destruction of the fixed object's bookkeeping.
+
+Two executions of six instructions each: production range registration
+initializes every handler slot to fallback and segment tag to0 for64KiB;
+first pass uses actual lazy ppu_fallback decode on execution; second
+re-registers the range and uses eager ppu_register_function_at before
+execution. Real bounded exec_task verifies six decoded handlers afterward,
+untouched outside handlers, page_executable metadata, normal/super memory
+contents, OPD/BSS/results, TLS and balanced named CPU lifecycle counters.
+Scoped ppu_debug=false avoids unrelated statistics storage and restores.
+Guest executable flag is metadata, not native RX or writable JIT.
+Production registration commits128KiB RW handler cache plus32KiB segment
+tag cache. The latter lives beyond VM close's8GiB cache decommit, so this
+probe explicitly decommits that32KiB region via scoped cleanup on both
+success and exception paths. Existing VM close handles main cache region.
+Still private CPU admission and a diagnostic mapper; no firmware/game boot.
+
+Automatic stage18, CFBundleVersion29, same installable IPA artifact.
+Exact bridge compiles GCC C++23 against pinned headers. Host harness uses
+exact production registration routines with mocked VM/commit/decoder
+boundaries: aligned addresses/sizes/page flags, full64KiB fallback slots,
+six eager handlers and outside guards, re-registration and empty-range
+no-op PASS. Does not emulate actual lazy handler execution or iOS VM
+protection; device integration remains pending. Catalog/export/whitespace
+checks PASS. Next: P19 device result, fuller loader/admission preparation.
