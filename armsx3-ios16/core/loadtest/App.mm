@@ -19,6 +19,7 @@
 @property(nonatomic,strong) UIButton* channelInstructionsButton;
 @property(nonatomic,strong) UIButton* waitsButton;
 @property(nonatomic,strong) UIButton* lifecycleButton;
+@property(nonatomic,strong) UIButton* workerInstructionsButton;
 @property(nonatomic,assign) void* coreHandle;
 @end
 @implementation LoadController
@@ -108,6 +109,11 @@
     self.lifecycleButton.enabled = NO;
     [self.lifecycleButton addTarget:self action:@selector(testLifecycle) forControlEvents:UIControlEventTouchUpInside];
     [stack addArrangedSubview:self.lifecycleButton];
+    self.workerInstructionsButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    [self.workerInstructionsButton setTitle:@"Test PPU worker instructions" forState:UIControlStateNormal];
+    self.workerInstructionsButton.enabled = NO;
+    [self.workerInstructionsButton addTarget:self action:@selector(testWorkerInstructions) forControlEvents:UIControlEventTouchUpInside];
+    [stack addArrangedSubview:self.workerInstructionsButton];
     UIButton* share = [UIButton buttonWithType:UIButtonTypeSystem];
     [share setTitle:@"Share startup log" forState:UIControlStateNormal];
     [share addTarget:self action:@selector(shareLog) forControlEvents:UIControlEventTouchUpInside];
@@ -386,9 +392,29 @@
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         const int result = test();
         dispatch_async(dispatch_get_main_queue(), ^{
+            self.workerInstructionsButton.enabled = result == 0;
             self.output.text = result == 0
-                ? @"PASS: four PPU CPU threads started, waited while stopped, exited and joined.\n\nShare the startup log. Game boot is still pending."
+                ? @"PASS: four PPU CPU threads started, waited while stopped, exited and joined.\n\nRun Test PPU worker instructions next. Game boot is still pending."
                 : [NSString stringWithFormat:@"PPU lifecycle test failed (%d). Share the startup log.", result];
+        });
+    });
+}
+- (void)testWorkerInstructions {
+    self.workerInstructionsButton.enabled = NO;
+    auto test = reinterpret_cast<int (*)()>(dlsym(self.coreHandle, "armsx3_core_test_ppu_worker_instructions"));
+    if (!test) {
+        ARMSX3StartupLog("P15 missing PPU worker instruction export");
+        self.output.text = @"PPU worker instruction export missing. Share the log.";
+        return;
+    }
+    self.output.text = @"Testing PowerPC instructions on PPU workers…";
+    ARMSX3StartupLog("P15 user requested PPU worker instructions; worker pending");
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        const int result = test();
+        dispatch_async(dispatch_get_main_queue(), ^{
+            self.output.text = result == 0
+                ? @"PASS: 24 PowerPC instructions on four real PPU workers, command queue, guest stores and cleanup.\n\nShare the startup log. Game boot is still pending."
+                : [NSString stringWithFormat:@"PPU worker instruction test failed (%d). Share the startup log.", result];
         });
     });
 }

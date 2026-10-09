@@ -1,4 +1,4 @@
-name: ARMSX3 iOS 16 - P1 core compilation
+name: ARMSX3 iOS 16 - Installable IPA build
 on:
   push:
     branches: [main]

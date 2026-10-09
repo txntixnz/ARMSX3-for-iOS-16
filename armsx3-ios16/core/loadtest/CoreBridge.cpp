@@ -1637,3 +1637,128 @@ extern "C" __attribute__((visibility("default"))) int armsx3_core_test_ppu_lifec
         return -1;
     }
 }
+
+
+// A bounded instruction chain is dispatched by the real PPU cpu_task command queue.
+// This does not invoke fast_call, firmware syscalls or an autonomous guest program.
+extern "C" __attribute__((visibility("default"))) int armsx3_core_test_ppu_worker_instructions()
+{
+    ARMSX3StartupLog("P15 BEFORE PPU worker command queue and guest instruction test");
+    bool initialized = false;
+    try
+    {
+        if (!Emu.IsStopped()) throw std::runtime_error("P15 requires stopped emulator");
+        struct Configuration
+        {
+            bool ppu = g_cfg.core.ppu_prof.get(), spu = g_cfg.core.spu_prof.get(), debug = g_cfg.core.spu_debug.get();
+            thread_scheduler_mode scheduler = g_cfg.core.thread_scheduler.get();
+            Configuration() { g_cfg.core.ppu_prof.set(false); g_cfg.core.spu_prof.set(false);
+                g_cfg.core.spu_debug.set(false); g_cfg.core.thread_scheduler.set(thread_scheduler_mode::os); }
+            ~Configuration() { g_cfg.core.ppu_prof.set(ppu); g_cfg.core.spu_prof.set(spu);
+                g_cfg.core.spu_debug.set(debug); g_cfg.core.thread_scheduler.set(scheduler); }
+        } configuration;
+        vm::init(); initialized = true;
+        if (!vm::reserve_map(vm::main, 0x10000, 0x20000))
+            throw std::runtime_error("P15 main memory block unavailable");
+        const u32 address = vm::alloc(0x10000, vm::main, 0x10000);
+        if (!address) throw std::runtime_error("P15 guest allocation failed");
+        auto interpreter = std::make_unique<ppu_interpreter_rt>();
+        struct Program
+        {
+            std::array<ppu_intrp_func, 7> functions{};
+            be_t<u32>* code = nullptr;
+            std::atomic<bool> completed{false};
+            bool tls = false;
+        };
+        const auto dform = [](u32 op, u32 reg, u32 base, u32 imm) {
+            return (op << 26) | (reg << 21) | (base << 16) | (imm & 0xffff);
+        };
+        for (u32 round = 0; round < 4; ++round)
+        {
+            const u64 live = armsx3_ios_live_cpu_threads();
+            const auto created = cpu_thread::g_threads_created.load();
+            const auto deleted = cpu_thread::g_threads_deleted.load();
+            Program program;
+            program.code = reinterpret_cast<be_t<u32>*>(vm::base(address));
+            const u32 seed = 42 + round * 11;
+            const std::array<u32, 6> opcodes{
+                dform(14, 3, 0, seed), dform(14, 4, 0, 0xfff9),
+                (31u << 26) | (5u << 21) | (3u << 16) | (4u << 11) | (266u << 1),
+                dform(36, 5, 6, 0), dform(32, 7, 6, 0), dform(24, 7, 8, 0x100)
+            };
+            for (u32 i = 0; i < opcodes.size(); ++i)
+            {
+                program.code[i] = opcodes[i];
+                program.functions[i].fn = interpreter->decode(opcodes[i]);
+                if (!program.functions[i].fn) throw std::runtime_error("P15 decoder returned null");
+            }
+            program.code[6] = 0;
+            program.functions.back().fn = +[](ppu_thread& context, ppu_opcode_t, be_t<u32>*, ppu_intrp_func*) {
+                context.gpr[31] = 0x503135494f53ull;
+            };
+            auto* output = static_cast<u8*>(vm::base(address + 0x100));
+            std::memset(output - 16, 0xa5, 36);
+            const ppu_thread_params params{static_cast<vm::addr_t>(address + 0x1000), 0x8000, 0, {}, 0, 0};
+            {
+                std::unique_ptr<named_thread<ppu_thread>> worker;
+                {
+                    struct ConstructionID { u32 previous = id_manager::g_id;
+                        ConstructionID() { id_manager::g_id = ppu_thread::id_base; }
+                        ~ConstructionID() { id_manager::g_id = previous; } } construction_id;
+                    worker = std::make_unique<named_thread<ppu_thread>>(stx::launch_retainer{}, params, "iOS PPU worker instructions", 1000);
+                }
+                const ppu_intrp_func_t execute = +[](ppu_thread& context, ppu_opcode_t, be_t<u32>*, ppu_intrp_func*) {
+                    auto& program = *reinterpret_cast<Program*>(context.gpr[30]);
+                    program.tls = get_current_cpu_thread() == &context && thread_ctrl::get_current() != nullptr;
+                    program.functions[0].fn(context, {u32(program.code[0])}, program.code, program.functions.data() + 1);
+                    context.state += cpu_flag::exit;
+                    program.completed.store(true, std::memory_order_release);
+                };
+                // Production queue processing supplies both registers before dispatching the callback.
+                worker->cmd_list({{ppu_cmd::set_gpr, 6}, u64(address + 0x100),
+                    {ppu_cmd::set_gpr, 30}, u64(reinterpret_cast<uintptr_t>(&program)),
+                    {ppu_cmd::ptr_call, 0}, std::bit_cast<u64>(execute)});
+                worker->cia = address;
+                worker->gpr[31] = 0;
+                // Private context only: bypass LV2 admission, then enter normal CPU cpu_task.
+                worker->state -= cpu_flag::stop + cpu_flag::exit + cpu_flag::suspend + cpu_flag::memory + cpu_flag::wait;
+                ARMSX3StartupLog("P15 BEFORE starting runnable PPU worker with bounded queued callback");
+                *worker = thread_state::created;
+                const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+                while (!program.completed.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline)
+                    std::this_thread::yield();
+                if (!program.completed.load(std::memory_order_acquire))
+                    throw std::runtime_error("P15 PPU worker instruction deadline exceeded");
+                (*worker)();
+                ARMSX3StartupLog("P15 AFTER bounded queued instruction chain and PPU worker join");
+                if (!program.tls || worker->gpr[3] != seed || worker->gpr[4] != 0xfffffffffffffff9ull ||
+                    worker->gpr[5] != seed - 7 || worker->gpr[7] != seed - 7 ||
+                    worker->gpr[8] != ((seed - 7) | 0x100) || worker->gpr[31] != 0x503135494f53ull)
+                    throw std::runtime_error("P15 PPU worker TLS, queue or instruction result mismatch");
+            }
+            const u32 value = seed - 7;
+            for (u32 i = 0; i < 4; ++i)
+                if (output[i] != u8(value >> (24 - i * 8)) ||
+                    static_cast<const u8*>(vm::get_super_ptr(address + 0x100))[i] != output[i])
+                    throw std::runtime_error("P15 guest big-endian store or alias mismatch");
+            for (int i = -16; i < 20; ++i)
+                if ((i < 0 || i >= 4) && output[i] != 0xa5)
+                    throw std::runtime_error("P15 guest output guard modified");
+            if (armsx3_ios_live_cpu_threads() != live || cpu_thread::g_threads_created.load() != created + 1 ||
+                cpu_thread::g_threads_deleted.load() != deleted + 1)
+                throw std::runtime_error("P15 CPU lifecycle counters did not balance");
+            ARMSX3StartupLog("P15 PASS: queued registers, six PowerPC instructions on real PPU worker, TLS, guards, aliases and cleanup");
+        }
+        if (vm::dealloc(address, vm::main) != 0x10000 || vm::check_addr(address))
+            throw std::runtime_error("P15 guest deallocation failed");
+        vm::close(); initialized = false;
+        ARMSX3StartupLog("P15 PASS: 24 PowerPC instructions across four real PPU workers; full LV2 scheduling and game boot remain untested");
+        return 0;
+    }
+    catch (const std::exception& error)
+    {
+        ARMSX3StartupLog(error.what());
+        if (initialized) vm::close();
+        return -1;
+    }
+}

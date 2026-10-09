@@ -551,3 +551,37 @@ including standby named_thread<ppu_thread>, configuration and state API.
 Whitespace check passed. Apple compile/link and device lifecycle pending.
 No runnable guest CPU scheduling, mutable guest JIT, firmware, renderer or
 game boot claimed. Next: device P14 result, then bounded runnable guest task.
+
+## Build 24: PowerPC instructions on real PPU workers
+
+Build23 Actions run37940582228 succeeded. Device startup(10).log pid85487
+confirms all four P14 stopped PPU CPU-thread waits/exits/joins and balanced
+counters pass. This is device evidence, not just successful compilation.
+
+P15 Test PPU worker instructions follows P14. Four private standby
+named_thread<ppu_thread> workers enter real cpu_thread::operator() and
+ppu_thread::cpu_task. Production cmd_list queues set_gpr r6 (guest output),
+set_gpr r30 (private host diagnostic pointer), then ptr_call. That queued
+callback verifies CPU/core TLS and dispatches six actual interpreter handlers:
+addi seed, addi -7, add, stw, lwz, ori. Four seeds42/53/64/75 produce
+35/46/57/68; terminator marker proves whole bounded chain ran. Callback
+sets exit before publishing completion; host joins before inspecting context
+and memory. Verify guest big-endian store, privileged alias, 16-byte guards
+on both sides, and created/deleted/live counts. Guest64KiB and heap decoder
+cleaned afterward. Completion deadline2s; named-thread destructor aborts/joins
+on error. Profiling/OS-thread-scheduler configuration restored on exit.
+
+This intentionally clears private constructor stop/exit/suspend/memory/wait
+flags before start and bypasses LV2 admission. It proves cpu_task command
+queue dispatch plus real guest handlers on the CPU host thread. It does NOT
+prove autonomous guest fetching, fast_call, LV2 runnable scheduling, guest
+syscalls, concurrent PPU/SPU, firmware, mutable JIT, rendering or game boot.
+No production registry entries or profiler background threads are added.
+
+CFBundleVersion24. Workflow display name changed from stale P1 compilation
+to ARMSX3 iOS16 Installable IPA build; workflow filename and IPA artifact
+ARMSX3_iOS16_INSTALL_THIS_IPA remain unchanged. Exact P15 function compiles
+against pinned core headers with GCC C++23; whitespace validation passes.
+Apple linking and iPhone runtime remain pending until user brings results.
+Next: device P15, then stronger CPU wait/resume/queue coverage or bounded
+normal guest dispatch without firmware dependencies.
