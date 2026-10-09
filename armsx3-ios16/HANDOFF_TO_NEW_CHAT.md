@@ -621,3 +621,43 @@ Source checks cover stop/reentry/failure guards and single test dispatch;
 whitespace check passed. UIKit/Objective-C++ compilation and device one-tap
 runtime pending GitHub CI/user report. Core unchanged from passing build24.
 Next: validate automated suite, then stronger guest execution/scheduling.
+
+## Build 26: persistent PPU queue wait/wake
+
+Device startup(20261009-181913).log pid87066 confirms build25 one-tap
+runner completes P2–P15 in exact order with final AUTO PASS. No repeated
+manual stage taps needed. Build26 adds P16 automatically as stage15.
+
+P16 keeps one private real named_thread<ppu_thread> alive for32 batches.
+Start with empty queue, observe real cmd_wait entry, publish two set_gpr
+commands and ptr_call using cmd_list, then production cmd_notify.store(1)/
+notify_one. Each callback runs six actual PPU interpreter instructions,
+snapshots registers/TLS and publishes monotonically increasing completion
+with release/acquire. Observe return to empty queue, validate distinct seed
+results, big-endian output, adjacent guards and privileged alias. Repeat32
+(including eight1ms parking opportunities), then publish queued exit callback,
+notify/join and verify created/deleted/live counters and guest cleanup.
+192 PowerPC instructions run on the same persistent CPU worker.
+
+Patch0015 adds read-only cumulative iOS command-wait entry counter in
+PPUThread.cpp; explicit TargetConditionals guards. Counter observes reaching
+wait_on, not proof of kernel sleep. Private context still bypasses LV2
+admission by clearing constructor stop/exit/suspend/memory/wait flags.
+No autonomous guest fetching, firmware, mutable guest JIT, full LV2 scheduler,
+renderer or game boot claimed. Only one diagnostic CPU worker is live.
+
+Host mutates instruction/decoder storage only between acknowledged batches.
+Snapshot release/acquire protects result reads, worker is waiting before next
+batch. StopWorker guard sets exit and wakes CPU state AND command wait on
+exceptions, before named_thread destructor joins and before program/decoder/
+VM lifetime ends. No manual deleted accounting. Scoped profiling-off and OS
+scheduler settings restore on exit. Per-wait/batch deadlines2s.
+CFBundleVersion26, IPA artifact unchanged ARMSX3_iOS16_INSTALL_THIS_IPA.
+
+Validation: exact P16 compiles against actual pinned core headers GCC C++23.
+Patch applies cleanly. Exact upstream cmd_wait body in host mock queue/
+notification harness passed64 publications alternating before/after wait,
+and notified empty exit. This checks queue-wait algorithm, not full iOS atomic
+backend. Automated catalog15 stages/exports verified; whitespace check passes.
+Apple build and device persistent-CPU wait/wake remain pending user results.
+Next: P16 device report, then bounded normal guest dispatch/scheduler work.

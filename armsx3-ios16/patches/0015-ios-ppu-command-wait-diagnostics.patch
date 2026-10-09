@@ -1,0 +1,27 @@
+--- a/rpcs3/Emu/Cell/PPUThread.cpp
++++ b/rpcs3/Emu/Cell/PPUThread.cpp
+@@ -30,6 +30,14 @@
+ #include "lv2/sys_process.h"
+ #include "lv2/sys_spu.h"
+ 
++#if defined(__APPLE__)
++#include <TargetConditionals.h>
++#if TARGET_OS_IPHONE
++static atomic_t<u64> s_ios_ppu_command_waits{0};
++extern "C" u64 armsx3_ios_ppu_command_waits() { return s_ios_ppu_command_waits.load(); }
++#endif
++#endif
++
+ #ifdef LLVM_AVAILABLE
+ #ifdef _MSC_VER
+ #pragma warning(push, 0)
+@@ -3578,6 +3586,9 @@
+ 			return {};
+ 		}
+ 
++#if defined(__APPLE__) && TARGET_OS_IPHONE
++		s_ios_ppu_command_waits++;
++#endif
+ 		thread_ctrl::wait_on(cmd_notify, 0);
+ 		cmd_notify = 0;
+ 	}
