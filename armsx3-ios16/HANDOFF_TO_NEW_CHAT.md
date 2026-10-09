@@ -702,3 +702,41 @@ range/budget/stop/input guards, TLS scope restoration and static/native-JIT
 protection routing. This host check does not run actual PPU instruction
 handlers; those need Apple CI/device integration. Whitespace passed.
 Next: device P17, then guest loading/admission and fuller execution path.
+
+
+## Build 28: core ELF parsing and bounded loaded-code execution
+
+Device startup(20261009-185821).log pid88095 confirms P17 loops1/10/64
+with dispatch counts13/31/139, range/budget rejection and cleanup PASS.
+Final AUTO PASS confirms all16 stages completed on the iPhone.
+
+P18 constructs a small big-endian ELF64 PPC64 ET_EXEC fixture with two
+PT_LOAD segments using the actual core header types. Writes it through
+core fs::file to the cache and reopens it through ppu_exec_object. Uses a
+bounded diagnostic mapper within a private64KiB VM allocation; checks
+filesz<=memsz, payload size and guest range with subtraction-safe bounds.
+Loads seven words (six instructions plus readable padding), an8-byte PS3
+OPD code/TOC descriptor, and a64-byte data segment with zero-filled BSS.
+Rejects bad magic/class/endian/machine and truncated payload using actual
+ELF reader errors. Oversized memsz is separately rejected by mapping guard.
+The trusted synthetic fixture is the only file input, not a user import.
+
+Sets CIA/TOC from loaded OPD and executes six loaded instructions through
+P17 bounded actual exec_task/cache dispatch on one real PPU worker. Checks
+add/store/reload/OR results35/0x123, six steps, TLS, full64KiB normal and
+privileged alias contents, guard bytes, worker counters and VM cleanup.
+Cache region remains RW data containing handlers, no mutable native JIT.
+Scoped core configuration restores; file removed after test, worker joined
+before interpreter and guest memory release. Same private CPU admission
+bypass as P17. This is NOT full ppu_load_exec, LV2 module admission, firmware,
+syscalls, external executable loading or game boot.
+
+P18 is automatic stage17, CFBundleVersion28. Installable artifact remains
+ARMSX3_iOS16_INSTALL_THIS_IPA. Exact bridge probe compiles GCC C++23 with
+pinned core headers. Host harness runs actual templated ELF reader and
+actual container_stream with minimal unrelated filesystem/error stubs:
+five malformed cases, valid segment payloads, oversized mapping guard,
+OPD/BSS and every byte of64KiB mapped memory PASS. Host harness does not
+execute PPU handlers or exercise Apple on-disk fs/VM/CPU integration.
+Catalog symbols/count and whitespace verified. Apple CI and device
+integration pending. Next: device P18 result, fuller loader/admission.
