@@ -216,21 +216,34 @@ extern "C" __attribute__((visibility("default"))) int armsx3_core_test_ppu_instr
         ARMSX3StartupLog("P6 AFTER guest allocation; BEFORE PPU context construction");
         {
             const ppu_thread_params params{static_cast<vm::addr_t>(address + 0x1000), 0x8000, 0, {}, 0, 0};
-            auto ppu = idm::make_ptr<ppu_thread>(params, "iOS PPU instruction probe", 1000);
-            if (!ppu) throw std::runtime_error("P6 PPU context allocation failed");
-            struct RemoveContext
+            // The production registry already owns named_thread<ppu_thread>.
+            // Registering raw ppu_thread creates conflicting savestate metadata
+            // during dlopen. This isolated probe needs only a CPU register state.
+            struct ContextDeleter
             {
-                u32 id;
-                ~RemoveContext()
+                void operator()(ppu_thread* context) const
                 {
-                    idm::remove<ppu_thread>(id);
-                    // A direct diagnostic context never enters cpu_task's
-                    // thread_cleanup_t, which normally balances this counter.
+                    delete context;
+                    // Direct execution never enters cpu_task's cleanup wrapper.
                     cpu_thread::g_threads_deleted++;
                 }
-            } remove{ppu->id};
+            };
+            std::unique_ptr<ppu_thread, ContextDeleter> ppu;
+            {
+                // Constructor expects IDM's thread-local construction ID. Supply
+                // a valid PPU class ID only while constructing this private state;
+                // restore the worker's previous value even if construction throws.
+                struct ConstructionID
+                {
+                    u32 previous = id_manager::g_id;
+                    ConstructionID() { id_manager::g_id = ppu_thread::id_base; }
+                    ~ConstructionID() { id_manager::g_id = previous; }
+                } construction_id;
+                ppu.reset(new ppu_thread(params, "iOS PPU instruction probe", 1000));
+            }
             ARMSX3StartupLog("P6 AFTER PPU context; BEFORE core interpreter decoder");
-            ppu_interpreter_rt interpreter;
+            // The decoder table is about 1 MiB: keep it off the GCD worker stack.
+            auto interpreter = std::make_unique<ppu_interpreter_rt>();
             const auto dform = [](u32 primary, u32 reg, u32 base, u32 immediate)
             {
                 return (primary << 26) | (reg << 21) | (base << 16) | (immediate & 0xffff);
@@ -255,7 +268,7 @@ extern "C" __attribute__((visibility("default"))) int armsx3_core_test_ppu_instr
             for (std::size_t index = 0; index < program.size(); ++index)
             {
                 code[index] = program[index];
-                functions[index].fn = interpreter.decode(program[index]);
+                functions[index].fn = interpreter->decode(program[index]);
                 if (!functions[index].fn) throw std::runtime_error("P6 instruction decode failed");
             }
             code[program.size()] = 0;

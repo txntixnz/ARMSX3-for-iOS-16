@@ -269,3 +269,25 @@ fields and ORI source/destination fields checked. Decoder-only host harness
 stubs log registration and fatal verification helpers, not decode logic.
 Full Apple link/compile remains CI; device execution is pending. No branch,
 syscall, CPU scheduler, firmware, SPU instruction or game boot tested here.
+
+
+## Build 14: repair P6 core-load regression
+
+Archive(2).zip shows build 13 aborting inside dlopen before P6 is requested.
+IdManager.h:217 make_typeinfo<ppu_thread> reports incompatible duplicate
+savestate type metadata. The diagnostic idm::make_ptr<ppu_thread> caused
+static registration of raw PPU state, conflicting with the production
+named_thread<ppu_thread> metadata. P5 previous device pass remains valid.
+
+P6 now privately owns a direct ppu_thread register context with no ID-map
+registration. It supplies a valid PPU construction ID via id_manager::g_id
+(thread-local) in an RAII scope and restores the previous ID before execution.
+Its custom deleter deletes the context and balances the constructor's CPU
+lifecycle counter; no host CPU thread is launched. The diagnostic decoder's
+~1 MiB dispatch table now lives on the heap instead of the GCD worker stack.
+The instruction chain and expected results are unchanged.
+
+Compiled the exact P6 function into a host object against the actual core
+headers. nm confirmed a direct PPU constructor reference and no instantiation
+of make_typeinfo<ppu_thread>, raw PPU id_traits_load_func or typedata registry
+initializer. Full Apple build and device P6 execution remain pending.
