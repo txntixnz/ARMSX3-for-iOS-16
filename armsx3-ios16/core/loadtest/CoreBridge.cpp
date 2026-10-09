@@ -958,3 +958,232 @@ extern "C" __attribute__((visibility("default"))) int armsx3_core_test_spu_chann
         return -1;
     }
 }
+
+extern "C" __attribute__((visibility("default"))) int armsx3_core_test_spu_queue()
+{
+    ARMSX3StartupLog("P11 BEFORE guest VM setup for queued SPU DMA");
+    bool initialized = false;
+    try
+    {
+        vm::init();
+        initialized = true;
+        if (!vm::reserve_map(vm::main, 0x10000, 0x30000))
+            throw std::runtime_error("P11 could not reserve DMA guest region");
+        constexpr u32 guest_size = 0x20000;
+        const u32 address = vm::alloc(guest_size, vm::main, 0x10000);
+        if (!address || !vm::check_addr(address, vm::page_readable | vm::page_writable, guest_size))
+            throw std::runtime_error("P11 guest DMA allocation failed");
+        {
+            // Baseline transfers only: no active RSX or competing guest CPUs.
+            // Restore every setting before returning, including exception paths.
+            struct DMASettings
+            {
+                bool steps = g_cfg.core.mfc_shuffling_in_steps.get();
+                u32 shuffle = g_cfg.core.mfc_transfers_shuffling.get();
+                u32 preferred = g_cfg.core.preferred_spu_threads.get();
+                bool accurate = g_cfg.core.spu_accurate_dma.get();
+                bool strict = g_cfg.video.strict_rendering_mode.get();
+                rsx_fifo_mode fifo = g_cfg.core.rsx_fifo_accuracy.get();
+                DMASettings()
+                {
+                    g_cfg.core.mfc_transfers_shuffling.set(16);
+                    g_cfg.core.mfc_shuffling_in_steps.set(true);
+                    g_cfg.core.preferred_spu_threads.set(0);
+                    g_cfg.core.spu_accurate_dma.set(false);
+                    g_cfg.video.strict_rendering_mode.set(false);
+                    g_cfg.core.rsx_fifo_accuracy.set(rsx_fifo_mode::fast);
+                }
+                ~DMASettings()
+                {
+                    g_cfg.core.rsx_fifo_accuracy.set(fifo);
+                    g_cfg.video.strict_rendering_mode.set(strict);
+                    g_cfg.core.spu_accurate_dma.set(accurate);
+                    g_cfg.core.preferred_spu_threads.set(preferred);
+                    g_cfg.core.mfc_transfers_shuffling.set(shuffle);
+                    g_cfg.core.mfc_shuffling_in_steps.set(steps);
+                }
+            } dma_settings;
+            struct ContextDeleter
+            {
+                void operator()(spu_thread* context) const
+                {
+                    // cleanup() assumes a production named_thread and an LV2
+                    // local-store allocation; neither exists in this private probe.
+                    vm::free_range_lock(context->range_lock);
+                    delete context; // unmaps all LS mirrors and releases reservation
+                    cpu_thread::g_threads_deleted++;
+                }
+            };
+            std::unique_ptr<spu_thread, ContextDeleter> spu;
+            {
+                struct ConstructionSettings
+                {
+                    u32 previous_id = id_manager::g_id;
+                    spu_decoder_type previous_decoder = g_cfg.core.spu_decoder.get();
+                    ConstructionSettings()
+                    {
+                        id_manager::g_id = spu_thread::id_base;
+                        g_cfg.core.spu_decoder.set(spu_decoder_type::_static);
+                    }
+                    ~ConstructionSettings()
+                    {
+                        g_cfg.core.spu_decoder.set(previous_decoder);
+                        id_manager::g_id = previous_id;
+                    }
+                } settings;
+                ARMSX3StartupLog("P11 BEFORE private SPU context construction; interpreter selected");
+                spu.reset(new spu_thread(nullptr, 0, "iOS SPU queue probe", 0));
+            }
+            ARMSX3StartupLog("P11 AFTER SPU context; BEFORE local-store mirror mappings");
+            spu_thread::map_ls(*spu->shm, spu->ls);
+            ARMSX3StartupLog("P11 AFTER 256 KiB SPU local store and five shared views mapped");
+            ARMSX3StartupLog("P11 BEFORE cpu_init to reset SPU channels and DMA fence masks");
+            spu->cpu_init();
+            ARMSX3StartupLog("P11 AFTER cpu_init; channel transfer sequence pending");
+            const auto write = [&](u32 channel, u32 value)
+            {
+                if (!spu->set_ch_value(channel, value))
+                    throw std::runtime_error("P11 channel write failed");
+            };
+            const auto enqueue = [&](MFC cmd, u8 tag, u32 ea, u32 lsa, u16 size)
+            {
+                const u32 before = spu->mfc_size;
+                if (before >= 16 || spu->get_ch_count(MFC_Cmd) != 16 - before)
+                    throw std::runtime_error("P11 command queue capacity mismatch");
+                write(MFC_LSA, lsa); write(MFC_EAH, 0); write(MFC_EAL, ea);
+                write(MFC_Size, size); write(MFC_TagID, tag); write(MFC_Cmd, cmd);
+                if (spu->mfc_size != before + 1 || spu->get_ch_count(MFC_Cmd) != 15 - before)
+                    throw std::runtime_error("P11 command did not remain queued");
+            };
+            const auto drain = [&](u32 mask)
+            {
+                write(MFC_WrTagMask, mask);
+                if (spu->get_mfc_completed() != 0)
+                    throw std::runtime_error("P11 pending tags reported completion too early");
+                // Do not read RdTagStat here: its production read path drains
+                // pending DMA automatically. Check count without blocking.
+                for (const u32 mode : {u32(MFC_TAG_UPDATE_ANY), u32(MFC_TAG_UPDATE_ALL)})
+                {
+                    write(MFC_WrTagUpdate, mode);
+                    if (spu->get_ch_count(MFC_RdTagStat))
+                        throw std::runtime_error("P11 tag status ready before queued DMA");
+                }
+                g_cfg.core.mfc_transfers_shuffling.set(2);
+                u32 passes = 0;
+                while (spu->mfc_size && passes < 256)
+                {
+                    // One shuffled pass per call; never enter the scheduler or
+                    // the unbounded must_finish loop, and never escape to JIT.
+                    spu->do_mfc(false, false);
+                    ++passes;
+                }
+                g_cfg.core.mfc_transfers_shuffling.set(16);
+                if (spu->mfc_size || spu->mfc_fence || spu->mfc_barrier ||
+                    spu->get_ch_count(MFC_Cmd) != 16 || spu->range_lock->load())
+                    throw std::runtime_error("P11 queue did not drain within pass budget");
+                if (spu->get_ch_count(MFC_RdTagStat) != 1 || spu->get_mfc_completed() != mask)
+                    throw std::runtime_error("P11 queued ALL completion was not published");
+                const s64 result = spu->get_ch_value(MFC_RdTagStat);
+                if (result != mask || spu->get_ch_count(MFC_RdTagStat))
+                    throw std::runtime_error("P11 queued completion read/consume mismatch");
+                char message[128];
+                std::snprintf(message, sizeof(message), "P11 queue drained: passes=%u completed tags=0x%08x", passes, mask);
+                ARMSX3StartupLog(message);
+            };
+            auto* guest = vm::_ptr<u8>(address);
+            auto* alias = reinterpret_cast<const u8*>(vm::g_sudo_addr + address);
+            constexpr u32 source_offset = 0x1000, destination_offset = 0x8000;
+            constexpr u32 first_ls = 0x1000, result_ls = 0x2000;
+            constexpr u16 size = 128;
+            for (u32 round = 0; round < 8; ++round)
+            {
+                for (u32 kind = 0; kind < 3; ++kind)
+                {
+                    spu->cpu_init();
+                    std::memset(guest, 0xa5, guest_size);
+                    std::memset(spu->ls, 0x5a, SPU_LS_SIZE);
+                    const auto pattern = [round, kind](u32 i) -> u8
+                    { return static_cast<u8>((i * 37 + round * 53 + kind * 19 + 11) & 255); };
+                    for (u32 i = 0; i < size; ++i) guest[source_offset + i] = pattern(i);
+                    char message[160];
+                    std::snprintf(message, sizeof(message), "P11 BEFORE enqueue: round=%u ordering=%s",
+                        round + 1, kind == 0 ? "same-tag fence" : kind == 1 ? "global barrier" : "per-tag barrier");
+                    ARMSX3StartupLog(message);
+                    const u8 tag = round % 2 ? 31 : 0;
+                    enqueue(kind == 2 ? MFC_GETB_CMD : MFC_GET_CMD, tag, address + source_offset, first_ls, size);
+                    if (kind == 1) enqueue(MFC_BARRIER_CMD, 7, 0, 0, 0);
+                    enqueue(kind == 0 ? MFC_PUTF_CMD : MFC_PUT_CMD,
+                        kind == 1 ? 31 : tag, address + destination_offset, first_ls, size);
+                    if (kind == 1) enqueue(MFC_BARRIER_CMD, 7, 0, 0, 0);
+                    enqueue(kind == 1 ? MFC_GET_CMD : MFC_GETF_CMD, tag,
+                        address + destination_offset, result_ls, size);
+                    // No command has run yet: the queued PUT must not change memory.
+                    for (u32 i = 0; i < size; ++i)
+                        if (guest[destination_offset + i] != 0xa5 || spu->ls[first_ls + i] != 0x5a)
+                            throw std::runtime_error("P11 DMA executed before queue drain");
+                    drain(kind == 1 ? ((1u << tag) | (1u << 7) | (1u << 31)) : (1u << tag));
+                    for (u32 i = 0; i < guest_size; ++i)
+                    {
+                        u8 expected = 0xa5;
+                        if (i >= source_offset && i < source_offset + size) expected = pattern(i - source_offset);
+                        if (i >= destination_offset && i < destination_offset + size) expected = pattern(i - destination_offset);
+                        if (guest[i] != expected || alias[i] != expected)
+                            throw std::runtime_error("P11 ordered guest data, guards or alias mismatch");
+                    }
+                    for (const s64 mirror : {-2ll, -1ll, 0ll, 1ll, 2ll})
+                    {
+                        const auto* view = spu->ls + mirror * SPU_LS_SIZE;
+                        for (u32 i = 0; i < SPU_LS_SIZE; ++i)
+                        {
+                            u8 expected = 0x5a;
+                            if (i >= first_ls && i < first_ls + size) expected = pattern(i - first_ls);
+                            if (i >= result_ls && i < result_ls + size) expected = pattern(i - result_ls);
+                            if (view[i] != expected)
+                                throw std::runtime_error("P11 ordered LS data, guards or mirror mismatch");
+                        }
+                    }
+                    ARMSX3StartupLog("P11 PASS: queued dependency order, delayed tags, data, guards and aliases");
+                }
+            }
+            spu->cpu_init();
+            std::memset(guest, 0xa5, guest_size);
+            std::memset(spu->ls, 0x5a, SPU_LS_SIZE);
+            for (u32 i = 0; i < size; ++i) guest[source_offset + i] = static_cast<u8>(i * 13 + 7);
+            ARMSX3StartupLog("P11 BEFORE filling all 16 MFC queue slots");
+            for (u8 tag = 0; tag < 16; ++tag)
+                enqueue(MFC_GET_CMD, tag, address + source_offset, 0x4000 + tag * size, size);
+            if (spu->get_ch_count(MFC_Cmd) != 0)
+                throw std::runtime_error("P11 full queue did not report zero writable slots");
+            drain(0xffff);
+            for (u32 i = 0; i < guest_size; ++i)
+            {
+                const u8 expected = i >= source_offset && i < source_offset + size ? static_cast<u8>((i - source_offset) * 13 + 7) : 0xa5;
+                if (guest[i] != expected || alias[i] != expected)
+                    throw std::runtime_error("P11 full-queue GET altered guest source");
+            }
+            for (const s64 mirror : {-2ll, -1ll, 0ll, 1ll, 2ll})
+            {
+                const auto* view = spu->ls + mirror * SPU_LS_SIZE;
+                for (u32 i = 0; i < SPU_LS_SIZE; ++i)
+                {
+                    const u8 expected = i >= 0x4000 && i < 0x4000 + 16 * size ? static_cast<u8>(((i - 0x4000) % size) * 13 + 7) : 0x5a;
+                    if (view[i] != expected) throw std::runtime_error("P11 full-queue LS data or guard mismatch");
+                }
+            }
+            ARMSX3StartupLog("P11 PASS: full 16-slot queue, capacity recovery and all completion tags");
+        }
+        ARMSX3StartupLog("P11 AFTER private SPU cleanup; BEFORE guest deallocation");
+        if (vm::dealloc(address, vm::main) != guest_size || vm::check_addr(address))
+            throw std::runtime_error("P11 guest deallocation failed");
+        vm::close();
+        initialized = false;
+        ARMSX3StartupLog("P11 PASS: 88 queued DMA transfers, fences/barriers, completion and cleanup; scheduling and game boot remain untested");
+        return 0;
+    }
+    catch (const std::exception& error)
+    {
+        ARMSX3StartupLog(error.what());
+        if (initialized) vm::close();
+        return -1;
+    }
+}

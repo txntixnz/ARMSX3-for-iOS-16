@@ -422,3 +422,37 @@ GCC C++23 compilation against pinned real headers passed. Device/Apple CI
 validation pending. No queued DMA, MFC list/atomic operations, blocking
 waits, WRCH/RDCH guest instructions, production scheduler or game boot is
 claimed. Next button: Test SPU DMA channels / tags, enabled after P9 PASS.
+
+
+## Build 20: queued DMA fence/barrier ordering and capacity
+
+ARMSX3-startup(5).log pid 82299 confirms P10 passes all 32 channel DMA
+transfers and all completion modes, guards/aliases/lock release and cleanup.
+P5–P9 also pass on the same launch.
+
+P11 adds Test SPU DMA queue / ordering. Same private SPU/mappings, real
+cpu_init and real MFC channel submission. Shuffling=16 retains commands;
+checks queue size/capacity after every enqueue and that memory stays unchanged
+until drain. Eight rounds of three dependent chains: GET→PUTF→GETF with
+same tag; GET→global BARRIER→PUT→global BARRIER→GET (tags 0/31/7);
+and GETB→PUT→GETF with per-tag barrier. Tags 0 and 31 alternate. Each
+chain uses 128-byte patterned data, full guest/LS guard checks, both guest
+aliases and all five local-store views. Full 16-slot GET queue then verifies
+zero writable capacity, all outputs, capacity recovery and completion mask.
+Total 88 DMA transfers plus 16 global barrier commands.
+
+Before drain, real ANY and ALL requests must remain not-ready and
+get_mfc_completed must exclude pending tags. No empty channel reads occur.
+Drain uses production do_mfc(false,false), shuffling=2, steps=true with a
+256-pass cap; disables escape to JIT and unbounded must_finish loop. Checks
+empty queue/fences/barriers, released range lock, ready ALL result and
+read/consume semantics. Settings restored on all exits; context and VM
+clean up in established order. This is private-context queue processing,
+not production CPU scheduling or guest WRCH/RDCH execution.
+
+Local actual-header GCC C++23 compile passed, plus plist/UI/export checks.
+Host harness ran the exact upstream do_mfc body with mock DMA memcpy,
+deterministic timestamp masks and mock tag channel: 768 dependency cases
+(256 starting seeds × 3 modes) and 256 full queues passed including data
+and guards. Does not validate Apple DMA/mappings or native thread waits;
+CI and P11 device pass remain pending. Firmware/game boot still untested.

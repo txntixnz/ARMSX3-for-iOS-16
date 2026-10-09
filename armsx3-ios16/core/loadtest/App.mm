@@ -15,6 +15,7 @@
 @property(nonatomic,strong) UIButton* spuButton;
 @property(nonatomic,strong) UIButton* dmaButton;
 @property(nonatomic,strong) UIButton* channelsButton;
+@property(nonatomic,strong) UIButton* queueButton;
 @property(nonatomic,assign) void* coreHandle;
 @end
 @implementation LoadController
@@ -76,6 +77,11 @@
     self.channelsButton.enabled = NO;
     [self.channelsButton addTarget:self action:@selector(testChannels) forControlEvents:UIControlEventTouchUpInside];
     [stack addArrangedSubview:self.channelsButton];
+    self.queueButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    [self.queueButton setTitle:@"Test SPU DMA queue / ordering" forState:UIControlStateNormal];
+    self.queueButton.enabled = NO;
+    [self.queueButton addTarget:self action:@selector(testQueue) forControlEvents:UIControlEventTouchUpInside];
+    [stack addArrangedSubview:self.queueButton];
     UIButton* share = [UIButton buttonWithType:UIButtonTypeSystem];
     [share setTitle:@"Share startup log" forState:UIControlStateNormal];
     [share addTarget:self action:@selector(shareLog) forControlEvents:UIControlEventTouchUpInside];
@@ -273,9 +279,29 @@
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         const int result = test();
         dispatch_async(dispatch_get_main_queue(), ^{
+            self.queueButton.enabled = result == 0;
             self.output.text = result == 0
-                ? @"PASS: SPU channel transfers, completion tags, memory guards and cleanup.\n\nShare the startup log. Game boot is still pending."
+                ? @"PASS: SPU channel transfers, completion tags, memory guards and cleanup.\n\nRun Test SPU DMA queue / ordering next. Game boot is still pending."
                 : [NSString stringWithFormat:@"SPU channel test failed (%d). Share the startup log.", result];
+        });
+    });
+}
+- (void)testQueue {
+    self.queueButton.enabled = NO;
+    auto test = reinterpret_cast<int (*)()>(dlsym(self.coreHandle, "armsx3_core_test_spu_queue"));
+    if (!test) {
+        ARMSX3StartupLog("P11 missing SPU queue test export");
+        self.output.text = @"SPU queue test export missing. Share the log.";
+        return;
+    }
+    self.output.text = @"Testing SPU queue transfers, fences and barriers…";
+    ARMSX3StartupLog("P11 user requested SPU queue test; worker pending");
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        const int result = test();
+        dispatch_async(dispatch_get_main_queue(), ^{
+            self.output.text = result == 0
+                ? @"PASS: 88 queued DMA transfers, fences/barriers, completion tags and cleanup.\n\nShare the startup log. Game boot is still pending."
+                : [NSString stringWithFormat:@"SPU queue test failed (%d). Share the startup log.", result];
         });
     });
 }
