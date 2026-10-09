@@ -13,6 +13,7 @@
 @property(nonatomic,strong) UIButton* cpuButton;
 @property(nonatomic,strong) UIButton* flowButton;
 @property(nonatomic,strong) UIButton* spuButton;
+@property(nonatomic,strong) UIButton* dmaButton;
 @property(nonatomic,assign) void* coreHandle;
 @end
 @implementation LoadController
@@ -64,6 +65,11 @@
     self.spuButton.enabled = NO;
     [self.spuButton addTarget:self action:@selector(testSPU) forControlEvents:UIControlEventTouchUpInside];
     [stack addArrangedSubview:self.spuButton];
+    self.dmaButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    [self.dmaButton setTitle:@"Test PS3 SPU DMA transfers" forState:UIControlStateNormal];
+    self.dmaButton.enabled = NO;
+    [self.dmaButton addTarget:self action:@selector(testDMA) forControlEvents:UIControlEventTouchUpInside];
+    [stack addArrangedSubview:self.dmaButton];
     UIButton* share = [UIButton buttonWithType:UIButtonTypeSystem];
     [share setTitle:@"Share startup log" forState:UIControlStateNormal];
     [share addTarget:self action:@selector(shareLog) forControlEvents:UIControlEventTouchUpInside];
@@ -221,9 +227,29 @@
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         const int result = test();
         dispatch_async(dispatch_get_main_queue(), ^{
+            self.dmaButton.enabled = result == 0;
             self.output.text = result == 0
-                ? @"PASS: SPU SIMD instructions, local memory and cleanup.\n\nShare the startup log. Game boot is still pending."
+                ? @"PASS: SPU SIMD instructions, local memory and cleanup.\n\nRun Test PS3 SPU DMA transfers next. Game boot is still pending."
                 : [NSString stringWithFormat:@"SPU test failed (%d). Share the startup log.", result];
+        });
+    });
+}
+- (void)testDMA {
+    self.dmaButton.enabled = NO;
+    auto test = reinterpret_cast<int (*)()>(dlsym(self.coreHandle, "armsx3_core_test_spu_dma"));
+    if (!test) {
+        ARMSX3StartupLog("P9 missing SPU DMA test export");
+        self.output.text = @"SPU DMA test export missing. Share the log.";
+        return;
+    }
+    self.output.text = @"Testing SPU DMA transfers, memory boundaries and cleanup…";
+    ARMSX3StartupLog("P9 user requested SPU DMA test; worker pending");
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        const int result = test();
+        dispatch_async(dispatch_get_main_queue(), ^{
+            self.output.text = result == 0
+                ? @"PASS: 32 SPU DMA transfers, memory guards, aliases and cleanup.\n\nShare the startup log. Game boot is still pending."
+                : [NSString stringWithFormat:@"SPU DMA test failed (%d). Share the startup log.", result];
         });
     });
 }

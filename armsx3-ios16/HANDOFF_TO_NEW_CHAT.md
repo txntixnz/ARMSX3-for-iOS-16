@@ -366,3 +366,31 @@ new constructor delegation and existing iOS backing branch (filesystem/log
 helpers stubbed): flags preserved, 64 KiB rounding, shared aliases at the
 first/last bytes, close-on-exec, 64 KiB/256 KiB/256 MiB sizes all passed.
 Apple CI/device validation pending; no SPU execution success claimed yet.
+
+
+## Build 18: SPU device pass and baseline DMA probe
+
+ARMSX3-startup(3).log pid 82026 confirms build 17 passes P8 on the target
+phone: eight real SPU instructions, all four SIMD lanes, big-endian local
+store, five shared views and context/VM cleanup. P4/P5/P6/P7 also pass.
+
+Build 18 adds Test PS3 SPU DMA transfers after P8. It allocates 128 KiB of
+real guest memory and the same private raw-style SPU state used in P8.
+Calls the actual spu_thread::do_dma_transfer with the private state for
+GET then PUT at sizes 1/2/4/8/16/128/256/16384, repeated twice (32 total).
+Cases include guest 4 KiB/16 KiB/64 KiB boundary crossings and the final
+256 bytes of LS. GET preserves guest source and guards; transformed PUT
+must change exactly the requested guest span. Checks every guest byte
+through both aliases, every LS byte through all five mirrors, and that
+the PUT range lock returns to zero. Context destruction, guest deallocation
+and vm::close are checked in order.
+
+RAII temporarily selects baseline DMA (accurate DMA false, strict rendering
+false, FIFO fast) because no renderer or competing guest CPUs exist in this
+probe; original settings are restored on success/exception. The probe
+bypasses MFC channels/command queue and does not test fences, tag completion,
+atomic reservation commands, production CPU scheduler, firmware or games.
+
+New P9 function compiled against actual pinned core headers with GCC C++23.
+No raw SPU registry initializer is introduced. Apple compilation/linking and
+real DMA execution remain pending CI and the new device test.

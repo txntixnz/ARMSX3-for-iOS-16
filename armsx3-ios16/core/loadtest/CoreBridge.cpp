@@ -14,6 +14,7 @@
 #include "Emu/IdManager.h"
 #include <array>
 #include <cstdio>
+#include <cstring>
 #include "util/logs.hpp"
 #include <exception>
 #include <stdexcept>
@@ -550,6 +551,175 @@ extern "C" __attribute__((visibility("default"))) int armsx3_core_test_spu_instr
         vm::close();
         initialized = false;
         ARMSX3StartupLog("P8 PASS: SPU instructions, local memory and cleanup completed; no game boot tested");
+        return 0;
+    }
+    catch (const std::exception& error)
+    {
+        ARMSX3StartupLog(error.what());
+        if (initialized) vm::close();
+        return -1;
+    }
+}
+
+extern "C" __attribute__((visibility("default"))) int armsx3_core_test_spu_dma()
+{
+    ARMSX3StartupLog("P9 BEFORE guest VM setup for SPU DMA");
+    bool initialized = false;
+    try
+    {
+        vm::init();
+        initialized = true;
+        if (!vm::reserve_map(vm::main, 0x10000, 0x30000))
+            throw std::runtime_error("P9 could not reserve DMA guest region");
+        constexpr u32 guest_size = 0x20000;
+        const u32 address = vm::alloc(guest_size, vm::main, 0x10000);
+        if (!address || !vm::check_addr(address, vm::page_readable | vm::page_writable, guest_size))
+            throw std::runtime_error("P9 guest DMA allocation failed");
+        {
+            // Baseline transfers only: no active RSX or competing guest CPUs.
+            // Restore every setting before returning, including exception paths.
+            struct DMASettings
+            {
+                bool accurate = g_cfg.core.spu_accurate_dma.get();
+                bool strict = g_cfg.video.strict_rendering_mode.get();
+                rsx_fifo_mode fifo = g_cfg.core.rsx_fifo_accuracy.get();
+                DMASettings()
+                {
+                    g_cfg.core.spu_accurate_dma.set(false);
+                    g_cfg.video.strict_rendering_mode.set(false);
+                    g_cfg.core.rsx_fifo_accuracy.set(rsx_fifo_mode::fast);
+                }
+                ~DMASettings()
+                {
+                    g_cfg.core.rsx_fifo_accuracy.set(fifo);
+                    g_cfg.video.strict_rendering_mode.set(strict);
+                    g_cfg.core.spu_accurate_dma.set(accurate);
+                }
+            } dma_settings;
+            struct ContextDeleter
+            {
+                void operator()(spu_thread* context) const
+                {
+                    // cleanup() assumes a production named_thread and an LV2
+                    // local-store allocation; neither exists in this private probe.
+                    vm::free_range_lock(context->range_lock);
+                    delete context; // unmaps all LS mirrors and releases reservation
+                    cpu_thread::g_threads_deleted++;
+                }
+            };
+            std::unique_ptr<spu_thread, ContextDeleter> spu;
+            {
+                struct ConstructionSettings
+                {
+                    u32 previous_id = id_manager::g_id;
+                    spu_decoder_type previous_decoder = g_cfg.core.spu_decoder.get();
+                    ConstructionSettings()
+                    {
+                        id_manager::g_id = spu_thread::id_base;
+                        g_cfg.core.spu_decoder.set(spu_decoder_type::_static);
+                    }
+                    ~ConstructionSettings()
+                    {
+                        g_cfg.core.spu_decoder.set(previous_decoder);
+                        id_manager::g_id = previous_id;
+                    }
+                } settings;
+                ARMSX3StartupLog("P9 BEFORE private SPU context construction; interpreter selected");
+                spu.reset(new spu_thread(nullptr, 0, "iOS SPU DMA probe", 0));
+            }
+            ARMSX3StartupLog("P9 AFTER SPU context; BEFORE local-store mirror mappings");
+            spu_thread::map_ls(*spu->shm, spu->ls);
+            ARMSX3StartupLog("P9 AFTER 256 KiB SPU local store and five shared views mapped");
+            auto* guest = vm::_ptr<u8>(address);
+            auto* alias = reinterpret_cast<const u8*>(vm::g_sudo_addr + address);
+            struct Transfer { u16 size; u32 offset; u32 lsa; };
+            const std::array<Transfer, 8> transfers{{
+                {1, 3, 3}, {2, 6, 6}, {4, 12, 12}, {8, 24, 24},
+                {16, 0xff0, 0x1000}, {128, 0x3fc0, 0x2000},
+                {256, 0xff80, SPU_LS_SIZE - 256},
+                {16384, 0x3ff0, 0x8000},
+            }};
+            // Repeated passes also check that PUT range locks are released.
+            for (u32 round = 0; round < 2; ++round)
+            {
+                for (const auto& transfer : transfers)
+                {
+                    if (transfer.offset + transfer.size > guest_size ||
+                        transfer.lsa + transfer.size > SPU_LS_SIZE)
+                        throw std::runtime_error("P9 DMA test span out of bounds");
+                    std::memset(guest, 0xa5, guest_size);
+                    std::memset(spu->ls, 0x5a, SPU_LS_SIZE);
+                    const auto pattern = [round](u32 index) -> u8
+                    {
+                        return static_cast<u8>((index * 37 + 11 + round * 53) & 255);
+                    };
+                    for (u32 i = 0; i < transfer.size; ++i)
+                        guest[transfer.offset + i] = pattern(i);
+                    spu_mfc_cmd command{};
+                    command.cmd = MFC_GET_CMD;
+                    command.size = transfer.size;
+                    command.lsa = transfer.lsa;
+                    command.eal = address + transfer.offset;
+                    char message[180];
+                    std::snprintf(message, sizeof(message),
+                        "P9 BEFORE core DMA GET: round=%u size=%u EA=0x%08x LS=0x%05x",
+                        round + 1, unsigned(transfer.size), command.eal, command.lsa);
+                    ARMSX3StartupLog(message);
+                    spu_thread::do_dma_transfer(spu.get(), command, spu->ls);
+                    for (u32 i = 0; i < SPU_LS_SIZE; ++i)
+                    {
+                        const bool inside = i >= transfer.lsa && i < transfer.lsa + transfer.size;
+                        const u8 expected = inside ? pattern(i - transfer.lsa) : 0x5a;
+                        if (spu->ls[i] != expected)
+                            throw std::runtime_error("P9 GET data or local-store guard mismatch");
+                    }
+                    for (u32 i = 0; i < guest_size; ++i)
+                    {
+                        const bool inside = i >= transfer.offset && i < transfer.offset + transfer.size;
+                        const u8 expected = inside ? pattern(i - transfer.offset) : 0xa5;
+                        if (guest[i] != expected || alias[i] != expected)
+                            throw std::runtime_error("P9 GET changed guest source or alias");
+                    }
+                    for (u32 i = 0; i < transfer.size; ++i)
+                        spu->ls[transfer.lsa + i] = pattern(i) ^ 0xff;
+                    command.cmd = MFC_PUT_CMD;
+                    ARMSX3StartupLog("P9 BEFORE core DMA PUT of transformed local-store data");
+                    spu_thread::do_dma_transfer(spu.get(), command, spu->ls);
+                    for (u32 i = 0; i < guest_size; ++i)
+                    {
+                        const bool inside = i >= transfer.offset && i < transfer.offset + transfer.size;
+                        const u8 expected = inside ? (pattern(i - transfer.offset) ^ 0xff) : 0xa5;
+                        if (guest[i] != expected || alias[i] != expected)
+                            throw std::runtime_error("P9 PUT data, guest guard or alias mismatch");
+                    }
+                    for (const s64 mirror : {-2ll, -1ll, 0ll, 1ll, 2ll})
+                    {
+                        const auto* view = spu->ls + mirror * SPU_LS_SIZE;
+                        for (u32 i = 0; i < SPU_LS_SIZE; ++i)
+                        {
+                            const bool inside = i >= transfer.lsa && i < transfer.lsa + transfer.size;
+                            const u8 expected = inside ? (pattern(i - transfer.lsa) ^ 0xff) : 0x5a;
+                            if (view[i] != expected)
+                                throw std::runtime_error("P9 PUT changed local store or shared mirror");
+                        }
+                    }
+                    if (spu->range_lock->load() != 0)
+                        throw std::runtime_error("P9 PUT left a guest range lock held");
+                    std::snprintf(message, sizeof(message),
+                        "P9 PASS: round=%u size=%u GET/PUT data, guards, guest aliases, LS mirrors and lock release",
+                        round + 1, unsigned(transfer.size));
+                    ARMSX3StartupLog(message);
+                }
+            }
+        }
+        ARMSX3StartupLog("P9 AFTER private SPU cleanup; BEFORE guest deallocation");
+        if (vm::dealloc(address, vm::main) != guest_size)
+            throw std::runtime_error("P9 guest deallocation size mismatch");
+        if (vm::check_addr(address))
+            throw std::runtime_error("P9 guest region still accessible after deallocation");
+        vm::close();
+        initialized = false;
+        ARMSX3StartupLog("P9 PASS: 32 baseline DMA transfers and cleanup; channels, scheduling and game boot remain untested");
         return 0;
     }
     catch (const std::exception& error)
