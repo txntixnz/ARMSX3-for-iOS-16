@@ -1554,3 +1554,86 @@ extern "C" __attribute__((visibility("default"))) int armsx3_core_test_thread_wa
         return -1;
     }
 }
+
+
+extern "C" u64 armsx3_ios_live_cpu_threads();
+extern "C" u64 armsx3_ios_stopped_cpu_waits();
+extern "C" __attribute__((visibility("default"))) int armsx3_core_test_ppu_lifecycle()
+{
+    ARMSX3StartupLog("P14 BEFORE stopped PPU CPU-thread lifecycle test");
+    bool initialized = false;
+    try
+    {
+        if (!Emu.IsStopped()) throw std::runtime_error("P14 requires stopped emulator");
+        struct Configuration
+        {
+            bool ppu = g_cfg.core.ppu_prof.get(), spu = g_cfg.core.spu_prof.get(), debug = g_cfg.core.spu_debug.get();
+            thread_scheduler_mode scheduler = g_cfg.core.thread_scheduler.get();
+            Configuration() { g_cfg.core.ppu_prof.set(false); g_cfg.core.spu_prof.set(false);
+                g_cfg.core.spu_debug.set(false); g_cfg.core.thread_scheduler.set(thread_scheduler_mode::os); }
+            ~Configuration() { g_cfg.core.ppu_prof.set(ppu); g_cfg.core.spu_prof.set(spu);
+                g_cfg.core.spu_debug.set(debug); g_cfg.core.thread_scheduler.set(scheduler); }
+        } configuration;
+        vm::init();
+        initialized = true;
+        if (!vm::reserve_map(vm::main, 0x10000, 0x20000))
+            throw std::runtime_error("P14 main memory block unavailable");
+        const u32 address = vm::alloc(0x10000, vm::main, 0x10000);
+        if (!address) throw std::runtime_error("P14 guest stack allocation failed");
+        for (unsigned round = 0; round < 4; ++round)
+        {
+            const u64 live = armsx3_ios_live_cpu_threads();
+            const u64 waits = armsx3_ios_stopped_cpu_waits();
+            const auto created = cpu_thread::g_threads_created.load();
+            const auto deleted = cpu_thread::g_threads_deleted.load();
+            const ppu_thread_params params{static_cast<vm::addr_t>(address + 0x1000), 0x8000, 0, {}, 0, 0};
+            ARMSX3StartupLog("P14 BEFORE private standby named_thread<ppu_thread> construction");
+            {
+                std::unique_ptr<named_thread<ppu_thread>> worker;
+                {
+                    struct ConstructionID
+                    {
+                        u32 previous = id_manager::g_id;
+                        ConstructionID() { id_manager::g_id = ppu_thread::id_base; }
+                        ~ConstructionID() { id_manager::g_id = previous; }
+                    } construction_id;
+                    worker = std::make_unique<named_thread<ppu_thread>>(stx::launch_retainer{}, params, "iOS stopped PPU probe", 1000);
+                }
+                // Keep stop/wait/suspend/memory intact. Never enter cpu_task or guest instructions.
+                worker->state -= cpu_flag::exit;
+                if (!(worker->state & cpu_flag::stop))
+                    throw std::runtime_error("P14 standby context lost stop flag");
+                *worker = thread_state::created;
+                ARMSX3StartupLog("P14 AFTER start; waiting for real CPU stopped-wait entry");
+                const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+                while (armsx3_ios_stopped_cpu_waits() == waits && std::chrono::steady_clock::now() < deadline)
+                    std::this_thread::yield();
+                if (armsx3_ios_stopped_cpu_waits() == waits || armsx3_ios_live_cpu_threads() != live + 1)
+                    throw std::runtime_error("P14 CPU thread did not enter stopped wait");
+                if (!(worker->state & cpu_flag::stop) || worker->gpr[1] != address + 0x9000 - ppu_stack_start_offset)
+                    throw std::runtime_error("P14 stopped context or stack changed");
+                ARMSX3StartupLog("P14 BEFORE request exit and notify stopped CPU state");
+                worker->state += cpu_flag::exit;
+                worker->state.notify_one();
+                (*worker)();
+                ARMSX3StartupLog("P14 AFTER CPU thread join");
+            }
+            if (armsx3_ios_live_cpu_threads() != live || cpu_thread::g_threads_created.load() != created + 1 ||
+                cpu_thread::g_threads_deleted.load() != deleted + 1)
+                throw std::runtime_error("P14 CPU lifecycle counters did not balance");
+            ARMSX3StartupLog("P14 PASS: real PPU thread start, stopped wait, exit, join and balanced cleanup");
+        }
+        if (vm::dealloc(address, vm::main) != 0x10000 || vm::check_addr(address))
+            throw std::runtime_error("P14 guest stack deallocation failed");
+        vm::close();
+        initialized = false;
+        ARMSX3StartupLog("P14 PASS: four stopped PPU CPU-thread lifecycles; runnable scheduling and game boot remain untested");
+        return 0;
+    }
+    catch (const std::exception& error)
+    {
+        ARMSX3StartupLog(error.what());
+        if (initialized) vm::close();
+        return -1;
+    }
+}

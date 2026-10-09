@@ -518,3 +518,36 @@ headers (GCC C++23). Host harness ran exact ios_futex helper: 64 timeouts and
 address reuse, mismatch, zero wake, wake-one/all, bitset masks and absolute
 deadlines passed. Apple CI/linking and iOS real core wait/wake remain pending.
 No guest CPU lifecycle, mutable JIT, renderer, firmware/game boot claimed.
+
+## Build 23: stopped PPU CPU-thread lifecycle
+
+Device ARMSX3-startup(9).log pid 85195 confirms P13 mismatch handling,
+32 timeouts/address reuse, four wake-one/four wake-all waiters and four core
+named-thread wait/notify/result42/join cycles all pass on iPhone iOS16.
+
+P14 adds Test stopped PS3 PPU thread after P13. Four private real
+named_thread<ppu_thread> instances are constructed in standby with
+stx::launch_retainer and scoped IDM construction ID. Guest 64KiB stack is
+allocated through VM. Only constructor exit flag is removed; stop/wait/
+suspend/memory remain. No guest cpu_task, instructions or runnable scheduler
+is entered. Start actual CPU thread, observe iOS stopped-wait counter and
+live CPU count, verify stop/stack, set exit + notify, join, destroy, then
+verify created/deleted/live counters balance. Normal CPU TLS cleanup owns
+deleted accounting; never manually increment it for these named contexts.
+Thread destructor requests exit and joins on exceptions before VM closes.
+Profiling is disabled and scheduler OS setting scoped/restored.
+
+Patch 0014 moves profiler existence check into actual profiling registration
+paths; a nonprofiling stopped headless thread needs no polling profiler.
+Read-only iOS counters expose live CPU count and cumulative stopped-wait
+entries; guarded by Apple TARGET_OS_IPHONE with explicit target header.
+Wait-entry observation means reaching state.wait, not proof of OS sleep.
+UI now scrolls so added diagnostics and Share startup log remain accessible.
+CFBundleVersion 23. IPA artifact name remains ARMSX3_iOS16_INSTALL_THIS_IPA.
+
+Validation: patches 13 and 14 apply cleanly after pinned patches 1–12;
+exact P14 probe compiles against actual pinned core headers with GCC C++23,
+including standby named_thread<ppu_thread>, configuration and state API.
+Whitespace check passed. Apple compile/link and device lifecycle pending.
+No runnable guest CPU scheduling, mutable guest JIT, firmware, renderer or
+game boot claimed. Next: device P14 result, then bounded runnable guest task.

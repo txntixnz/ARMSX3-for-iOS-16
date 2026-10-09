@@ -18,6 +18,7 @@
 @property(nonatomic,strong) UIButton* queueButton;
 @property(nonatomic,strong) UIButton* channelInstructionsButton;
 @property(nonatomic,strong) UIButton* waitsButton;
+@property(nonatomic,strong) UIButton* lifecycleButton;
 @property(nonatomic,assign) void* coreHandle;
 @end
 @implementation LoadController
@@ -29,12 +30,20 @@
     stack.axis = UILayoutConstraintAxisVertical;
     stack.spacing = 20;
     stack.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.view addSubview:stack];
+    UIScrollView* scroll = [[UIScrollView alloc] init];
+    scroll.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.view addSubview:scroll];
+    [scroll addSubview:stack];
     [NSLayoutConstraint activateConstraints:@[
-        [stack.leadingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor constant:20],
-        [stack.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor constant:-20],
-        [stack.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:20],
-        [stack.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor constant:-20]]];
+        [scroll.leadingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor],
+        [scroll.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor],
+        [scroll.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor],
+        [scroll.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor],
+        [stack.leadingAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.leadingAnchor constant:20],
+        [stack.trailingAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.trailingAnchor constant:-20],
+        [stack.topAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.topAnchor constant:20],
+        [stack.bottomAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.bottomAnchor constant:-20],
+        [stack.widthAnchor constraintEqualToAnchor:scroll.frameLayoutGuide.widthAnchor constant:-40]]];
     self.loadButton = [UIButton buttonWithType:UIButtonTypeSystem];
     [self.loadButton setTitle:@"Load emulator core" forState:UIControlStateNormal];
     [self.loadButton addTarget:self action:@selector(loadCore) forControlEvents:UIControlEventTouchUpInside];
@@ -94,6 +103,11 @@
     self.waitsButton.enabled = NO;
     [self.waitsButton addTarget:self action:@selector(testWaits) forControlEvents:UIControlEventTouchUpInside];
     [stack addArrangedSubview:self.waitsButton];
+    self.lifecycleButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    [self.lifecycleButton setTitle:@"Test stopped PS3 PPU thread" forState:UIControlStateNormal];
+    self.lifecycleButton.enabled = NO;
+    [self.lifecycleButton addTarget:self action:@selector(testLifecycle) forControlEvents:UIControlEventTouchUpInside];
+    [stack addArrangedSubview:self.lifecycleButton];
     UIButton* share = [UIButton buttonWithType:UIButtonTypeSystem];
     [share setTitle:@"Share startup log" forState:UIControlStateNormal];
     [share addTarget:self action:@selector(shareLog) forControlEvents:UIControlEventTouchUpInside];
@@ -103,6 +117,7 @@
     self.output.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
     self.output.text = @"P2 tests loading the real emulator core. Game boot is not available.\n\nTap Load emulator core. Its startup constructors may close the app. Reopen and share the startup log if that happens.";
     [stack addArrangedSubview:self.output];
+    [self.output.heightAnchor constraintGreaterThanOrEqualToConstant:200].active = YES;
     ARMSX3StartupLog("P2 UI ready; core not loaded");
 }
 - (void)loadCore {
@@ -351,9 +366,29 @@
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         const int result = test();
         dispatch_async(dispatch_get_main_queue(), ^{
+            self.lifecycleButton.enabled = result == 0;
             self.output.text = result == 0
-                ? @"PASS: host waits, wake-one/wake-all and core named-thread lifecycle.\n\nShare the startup log. Game boot is still pending."
+                ? @"PASS: host waits, wake-one/wake-all and core named-thread lifecycle.\n\nRun Test stopped PS3 PPU thread next. Game boot is still pending."
                 : [NSString stringWithFormat:@"Core thread test failed (%d). Share the startup log.", result];
+        });
+    });
+}
+- (void)testLifecycle {
+    self.lifecycleButton.enabled = NO;
+    auto test = reinterpret_cast<int (*)()>(dlsym(self.coreHandle, "armsx3_core_test_ppu_lifecycle"));
+    if (!test) {
+        ARMSX3StartupLog("P14 missing stopped PPU lifecycle export");
+        self.output.text = @"PPU lifecycle export missing. Share the log.";
+        return;
+    }
+    self.output.text = @"Testing stopped PPU CPU threads…";
+    ARMSX3StartupLog("P14 user requested stopped PPU lifecycle; worker pending");
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        const int result = test();
+        dispatch_async(dispatch_get_main_queue(), ^{
+            self.output.text = result == 0
+                ? @"PASS: four PPU CPU threads started, waited while stopped, exited and joined.\n\nShare the startup log. Game boot is still pending."
+                : [NSString stringWithFormat:@"PPU lifecycle test failed (%d). Share the startup log.", result];
         });
     });
 }

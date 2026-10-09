@@ -1,0 +1,62 @@
+--- a/rpcs3/Emu/CPU/CPUThread.cpp
++++ b/rpcs3/Emu/CPU/CPUThread.cpp
+@@ -19,6 +19,10 @@
+ #include <unordered_map>
+ #include <map>
+ #include <shared_mutex>
++
++#if defined(__APPLE__)
++#include <TargetConditionals.h>
++#endif
+ 
+ #if defined(ARCH_X64)
+ #include <emmintrin.h>
+@@ -505,6 +509,13 @@
+ // Total number of CPU threads
+ static atomic_t<u64, 128> s_cpu_counter{0};
+ 
++#if defined(__APPLE__) && TARGET_OS_IPHONE
++// Read-only diagnostics for the isolated stopped-thread lifecycle probe.
++static atomic_t<u64> s_ios_stopped_waits{0};
++extern "C" u64 armsx3_ios_live_cpu_threads() { return s_cpu_counter.load(); }
++extern "C" u64 armsx3_ios_stopped_cpu_waits() { return s_ios_stopped_waits.load(); }
++#endif
++
+ // List of posted tasks for suspend_all
+ //static atomic_t<cpu_thread::suspend_work*> s_cpu_work[128]{};
+ 
+@@ -660,14 +671,14 @@
+ 		thread_ctrl::set_thread_affinity_mask(thread_ctrl::get_affinity_mask(get_class()));
+ 	}
+ 
+-	ensure(g_fxo->is_init<cpu_profiler>());
+-
++	// A stopped headless context needs no profiler unless profiling is enabled.
+ 	switch (get_class())
+ 	{
+ 	case thread_class::ppu:
+ 	{
+ 		if (g_cfg.core.ppu_prof)
+ 		{
++			ensure(g_fxo->is_init<cpu_profiler>());
+ 			g_fxo->get<cpu_profiler>().registered.push(id);
+ 		}
+ 
+@@ -677,6 +688,7 @@
+ 	{
+ 		if (g_cfg.core.spu_prof || g_cfg.core.spu_debug)
+ 		{
++			ensure(g_fxo->is_init<cpu_profiler>());
+ 			g_fxo->get<cpu_profiler>().registered.push(id);
+ 		}
+ 
+@@ -770,6 +782,9 @@
+ 			continue;
+ 		}
+ 
++#if defined(__APPLE__) && TARGET_OS_IPHONE
++		s_ios_stopped_waits++;
++#endif
+ 		state.wait(state0);
+ 
+ 		if (state & cpu_flag::ret && state.test_and_reset(cpu_flag::ret))
