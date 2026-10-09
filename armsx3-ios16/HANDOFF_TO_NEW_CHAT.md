@@ -585,3 +585,39 @@ against pinned core headers with GCC C++23; whitespace validation passes.
 Apple linking and iPhone runtime remain pending until user brings results.
 Next: device P15, then stronger CPU wait/resume/queue coverage or bounded
 normal guest dispatch without firmware dependencies.
+
+## Build 25: one-tap sequential diagnostics
+
+Device ARMSX3-startup(20261009-175754).log pid86820 confirms P15:
+four real PPU worker command queues run six actual PowerPC handlers each;
+all 24 instructions, registers, CPU TLS, big-endian stores, aliases, guards,
+join and balanced counters pass. User asked to automate the growing list
+of individual taps. This build changes diagnostic UI only, no new CPU test.
+
+App.mm replaces 14 individual stage buttons with Run all tests, progress,
+Run next test only, Stop after current test, Share startup log and transcript.
+A single stage catalog retains exact P2–P15 order and symbols. P2 dlopen
+still runs on UIKit main after a queue yield, same as validated manual app.
+P3–P15 run one at a time on GCD, returning to main before scheduling next.
+One-tap run advances only on result0; missing export/load/state/test failure
+halts, disables rerun in that process and instructs fresh app launch.
+No test auto-starts on launch. Completion requires one Share log tap.
+
+The busy guard disables reentry and sharing until current test finishes.
+Stop/background pauses after the current stage without tearing down VM or
+threads; remaining stages resume in the same process without rerunning
+Emu.Init or completed tests. Queued-next-stage checks stop request too.
+Idle timer disabled during run and restored on completion/pause/failure.
+NSUserDefaults pending-stage marker synchronized before potentially crashing
+calls and cleared after success; next launch shows interrupted stage but
+restarts sequence from P2, never restores partial VM state. Startup log is
+still append-only/fsynced; AUTO BEFORE/PASS/FAIL milestones complement core
+P# logs. No sharing or messages sent automatically.
+
+CFBundleVersion25, IPA artifact remains ARMSX3_iOS16_INSTALL_THIS_IPA.
+Validation: exact catalog compiled/executed with GCC C++23; all 14 exports
+verified against CoreBridge and ordering compared to previous manual app.
+Source checks cover stop/reentry/failure guards and single test dispatch;
+whitespace check passed. UIKit/Objective-C++ compilation and device one-tap
+runtime pending GitHub CI/user report. Core unchanged from passing build24.
+Next: validate automated suite, then stronger guest execution/scheduling.

@@ -4,425 +4,237 @@
 #include <cstdio>
 #include "StartupLog.h"
 
+struct DiagnosticStage { unsigned phase; const char* title; const char* symbol; };
+static constexpr DiagnosticStage stages[] = {
+    {2, "Load emulator core", "armsx3_core_state"},
+    {3, "Core JIT execution", "armsx3_core_test_immutable_jit"},
+    {4, "Initialize emulator", "armsx3_core_initialize"},
+    {5, "PS3 guest memory", "armsx3_core_test_guest_memory"},
+    {6, "PPU instructions", "armsx3_core_test_ppu_instructions"},
+    {7, "PPU branches and loops", "armsx3_core_test_ppu_control_flow"},
+    {8, "SPU instructions", "armsx3_core_test_spu_instructions"},
+    {9, "SPU DMA transfers", "armsx3_core_test_spu_dma"},
+    {10, "SPU DMA channels and tags", "armsx3_core_test_spu_channels"},
+    {11, "SPU DMA queue and ordering", "armsx3_core_test_spu_queue"},
+    {12, "SPU channel instructions", "armsx3_core_test_spu_channel_instructions"},
+    {13, "Core threads and wait/wake", "armsx3_core_test_thread_waits"},
+    {14, "Stopped PPU thread lifecycle", "armsx3_core_test_ppu_lifecycle"},
+    {15, "PPU worker instructions", "armsx3_core_test_ppu_worker_instructions"},
+};
+static constexpr NSUInteger stageCount = sizeof(stages) / sizeof(stages[0]);
+static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
+
 @interface LoadController : UIViewController
 @property(nonatomic,strong) UITextView* output;
-@property(nonatomic,strong) UIButton* loadButton;
-@property(nonatomic,strong) UIButton* jitButton;
-@property(nonatomic,strong) UIButton* initializeButton;
-@property(nonatomic,strong) UIButton* memoryButton;
-@property(nonatomic,strong) UIButton* cpuButton;
-@property(nonatomic,strong) UIButton* flowButton;
-@property(nonatomic,strong) UIButton* spuButton;
-@property(nonatomic,strong) UIButton* dmaButton;
-@property(nonatomic,strong) UIButton* channelsButton;
-@property(nonatomic,strong) UIButton* queueButton;
-@property(nonatomic,strong) UIButton* channelInstructionsButton;
-@property(nonatomic,strong) UIButton* waitsButton;
-@property(nonatomic,strong) UIButton* lifecycleButton;
-@property(nonatomic,strong) UIButton* workerInstructionsButton;
+@property(nonatomic,strong) UILabel* progressLabel;
+@property(nonatomic,strong) UIProgressView* progress;
+@property(nonatomic,strong) UIButton* runButton;
+@property(nonatomic,strong) UIButton* nextButton;
+@property(nonatomic,strong) UIButton* stopButton;
+@property(nonatomic,strong) UIButton* shareButton;
 @property(nonatomic,assign) void* coreHandle;
+@property(nonatomic,assign) NSUInteger nextStage;
+@property(nonatomic,assign) BOOL running;
+@property(nonatomic,assign) BOOL runAll;
+@property(nonatomic,assign) BOOL stopRequested;
+@property(nonatomic,assign) BOOL failed;
+@property(nonatomic,assign) BOOL previousIdleTimerDisabled;
+@property(nonatomic,strong) NSMutableString* transcript;
+- (void)runCurrentStage;
+- (void)completeStage:(NSUInteger)index result:(int)result detail:(NSString*)detail;
+- (void)refreshControls;
 @end
 @implementation LoadController
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.view.backgroundColor = UIColor.systemBackgroundColor;
-    self.title = @"ARMSX3 · core load test";
+    self.title = @"ARMSX3 · diagnostics";
+    self.transcript = [NSMutableString string];
     UIStackView* stack = [[UIStackView alloc] init];
     stack.axis = UILayoutConstraintAxisVertical;
-    stack.spacing = 20;
+    stack.spacing = 16;
     stack.translatesAutoresizingMaskIntoConstraints = NO;
-    UIScrollView* scroll = [[UIScrollView alloc] init];
-    scroll.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.view addSubview:scroll];
-    [scroll addSubview:stack];
+    [self.view addSubview:stack];
     [NSLayoutConstraint activateConstraints:@[
-        [scroll.leadingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor],
-        [scroll.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor],
-        [scroll.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor],
-        [scroll.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor],
-        [stack.leadingAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.leadingAnchor constant:20],
-        [stack.trailingAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.trailingAnchor constant:-20],
-        [stack.topAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.topAnchor constant:20],
-        [stack.bottomAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.bottomAnchor constant:-20],
-        [stack.widthAnchor constraintEqualToAnchor:scroll.frameLayoutGuide.widthAnchor constant:-40]]];
-    self.loadButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    [self.loadButton setTitle:@"Load emulator core" forState:UIControlStateNormal];
-    [self.loadButton addTarget:self action:@selector(loadCore) forControlEvents:UIControlEventTouchUpInside];
-    [stack addArrangedSubview:self.loadButton];
-    self.jitButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    [self.jitButton setTitle:@"Test core JIT execution" forState:UIControlStateNormal];
-    self.jitButton.enabled = NO;
-    [self.jitButton addTarget:self action:@selector(testJit) forControlEvents:UIControlEventTouchUpInside];
-    [stack addArrangedSubview:self.jitButton];
-    self.initializeButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    [self.initializeButton setTitle:@"Initialize emulator" forState:UIControlStateNormal];
-    self.initializeButton.enabled = NO;
-    [self.initializeButton addTarget:self action:@selector(initializeCore) forControlEvents:UIControlEventTouchUpInside];
-    [stack addArrangedSubview:self.initializeButton];
-    self.memoryButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    [self.memoryButton setTitle:@"Test PS3 guest memory" forState:UIControlStateNormal];
-    self.memoryButton.enabled = NO;
-    [self.memoryButton addTarget:self action:@selector(testMemory) forControlEvents:UIControlEventTouchUpInside];
-    [stack addArrangedSubview:self.memoryButton];
-    self.cpuButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    [self.cpuButton setTitle:@"Test PS3 PPU instructions" forState:UIControlStateNormal];
-    self.cpuButton.enabled = NO;
-    [self.cpuButton addTarget:self action:@selector(testCPU) forControlEvents:UIControlEventTouchUpInside];
-    [stack addArrangedSubview:self.cpuButton];
-    self.flowButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    [self.flowButton setTitle:@"Test PS3 PPU branches / loops" forState:UIControlStateNormal];
-    self.flowButton.enabled = NO;
-    [self.flowButton addTarget:self action:@selector(testFlow) forControlEvents:UIControlEventTouchUpInside];
-    [stack addArrangedSubview:self.flowButton];
-    self.spuButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    [self.spuButton setTitle:@"Test PS3 SPU instructions" forState:UIControlStateNormal];
-    self.spuButton.enabled = NO;
-    [self.spuButton addTarget:self action:@selector(testSPU) forControlEvents:UIControlEventTouchUpInside];
-    [stack addArrangedSubview:self.spuButton];
-    self.dmaButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    [self.dmaButton setTitle:@"Test PS3 SPU DMA transfers" forState:UIControlStateNormal];
-    self.dmaButton.enabled = NO;
-    [self.dmaButton addTarget:self action:@selector(testDMA) forControlEvents:UIControlEventTouchUpInside];
-    [stack addArrangedSubview:self.dmaButton];
-    self.channelsButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    [self.channelsButton setTitle:@"Test SPU DMA channels / tags" forState:UIControlStateNormal];
-    self.channelsButton.enabled = NO;
-    [self.channelsButton addTarget:self action:@selector(testChannels) forControlEvents:UIControlEventTouchUpInside];
-    [stack addArrangedSubview:self.channelsButton];
-    self.queueButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    [self.queueButton setTitle:@"Test SPU DMA queue / ordering" forState:UIControlStateNormal];
-    self.queueButton.enabled = NO;
-    [self.queueButton addTarget:self action:@selector(testQueue) forControlEvents:UIControlEventTouchUpInside];
-    [stack addArrangedSubview:self.queueButton];
-    self.channelInstructionsButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    [self.channelInstructionsButton setTitle:@"Test SPU channel instructions" forState:UIControlStateNormal];
-    self.channelInstructionsButton.enabled = NO;
-    [self.channelInstructionsButton addTarget:self action:@selector(testChannelInstructions) forControlEvents:UIControlEventTouchUpInside];
-    [stack addArrangedSubview:self.channelInstructionsButton];
-    self.waitsButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    [self.waitsButton setTitle:@"Test core threads / wait-wake" forState:UIControlStateNormal];
-    self.waitsButton.enabled = NO;
-    [self.waitsButton addTarget:self action:@selector(testWaits) forControlEvents:UIControlEventTouchUpInside];
-    [stack addArrangedSubview:self.waitsButton];
-    self.lifecycleButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    [self.lifecycleButton setTitle:@"Test stopped PS3 PPU thread" forState:UIControlStateNormal];
-    self.lifecycleButton.enabled = NO;
-    [self.lifecycleButton addTarget:self action:@selector(testLifecycle) forControlEvents:UIControlEventTouchUpInside];
-    [stack addArrangedSubview:self.lifecycleButton];
-    self.workerInstructionsButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    [self.workerInstructionsButton setTitle:@"Test PPU worker instructions" forState:UIControlStateNormal];
-    self.workerInstructionsButton.enabled = NO;
-    [self.workerInstructionsButton addTarget:self action:@selector(testWorkerInstructions) forControlEvents:UIControlEventTouchUpInside];
-    [stack addArrangedSubview:self.workerInstructionsButton];
-    UIButton* share = [UIButton buttonWithType:UIButtonTypeSystem];
-    [share setTitle:@"Share startup log" forState:UIControlStateNormal];
-    [share addTarget:self action:@selector(shareLog) forControlEvents:UIControlEventTouchUpInside];
-    [stack addArrangedSubview:share];
+        [stack.leadingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor constant:20],
+        [stack.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor constant:-20],
+        [stack.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:20],
+        [stack.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor constant:-20]]];
+    self.runButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    [self.runButton setTitle:@"Run all tests" forState:UIControlStateNormal];
+    [self.runButton addTarget:self action:@selector(startAll) forControlEvents:UIControlEventTouchUpInside];
+    [stack addArrangedSubview:self.runButton];
+    self.progressLabel = [[UILabel alloc] init];
+    self.progressLabel.numberOfLines = 0;
+    self.progressLabel.text = [NSString stringWithFormat:@"Ready · %lu tests", (unsigned long)stageCount];
+    [stack addArrangedSubview:self.progressLabel];
+    self.progress = [[UIProgressView alloc] initWithProgressViewStyle:UIProgressViewStyleDefault];
+    [stack addArrangedSubview:self.progress];
+    self.nextButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    [self.nextButton setTitle:@"Run next test only" forState:UIControlStateNormal];
+    [self.nextButton addTarget:self action:@selector(startNext) forControlEvents:UIControlEventTouchUpInside];
+    [stack addArrangedSubview:self.nextButton];
+    self.stopButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    [self.stopButton setTitle:@"Stop after current test" forState:UIControlStateNormal];
+    [self.stopButton addTarget:self action:@selector(requestStop) forControlEvents:UIControlEventTouchUpInside];
+    [stack addArrangedSubview:self.stopButton];
+    self.shareButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    [self.shareButton setTitle:@"Share startup log" forState:UIControlStateNormal];
+    [self.shareButton addTarget:self action:@selector(shareLog) forControlEvents:UIControlEventTouchUpInside];
+    [stack addArrangedSubview:self.shareButton];
     self.output = [[UITextView alloc] init];
     self.output.editable = NO;
     self.output.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
-    self.output.text = @"P2 tests loading the real emulator core. Game boot is not available.\n\nTap Load emulator core. Its startup constructors may close the app. Reopen and share the startup log if that happens.";
+    self.output.text = @"Tap Run all tests. The core loads and every test runs in order. The sequence stops on the first failure.\n\nWhen finished, tap Share startup log. Game boot is still pending.";
     [stack addArrangedSubview:self.output];
-    [self.output.heightAnchor constraintGreaterThanOrEqualToConstant:200].active = YES;
-    ARMSX3StartupLog("P2 UI ready; core not loaded");
+    NSString* pending = [NSUserDefaults.standardUserDefaults stringForKey:pendingStageKey];
+    if (pending.length) {
+        self.output.text = [NSString stringWithFormat:@"Previous run did not finish: %@.\n\nShare the startup log if the app crashed. Run all tests starts a fresh sequence in this process. Game boot is still pending.", pending];
+    }
+    [self refreshControls];
+    [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(enteredBackground:)
+        name:UIApplicationDidEnterBackgroundNotification object:nil];
+    ARMSX3StartupLog("AUTO UI ready; one-tap ordered diagnostics available; no test starts without a tap");
 }
-- (void)loadCore {
-    self.loadButton.enabled = NO;
-    self.output.text = @"Loading core…";
-    ARMSX3StartupLog("P2 user requested core load");
-    // Return to UIKit once so the loading text can be presented first.
-    dispatch_async(dispatch_get_main_queue(), ^{
-        NSString* path = [NSBundle.mainBundle.bundlePath stringByAppendingPathComponent:@"Frameworks/libARMSX3Core.dylib"];
-        ARMSX3StartupLog("P2 BEFORE dlopen: core constructors pending");
-        void* handle = dlopen(path.fileSystemRepresentation, RTLD_NOW | RTLD_LOCAL);
-        if (!handle) {
-            const char* error = dlerror();
-            ARMSX3StartupLog(error ?: "dlopen failed without error text");
-            self.output.text = [NSString stringWithFormat:@"Core load failed:\n%s\n\nShare the startup log.", error ?: "Unknown error"];
-            return;
-        }
-        self.coreHandle = handle;
-        // Keep the handle for process lifetime: unloading could invalidate core globals.
-        ARMSX3StartupLog("P2 AFTER dlopen: core constructors returned");
-        auto state = reinterpret_cast<int (*)()>(dlsym(handle, "armsx3_core_state"));
-        if (!state) {
-            ARMSX3StartupLog("P2 missing armsx3_core_state export");
-            self.output.text = @"Core loaded but bridge export is missing. Share the log.";
-            return;
-        }
-        ARMSX3StartupLog("P2 BEFORE read-only core state query");
-        int value = state();
-        char message[96];
-        snprintf(message, sizeof(message), "P2 core state query returned %d", value);
-        ARMSX3StartupLog(message);
-        self.jitButton.enabled = YES;
-        self.output.text = [NSString stringWithFormat:@"Core loaded. State: %d (0 = stopped).\n\nTap Test core JIT execution, then share the log. This executes small test functions; game boot is not available.", value];
-    });
+- (void)dealloc {
+    [NSNotificationCenter.defaultCenter removeObserver:self];
 }
-- (void)testJit {
-    self.jitButton.enabled = NO;
-    auto test = reinterpret_cast<int (*)()>(dlsym(self.coreHandle, "armsx3_core_test_immutable_jit"));
-    if (!test) {
-        ARMSX3StartupLog("P3 missing immutable JIT test export");
-        self.output.text = @"JIT test export missing. Share the log.";
+- (void)refreshControls {
+    const BOOL available = !self.running && !self.failed && self.nextStage < stageCount;
+    self.runButton.enabled = available;
+    self.nextButton.enabled = available;
+    self.stopButton.enabled = self.running && self.runAll && !self.stopRequested;
+    self.shareButton.enabled = !self.running;
+    [self.runButton setTitle:self.nextStage ? @"Run remaining tests" : @"Run all tests" forState:UIControlStateNormal];
+    self.progress.progress = float(self.nextStage) / float(stageCount);
+}
+- (void)startAll { [self startSequence:YES]; }
+- (void)startNext { [self startSequence:NO]; }
+- (void)startSequence:(BOOL)all {
+    if (self.running || self.failed || self.nextStage >= stageCount) return;
+    self.running = YES;
+    self.runAll = all;
+    self.stopRequested = NO;
+    self.previousIdleTimerDisabled = UIApplication.sharedApplication.idleTimerDisabled;
+    UIApplication.sharedApplication.idleTimerDisabled = YES;
+    ARMSX3StartupLog(all ? "AUTO user requested ordered diagnostic sequence" : "AUTO user requested one diagnostic stage");
+    [self refreshControls];
+    [self runCurrentStage];
+}
+- (void)requestStop {
+    if (!self.running) return;
+    self.stopRequested = YES;
+    self.progressLabel.text = @"Stopping after the current test…";
+    ARMSX3StartupLog("AUTO stop requested; current test will finish before pausing");
+    [self refreshControls];
+}
+- (void)enteredBackground:(NSNotification*)notification {
+    (void)notification;
+    if (self.running) [self requestStop];
+}
+- (void)finishSequence {
+    self.running = NO;
+    UIApplication.sharedApplication.idleTimerDisabled = self.previousIdleTimerDisabled;
+    [self refreshControls];
+}
+- (void)pauseSequence {
+    ARMSX3StartupLog("AUTO paused after completed stage; remaining stages can resume in this process");
+    [self.transcript appendString:@"\nPaused. Tap Run remaining tests to continue.\n"];
+    self.output.text = self.transcript;
+    self.progressLabel.text = [NSString stringWithFormat:@"Paused · %lu / %lu passed", (unsigned long)self.nextStage, (unsigned long)stageCount];
+    [self finishSequence];
+}
+- (void)runCurrentStage {
+    if (self.stopRequested) { [self pauseSequence]; return; }
+    // All runner state is accessed on the UIKit main queue. Only one core test
+    // is outstanding; the next stage starts after its result returns here.
+    const NSUInteger index = self.nextStage;
+    const auto& stage = stages[index];
+    NSString* label = [NSString stringWithFormat:@"P%u · %s", stage.phase, stage.title];
+    self.progressLabel.text = [NSString stringWithFormat:@"%lu / %lu · %@", (unsigned long)(index + 1), (unsigned long)stageCount, label];
+    [self.transcript appendFormat:@"RUN %@\n", label];
+    self.output.text = self.transcript;
+    [self.output scrollRangeToVisible:NSMakeRange(self.output.text.length, 0)];
+    // Save the pending stage before calling code that could close the process.
+    [NSUserDefaults.standardUserDefaults setObject:label forKey:pendingStageKey];
+    [NSUserDefaults.standardUserDefaults synchronize];
+    ARMSX3StartupLog([NSString stringWithFormat:@"AUTO BEFORE %@ (%lu/%lu)", label, (unsigned long)(index + 1), (unsigned long)stageCount].UTF8String);
+    if (index == 0) {
+        // Keep dlopen on the same main-thread path as the validated manual app.
+        // Yield once so UIKit can present the progress before core constructors.
+        dispatch_async(dispatch_get_main_queue(), ^{
+            NSString* path = [NSBundle.mainBundle.bundlePath stringByAppendingPathComponent:@"Frameworks/libARMSX3Core.dylib"];
+            void* handle = dlopen(path.fileSystemRepresentation, RTLD_NOW | RTLD_LOCAL);
+            if (!handle) {
+                const char* error = dlerror();
+                [self completeStage:index result:-1 detail:[NSString stringWithUTF8String:error ?: "dlopen failed"]];
+                return;
+            }
+            self.coreHandle = handle; // Keep loaded for process lifetime.
+            auto state = reinterpret_cast<int (*)()>(dlsym(handle, stages[index].symbol));
+            if (!state) {
+                [self completeStage:index result:-1 detail:@"Core state export missing"];
+                return;
+            }
+            const int result = state();
+            [self completeStage:index result:result detail:result == 0 ? nil : @"Core must be stopped"];
+        });
         return;
     }
-    self.output.text = @"Testing generated code…";
-    ARMSX3StartupLog("P3 user requested core JIT execution test; worker pending");
+    auto test = reinterpret_cast<int (*)()>(dlsym(self.coreHandle, stage.symbol));
+    if (!test) {
+        [self completeStage:index result:-1 detail:[NSString stringWithFormat:@"Missing export: %s", stage.symbol]];
+        return;
+    }
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         const int result = test();
         dispatch_async(dispatch_get_main_queue(), ^{
-            self.initializeButton.enabled = result == 0;
-            self.output.text = result == 0
-                ? @"PASS: generated core code executed correctly across four workers.\n\nTap Initialize emulator, then share the startup log. Game boot is still pending."
-                : [NSString stringWithFormat:@"Core JIT execution test failed (%d). Share the startup log.", result];
+            [self completeStage:index result:result detail:nil];
         });
     });
 }
-- (void)initializeCore {
-    self.initializeButton.enabled = NO;
-    auto initialize = reinterpret_cast<int (*)()>(dlsym(self.coreHandle, "armsx3_core_initialize"));
-    if (!initialize) {
-        ARMSX3StartupLog("P4 missing initialization export");
-        self.output.text = @"Initialization export missing. Share the log.";
+- (void)completeStage:(NSUInteger)index result:(int)result detail:(NSString*)detail {
+    const auto& stage = stages[index];
+    NSString* label = [NSString stringWithFormat:@"P%u · %s", stage.phase, stage.title];
+    if (result != 0) {
+        self.failed = YES;
+        NSString* message = [NSString stringWithFormat:@"FAIL %@ (%d)%@", label, result,
+            detail.length ? [@": " stringByAppendingString:detail] : @""];
+        ARMSX3StartupLog(message.UTF8String);
+        [self.transcript appendFormat:@"%@\n\nStopped. Share the startup log. Reopen the app before testing again.\n", message];
+        self.output.text = self.transcript;
+        self.progressLabel.text = [NSString stringWithFormat:@"Stopped · %@ failed", label];
+        // Keep the failed stage marker for the next launch.
+        [self finishSequence];
         return;
     }
-    self.output.text = @"Initializing emulator…";
-    ARMSX3StartupLog("P4 user requested initialization; worker pending");
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        const int result = initialize();
-        dispatch_async(dispatch_get_main_queue(), ^{
-            self.memoryButton.enabled = result == 0;
-            self.output.text = result == 0
-                ? @"Emulator initialization passed.\n\nTap Test PS3 guest memory, then share the startup log. Game boot is still pending."
-                : [NSString stringWithFormat:@"Emulator initialization reported an error (%d). Share the startup log.", result];
-        });
-    });
-}
-- (void)testMemory {
-    self.memoryButton.enabled = NO;
-    auto test = reinterpret_cast<int (*)()>(dlsym(self.coreHandle, "armsx3_core_test_guest_memory"));
-    if (!test) {
-        ARMSX3StartupLog("P5 missing guest memory test export");
-        self.output.text = @"Memory test export missing. Share the log.";
-        return;
+    ARMSX3StartupLog([NSString stringWithFormat:@"AUTO PASS %@", label].UTF8String);
+    [NSUserDefaults.standardUserDefaults removeObjectForKey:pendingStageKey];
+    [NSUserDefaults.standardUserDefaults synchronize];
+    [self.transcript appendFormat:@"PASS %@\n", label];
+    self.nextStage = index + 1;
+    [self refreshControls];
+    if (self.nextStage == stageCount) {
+        ARMSX3StartupLog("AUTO PASS: all diagnostic stages completed; game boot remains untested");
+        [self.transcript appendFormat:@"\nAll %lu tests passed. Share the startup log.\nGame boot is still pending.\n", (unsigned long)stageCount];
+        self.output.text = self.transcript;
+        self.progressLabel.text = [NSString stringWithFormat:@"All %lu tests passed", (unsigned long)stageCount];
+        [self finishSequence];
+    } else if (self.runAll && !self.stopRequested) {
+        self.output.text = self.transcript;
+        // Yield to UIKit between stages; never run two tests concurrently.
+        dispatch_async(dispatch_get_main_queue(), ^{ [self runCurrentStage]; });
+    } else {
+        [self pauseSequence];
     }
-    self.output.text = @"Testing PS3 guest memory…";
-    ARMSX3StartupLog("P5 user requested guest memory test; worker pending");
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        const int result = test();
-        dispatch_async(dispatch_get_main_queue(), ^{
-            self.cpuButton.enabled = result == 0;
-            self.output.text = result == 0
-                ? @"PASS: core guest memory allocation, shared mappings and cleanup.\n\nTap Test PS3 PPU instructions next."
-                : [NSString stringWithFormat:@"Guest memory test failed (%d). Share the startup log.", result];
-        });
-    });
-}
-- (void)testCPU {
-    self.cpuButton.enabled = NO;
-    auto test = reinterpret_cast<int (*)()>(dlsym(self.coreHandle, "armsx3_core_test_ppu_instructions"));
-    if (!test) {
-        ARMSX3StartupLog("P6 missing PPU instruction test export");
-        self.output.text = @"PPU instruction test export missing. Share the log.";
-        return;
-    }
-    self.output.text = @"Testing PS3 PPU instructions…";
-    ARMSX3StartupLog("P6 user requested PPU instruction test; worker pending");
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        const int result = test();
-        dispatch_async(dispatch_get_main_queue(), ^{
-            self.flowButton.enabled = result == 0;
-            self.output.text = result == 0
-                ? @"PASS: 11 real PPU instructions, register results, big-endian memory and cleanup.\n\nTap Test PS3 PPU branches / loops next."
-                : [NSString stringWithFormat:@"PPU instruction test failed (%d). Share the startup log.", result];
-        });
-    });
-}
-- (void)testFlow {
-    self.flowButton.enabled = NO;
-    auto test = reinterpret_cast<int (*)()>(dlsym(self.coreHandle, "armsx3_core_test_ppu_control_flow"));
-    if (!test) {
-        ARMSX3StartupLog("P7 missing PPU control-flow test export");
-        self.output.text = @"PPU control-flow test export missing. Share the log.";
-        return;
-    }
-    self.output.text = @"Testing PS3 PPU branches and loops…";
-    ARMSX3StartupLog("P7 user requested PPU control-flow test; worker pending");
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        const int result = test();
-        dispatch_async(dispatch_get_main_queue(), ^{
-            self.spuButton.enabled = result == 0;
-            self.output.text = result == 0
-                ? @"PASS: core PPU loops, branches, calls, returns and memory results.\n\nTap Test PS3 SPU instructions next."
-                : [NSString stringWithFormat:@"PPU control-flow test failed (%d). Share the startup log.", result];
-        });
-    });
-}
-- (void)testSPU {
-    self.spuButton.enabled = NO;
-    auto test = reinterpret_cast<int (*)()>(dlsym(self.coreHandle, "armsx3_core_test_spu_instructions"));
-    if (!test) {
-        ARMSX3StartupLog("P8 missing SPU instruction test export");
-        self.output.text = @"SPU test export missing. Share the log.";
-        return;
-    }
-    self.output.text = @"Testing PS3 SPU instructions and local memory…";
-    ARMSX3StartupLog("P8 user requested SPU instruction test; worker pending");
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        const int result = test();
-        dispatch_async(dispatch_get_main_queue(), ^{
-            self.dmaButton.enabled = result == 0;
-            self.output.text = result == 0
-                ? @"PASS: SPU SIMD instructions, local memory and cleanup.\n\nRun Test PS3 SPU DMA transfers next. Game boot is still pending."
-                : [NSString stringWithFormat:@"SPU test failed (%d). Share the startup log.", result];
-        });
-    });
-}
-- (void)testDMA {
-    self.dmaButton.enabled = NO;
-    auto test = reinterpret_cast<int (*)()>(dlsym(self.coreHandle, "armsx3_core_test_spu_dma"));
-    if (!test) {
-        ARMSX3StartupLog("P9 missing SPU DMA test export");
-        self.output.text = @"SPU DMA test export missing. Share the log.";
-        return;
-    }
-    self.output.text = @"Testing SPU DMA transfers, memory boundaries and cleanup…";
-    ARMSX3StartupLog("P9 user requested SPU DMA test; worker pending");
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        const int result = test();
-        dispatch_async(dispatch_get_main_queue(), ^{
-            self.channelsButton.enabled = result == 0;
-            self.output.text = result == 0
-                ? @"PASS: 32 SPU DMA transfers, memory guards, aliases and cleanup.\n\nRun Test SPU DMA channels / tags next. Game boot is still pending."
-                : [NSString stringWithFormat:@"SPU DMA test failed (%d). Share the startup log.", result];
-        });
-    });
-}
-- (void)testChannels {
-    self.channelsButton.enabled = NO;
-    auto test = reinterpret_cast<int (*)()>(dlsym(self.coreHandle, "armsx3_core_test_spu_channels"));
-    if (!test) {
-        ARMSX3StartupLog("P10 missing SPU channel test export");
-        self.output.text = @"SPU channel test export missing. Share the log.";
-        return;
-    }
-    self.output.text = @"Testing SPU channel transfers and completion tags…";
-    ARMSX3StartupLog("P10 user requested SPU channel test; worker pending");
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        const int result = test();
-        dispatch_async(dispatch_get_main_queue(), ^{
-            self.queueButton.enabled = result == 0;
-            self.output.text = result == 0
-                ? @"PASS: SPU channel transfers, completion tags, memory guards and cleanup.\n\nRun Test SPU DMA queue / ordering next. Game boot is still pending."
-                : [NSString stringWithFormat:@"SPU channel test failed (%d). Share the startup log.", result];
-        });
-    });
-}
-- (void)testQueue {
-    self.queueButton.enabled = NO;
-    auto test = reinterpret_cast<int (*)()>(dlsym(self.coreHandle, "armsx3_core_test_spu_queue"));
-    if (!test) {
-        ARMSX3StartupLog("P11 missing SPU queue test export");
-        self.output.text = @"SPU queue test export missing. Share the log.";
-        return;
-    }
-    self.output.text = @"Testing SPU queue transfers, fences and barriers…";
-    ARMSX3StartupLog("P11 user requested SPU queue test; worker pending");
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        const int result = test();
-        dispatch_async(dispatch_get_main_queue(), ^{
-            self.channelInstructionsButton.enabled = result == 0;
-            self.output.text = result == 0
-                ? @"PASS: 88 queued DMA transfers, fences/barriers, completion tags and cleanup.\n\nRun Test SPU channel instructions next. Game boot is still pending."
-                : [NSString stringWithFormat:@"SPU queue test failed (%d). Share the startup log.", result];
-        });
-    });
-}
-- (void)testChannelInstructions {
-    self.channelInstructionsButton.enabled = NO;
-    auto test = reinterpret_cast<int (*)()>(dlsym(self.coreHandle, "armsx3_core_test_spu_channel_instructions"));
-    if (!test) {
-        ARMSX3StartupLog("P12 missing SPU channel instruction test export");
-        self.output.text = @"SPU channel instruction test export missing. Share the log.";
-        return;
-    }
-    self.output.text = @"Testing SPU channel instructions and DMA transfers…";
-    ARMSX3StartupLog("P12 user requested SPU channel instruction test; worker pending");
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        const int result = test();
-        dispatch_async(dispatch_get_main_queue(), ^{
-            self.waitsButton.enabled = result == 0;
-            self.output.text = result == 0
-                ? @"PASS: SPU channel instructions, DMA transfers, completion tags and cleanup.\n\nRun Test core threads / wait-wake next. Game boot is still pending."
-                : [NSString stringWithFormat:@"SPU channel instruction test failed (%d). Share the startup log.", result];
-        });
-    });
-}
-- (void)testWaits {
-    self.waitsButton.enabled = NO;
-    auto test = reinterpret_cast<int (*)()>(dlsym(self.coreHandle, "armsx3_core_test_thread_waits"));
-    if (!test) {
-        ARMSX3StartupLog("P13 missing Core thread test export");
-        self.output.text = @"Core thread test export missing. Share the log.";
-        return;
-    }
-    self.output.text = @"Testing core threads and wait/wake support…";
-    ARMSX3StartupLog("P13 user requested Core thread test; worker pending");
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        const int result = test();
-        dispatch_async(dispatch_get_main_queue(), ^{
-            self.lifecycleButton.enabled = result == 0;
-            self.output.text = result == 0
-                ? @"PASS: host waits, wake-one/wake-all and core named-thread lifecycle.\n\nRun Test stopped PS3 PPU thread next. Game boot is still pending."
-                : [NSString stringWithFormat:@"Core thread test failed (%d). Share the startup log.", result];
-        });
-    });
-}
-- (void)testLifecycle {
-    self.lifecycleButton.enabled = NO;
-    auto test = reinterpret_cast<int (*)()>(dlsym(self.coreHandle, "armsx3_core_test_ppu_lifecycle"));
-    if (!test) {
-        ARMSX3StartupLog("P14 missing stopped PPU lifecycle export");
-        self.output.text = @"PPU lifecycle export missing. Share the log.";
-        return;
-    }
-    self.output.text = @"Testing stopped PPU CPU threads…";
-    ARMSX3StartupLog("P14 user requested stopped PPU lifecycle; worker pending");
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        const int result = test();
-        dispatch_async(dispatch_get_main_queue(), ^{
-            self.workerInstructionsButton.enabled = result == 0;
-            self.output.text = result == 0
-                ? @"PASS: four PPU CPU threads started, waited while stopped, exited and joined.\n\nRun Test PPU worker instructions next. Game boot is still pending."
-                : [NSString stringWithFormat:@"PPU lifecycle test failed (%d). Share the startup log.", result];
-        });
-    });
-}
-- (void)testWorkerInstructions {
-    self.workerInstructionsButton.enabled = NO;
-    auto test = reinterpret_cast<int (*)()>(dlsym(self.coreHandle, "armsx3_core_test_ppu_worker_instructions"));
-    if (!test) {
-        ARMSX3StartupLog("P15 missing PPU worker instruction export");
-        self.output.text = @"PPU worker instruction export missing. Share the log.";
-        return;
-    }
-    self.output.text = @"Testing PowerPC instructions on PPU workers…";
-    ARMSX3StartupLog("P15 user requested PPU worker instructions; worker pending");
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        const int result = test();
-        dispatch_async(dispatch_get_main_queue(), ^{
-            self.output.text = result == 0
-                ? @"PASS: 24 PowerPC instructions on four real PPU workers, command queue, guest stores and cleanup.\n\nShare the startup log. Game boot is still pending."
-                : [NSString stringWithFormat:@"PPU worker instruction test failed (%d). Share the startup log.", result];
-        });
-    });
 }
 - (void)shareLog {
+    if (self.running) return;
     NSURL* docs = [[NSFileManager defaultManager] URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask].firstObject;
     NSURL* log = [docs URLByAppendingPathComponent:@"ARMSX3-startup.log"];
     UIActivityViewController* share = [[UIActivityViewController alloc] initWithActivityItems:@[log] applicationActivities:nil];
-    share.popoverPresentationController.sourceView = self.view;
+    share.popoverPresentationController.sourceView = self.shareButton;
+    share.popoverPresentationController.sourceRect = self.shareButton.bounds;
     [self presentViewController:share animated:YES completion:nil];
 }
 @end
