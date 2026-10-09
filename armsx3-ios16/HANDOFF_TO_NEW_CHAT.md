@@ -345,3 +345,24 @@ simple in-memory local-store context and SSE gv_add32 helper stub; four
 SIMD lane checks and byte-order checks passed. This does not validate the
 Apple SIMD backend or Mach/iOS mappings; those are pending P8 device test.
 No SPU codegen, DMA/channel, scheduler, firmware or game boot is tested.
+
+
+## Build 17: fix the SPU shared-memory constructor
+
+Archive(3).zip pid 81907 confirms P6/P7 still pass on build 16. P8 aborted
+in private SPU construction before mapping or instruction execution:
+utils::shm::shm(u64,u32), vm_native.cpp:583, shm_open EPERM. Patch 0011
+handled the storage-string constructor used by guest VM blocks; SPU uses
+the flags constructor, which still selected the desktop POSIX shm path.
+
+Patch 0012 routes the flags constructor on Apple TARGET_OS_IPHONE through
+the existing patched storage-string constructor, then preserves m_flags.
+Other platforms retain their original constructor implementations. Both
+iOS overloads now share the same unique/unlinked cache backing lifecycle.
+SPU instruction/mirror test is unchanged and still awaiting device pass.
+
+Patch 0012 applies cleanly after 1–11. Host test compiled and ran the exact
+new constructor delegation and existing iOS backing branch (filesystem/log
+helpers stubbed): flags preserved, 64 KiB rounding, shared aliases at the
+first/last bytes, close-on-exec, 64 KiB/256 KiB/256 MiB sizes all passed.
+Apple CI/device validation pending; no SPU execution success claimed yet.

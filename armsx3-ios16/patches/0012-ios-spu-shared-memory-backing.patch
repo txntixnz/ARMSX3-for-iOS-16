@@ -1,0 +1,26 @@
+--- a/rpcs3/util/vm_native.cpp
++++ b/rpcs3/util/vm_native.cpp
+@@ -545,6 +545,14 @@
+ 	}
+ 
+ 	shm::shm(u64 size, u32 flags)
++#if defined(__APPLE__) && TARGET_OS_IPHONE
++		: shm(size, std::string{})
++	{
++		// SPU local storage uses this constructor; share the iOS backing
++		// implementation already used by guest VM blocks instead of shm_open.
++		m_flags = flags;
++	}
++#else
+ 		: m_flags(flags)
+ 		, m_size(utils::align(size, 0x10000))
+ 	{
+@@ -587,6 +595,8 @@
+ 		ensure(::ftruncate(m_file, m_size) >= 0);
+ #endif
+ 	}
++
++#endif // iOS delegation / native shared-memory creation
+ 
+ 	shm::shm(u64 size, const std::string& storage)
+ 		: m_size(utils::align(size, 0x10000))
