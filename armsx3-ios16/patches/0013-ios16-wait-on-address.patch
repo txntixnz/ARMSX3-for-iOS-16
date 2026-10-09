@@ -1,0 +1,119 @@
+--- a/Utilities/sync.h
++++ b/Utilities/sync.h
+@@ -18,7 +18,10 @@
+ #include <unistd.h>
+ #include <fcntl.h>
+ #elif __APPLE__
++#include <TargetConditionals.h>
++#if !TARGET_OS_IPHONE
+ #include <os/os_sync_wait_on_address.h>
++#endif
+ #endif
+ 
+ #ifdef _WIN32
+@@ -74,10 +77,16 @@
+ };
+ #endif
+ 
++#if defined(__APPLE__) && TARGET_OS_IPHONE
++#include "ios_futex.h"
++#endif
++
+ inline int futex(volatile void* uaddr, int futex_op, uint val, const timespec* timeout = nullptr, [[maybe_unused]] uint mask = 0)
+ {
+ #ifdef __linux__
+ 	return syscall(SYS_futex, uaddr, futex_op, static_cast<int>(val), timeout, nullptr, static_cast<int>(mask));
++#elif defined(__APPLE__) && TARGET_OS_IPHONE
++	return ios_futex(uaddr, futex_op, val, timeout, mask);
+ #elif __APPLE__
+ 	switch (futex_op)
+ 	{
+--- /dev/null
++++ b/Utilities/ios_futex.h
+@@ -0,0 +1,86 @@
++#pragma once
++#include <atomic>
++#include <cerrno>
++#include <chrono>
++#include <condition_variable>
++#include <cstdint>
++#include <ctime>
++#include <limits>
++#include <list>
++#include <mutex>
++
++// iOS 16 wait-on-address backend. Registration, wake selection and waiter
++// removal share a lock; a wake cannot race a waiter into a dangling record.
++inline int ios_futex(volatile void* address, int operation, unsigned value,
++    const timespec* timeout, unsigned mask)
++{
++    struct waiter
++    {
++        volatile void* address;
++        unsigned mask;
++        bool notified = false;
++        std::condition_variable cv;
++    };
++    struct bucket { std::mutex mutex; std::list<waiter*> waiters; };
++    static bucket buckets[63];
++    if (!address || reinterpret_cast<std::uintptr_t>(address) % alignof(unsigned))
++    { errno = EINVAL; return -1; }
++    auto& selected = buckets[(reinterpret_cast<std::uintptr_t>(address) / 8) % 63];
++    std::unique_lock lock(selected.mutex);
++    if (operation == FUTEX_WAIT_PRIVATE || operation == FUTEX_WAIT_BITSET_PRIVATE)
++    {
++        const bool bitset = operation == FUTEX_WAIT_BITSET_PRIVATE;
++        if (!bitset) mask = ~0u;
++        if (!mask) { errno = EINVAL; return -1; }
++        std::chrono::nanoseconds duration{};
++        if (timeout)
++        {
++            if (timeout->tv_sec < 0 || timeout->tv_nsec < 0 || timeout->tv_nsec >= 1000000000 ||
++                std::uint64_t(timeout->tv_sec) > std::uint64_t(std::numeric_limits<std::int64_t>::max() - timeout->tv_nsec) / 1000000000)
++            { errno = EINVAL; return -1; }
++            duration = std::chrono::nanoseconds(std::int64_t(timeout->tv_sec) * 1000000000 + timeout->tv_nsec);
++            if (bitset)
++            {
++                timespec now{};
++                if (clock_gettime(CLOCK_MONOTONIC, &now)) return -1;
++                duration -= std::chrono::seconds(now.tv_sec) + std::chrono::nanoseconds(now.tv_nsec);
++            }
++        }
++        if (__atomic_load_n(reinterpret_cast<volatile unsigned*>(address), __ATOMIC_ACQUIRE) != value)
++        { errno = EAGAIN; return -1; }
++        if (timeout && duration <= std::chrono::nanoseconds::zero())
++        { errno = ETIMEDOUT; return -1; }
++        waiter record{address, mask};
++        auto entry = selected.waiters.insert(selected.waiters.end(), &record);
++        if (!timeout) record.cv.wait(lock, [&] { return record.notified; });
++        else if (!record.cv.wait_for(lock, duration, [&] { return record.notified; }))
++        {
++            selected.waiters.erase(entry);
++            errno = ETIMEDOUT;
++            return -1;
++        }
++        // Wake removed the entry while holding this same mutex.
++        return 0;
++    }
++    if (operation == FUTEX_WAKE_PRIVATE || operation == FUTEX_WAKE_BITSET_PRIVATE)
++    {
++        if (operation == FUTEX_WAKE_PRIVATE) mask = ~0u;
++        if (!mask) { errno = EINVAL; return -1; }
++        int count = 0;
++        for (auto it = selected.waiters.begin(); value && it != selected.waiters.end();)
++        {
++            auto* record = *it;
++            if (record->address == address && (record->mask & mask))
++            {
++                record->notified = true;
++                it = selected.waiters.erase(it);
++                record->cv.notify_one();
++                --value; ++count;
++            }
++            else ++it;
++        }
++        return count;
++    }
++    errno = EINVAL;
++    return -1;
++}

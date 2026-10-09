@@ -488,3 +488,33 @@ cases passed, including high-bit/0xffffffff values. Apple compile/device DMA
 integration pending. No mutable guest JIT, actual CPU thread scheduling,
 firmware/game boot or renderer claim. Next: device P12 then CPU lifecycle/
 thread-wait support, including iOS 16 availability gap in Utilities/sync.h.
+
+
+## Build 22: iOS wait-on-address backend and named-thread lifecycle
+
+ARMSX3-startup(8).log pid 84164 confirms P12 passes 1040 interpreted SPU
+channel instructions, 32 DMA transfers, all completion modes, guards/aliases,
+range-lock release and cleanup. The earlier startup(7) log ended at P11.
+
+Patch 0013 routes Apple TARGET_OS_IPHONE futex calls to a dedicated portable
+condition-variable wait-on-address backend, avoiding direct os_sync imports
+from the newer Apple API. Desktop Apple retains its existing implementation;
+Linux/Windows unchanged. The helper uses 63 locked buckets and stack waiter
+records. Registration/value check and wake/removal share the bucket mutex;
+wake removes and notifies while locked. Supports mismatch EAGAIN, relative
+WAIT timeout, monotonic absolute BITSET timeout, selective mask wake, bounded
+wake count, zero wake and complete timeout cleanup. This is a correctness
+fallback; native wait performance can be optimized after device validation.
+
+P13 Test core threads / wait-wake: mismatch, 32 timed waits on reused address,
+no stale waiter after timeout, four wake-one and four wake-all waiters with
+500 ms limits and mandatory joins, then four real named_thread contexts with
+TLS registration, thread_ctrl::wait_for(200000), notify, result 42 and join.
+Worker lifetimes are joined on exceptions. These are core host threads,
+not named_thread<ppu_thread>/SPU scheduling or game execution.
+
+Patch applies cleanly after 1–12. Actual P13 compiles against pinned core
+headers (GCC C++23). Host harness ran exact ios_futex helper: 64 timeouts and
+address reuse, mismatch, zero wake, wake-one/all, bitset masks and absolute
+deadlines passed. Apple CI/linking and iOS real core wait/wake remain pending.
+No guest CPU lifecycle, mutable JIT, renderer, firmware/game boot claimed.

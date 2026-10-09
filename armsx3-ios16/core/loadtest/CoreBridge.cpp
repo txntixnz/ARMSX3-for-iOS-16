@@ -23,6 +23,10 @@
 #include <thread>
 #include <vector>
 #include <utility>
+#include "Utilities/Thread.h"
+#include "Utilities/sync.h"
+#include <chrono>
+#include <cerrno>
 // Read-only state inspection after dyld has run the real core constructors.
 // This does not initialize a title, allocate a JIT, or start emulation threads.
 extern "C" __attribute__((visibility("default"))) int armsx3_core_state()
@@ -1470,3 +1474,83 @@ extern "C" __attribute__((visibility("default"))) int armsx3_core_test_spu_chann
     }
 }
 
+
+extern "C" __attribute__((visibility("default"))) int armsx3_core_test_thread_waits()
+{
+    ARMSX3StartupLog("P13 BEFORE bounded host wait/wake and core named-thread tests");
+    try
+    {
+        alignas(8) unsigned word = 0;
+        const timespec short_timeout{0, 1000000};
+        errno = 0;
+        if (futex(&word, FUTEX_WAIT_PRIVATE, 1, &short_timeout) != -1 || errno != EAGAIN)
+            throw std::runtime_error("P13 wait mismatch must return EAGAIN");
+        for (unsigned round = 0; round < 32; ++round)
+        {
+            errno = 0;
+            if (futex(&word, FUTEX_WAIT_PRIVATE, 0, &short_timeout) != -1 || errno != ETIMEDOUT)
+                throw std::runtime_error("P13 timed wait must return ETIMEDOUT");
+            if (futex(&word, FUTEX_WAKE_PRIVATE, 1) != 0)
+                throw std::runtime_error("P13 timed-out waiter was not removed");
+        }
+        ARMSX3StartupLog("P13 PASS: mismatch, 32 timeouts and address reuse");
+        for (unsigned mode = 0; mode < 2; ++mode)
+        {
+            std::atomic<unsigned> entered{0}, finished{0}, failures{0};
+            std::vector<std::thread> workers;
+            // Join all started workers even if thread creation throws.
+            struct JoinAll { std::vector<std::thread>& workers; ~JoinAll()
+                { for (auto& worker : workers) if (worker.joinable()) worker.join(); } } join{workers};
+            for (unsigned i = 0; i < 4; ++i)
+                workers.emplace_back([&] {
+                    entered.fetch_add(1);
+                    const timespec timeout{0, 500000000};
+                    if (futex(&word, FUTEX_WAIT_PRIVATE, 0, &timeout) != 0) failures.fetch_add(1);
+                    finished.fetch_add(1);
+                });
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+            while (entered.load() != 4 && std::chrono::steady_clock::now() < deadline)
+                std::this_thread::yield();
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            unsigned woken = 0;
+            while (woken < 4 && std::chrono::steady_clock::now() < deadline)
+            {
+                const int count = futex(&word, FUTEX_WAKE_PRIVATE, mode ? INT32_MAX : 1);
+                if (count < 0 || (!mode && count > 1))
+                    throw std::runtime_error("P13 wake count invalid");
+                woken += unsigned(count);
+                std::this_thread::yield();
+            }
+            for (auto& worker : workers) worker.join();
+            if (woken != 4 || finished.load() != 4 || failures.load())
+                throw std::runtime_error("P13 waiter wake/join mismatch");
+            ARMSX3StartupLog(mode ? "P13 PASS: wake-all four host waiters" : "P13 PASS: wake-one four host waiters");
+        }
+        for (unsigned round = 0; round < 4; ++round)
+        {
+            std::atomic<bool> entered{false};
+            ARMSX3StartupLog("P13 BEFORE core named_thread construction");
+            named_thread worker("iOS wait lifecycle probe", [&]() -> int {
+                const bool registered = thread_ctrl::get_current() != nullptr;
+                entered.store(true);
+                thread_ctrl::wait_for(200000);
+                return registered ? 42 : -1;
+            });
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+            while (!entered.load() && std::chrono::steady_clock::now() < deadline)
+                std::this_thread::yield();
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            thread_ctrl::notify(worker);
+            if (worker() != 42)
+                throw std::runtime_error("P13 core named-thread TLS/result mismatch");
+            ARMSX3StartupLog("P13 PASS: core named_thread wait, notify, result and join");
+        }
+        ARMSX3StartupLog("P13 PASS: host wait/wake and core thread lifecycle; guest CPU scheduling and game boot remain untested");
+        return 0;
+    }
+    catch (const std::exception& error)
+    {
+        ARMSX3StartupLog(error.what());
+        return -1;
+    }
+}

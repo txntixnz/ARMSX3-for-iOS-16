@@ -17,6 +17,7 @@
 @property(nonatomic,strong) UIButton* channelsButton;
 @property(nonatomic,strong) UIButton* queueButton;
 @property(nonatomic,strong) UIButton* channelInstructionsButton;
+@property(nonatomic,strong) UIButton* waitsButton;
 @property(nonatomic,assign) void* coreHandle;
 @end
 @implementation LoadController
@@ -88,6 +89,11 @@
     self.channelInstructionsButton.enabled = NO;
     [self.channelInstructionsButton addTarget:self action:@selector(testChannelInstructions) forControlEvents:UIControlEventTouchUpInside];
     [stack addArrangedSubview:self.channelInstructionsButton];
+    self.waitsButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    [self.waitsButton setTitle:@"Test core threads / wait-wake" forState:UIControlStateNormal];
+    self.waitsButton.enabled = NO;
+    [self.waitsButton addTarget:self action:@selector(testWaits) forControlEvents:UIControlEventTouchUpInside];
+    [stack addArrangedSubview:self.waitsButton];
     UIButton* share = [UIButton buttonWithType:UIButtonTypeSystem];
     [share setTitle:@"Share startup log" forState:UIControlStateNormal];
     [share addTarget:self action:@selector(shareLog) forControlEvents:UIControlEventTouchUpInside];
@@ -325,9 +331,29 @@
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         const int result = test();
         dispatch_async(dispatch_get_main_queue(), ^{
+            self.waitsButton.enabled = result == 0;
             self.output.text = result == 0
-                ? @"PASS: SPU channel instructions, DMA transfers, completion tags and cleanup.\n\nShare the startup log. Game boot is still pending."
+                ? @"PASS: SPU channel instructions, DMA transfers, completion tags and cleanup.\n\nRun Test core threads / wait-wake next. Game boot is still pending."
                 : [NSString stringWithFormat:@"SPU channel instruction test failed (%d). Share the startup log.", result];
+        });
+    });
+}
+- (void)testWaits {
+    self.waitsButton.enabled = NO;
+    auto test = reinterpret_cast<int (*)()>(dlsym(self.coreHandle, "armsx3_core_test_thread_waits"));
+    if (!test) {
+        ARMSX3StartupLog("P13 missing Core thread test export");
+        self.output.text = @"Core thread test export missing. Share the log.";
+        return;
+    }
+    self.output.text = @"Testing core threads and wait/wake support…";
+    ARMSX3StartupLog("P13 user requested Core thread test; worker pending");
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        const int result = test();
+        dispatch_async(dispatch_get_main_queue(), ^{
+            self.output.text = result == 0
+                ? @"PASS: host waits, wake-one/wake-all and core named-thread lifecycle.\n\nShare the startup log. Game boot is still pending."
+                : [NSString stringWithFormat:@"Core thread test failed (%d). Share the startup log.", result];
         });
     });
 }
