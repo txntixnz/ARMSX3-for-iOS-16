@@ -11,6 +11,7 @@
 @property(nonatomic,strong) UIButton* initializeButton;
 @property(nonatomic,strong) UIButton* memoryButton;
 @property(nonatomic,strong) UIButton* cpuButton;
+@property(nonatomic,strong) UIButton* flowButton;
 @property(nonatomic,assign) void* coreHandle;
 @end
 @implementation LoadController
@@ -52,6 +53,11 @@
     self.cpuButton.enabled = NO;
     [self.cpuButton addTarget:self action:@selector(testCPU) forControlEvents:UIControlEventTouchUpInside];
     [stack addArrangedSubview:self.cpuButton];
+    self.flowButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    [self.flowButton setTitle:@"Test PS3 PPU branches / loops" forState:UIControlStateNormal];
+    self.flowButton.enabled = NO;
+    [self.flowButton addTarget:self action:@selector(testFlow) forControlEvents:UIControlEventTouchUpInside];
+    [stack addArrangedSubview:self.flowButton];
     UIButton* share = [UIButton buttonWithType:UIButtonTypeSystem];
     [share setTitle:@"Share startup log" forState:UIControlStateNormal];
     [share addTarget:self action:@selector(shareLog) forControlEvents:UIControlEventTouchUpInside];
@@ -169,9 +175,29 @@
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         const int result = test();
         dispatch_async(dispatch_get_main_queue(), ^{
+            self.flowButton.enabled = result == 0;
             self.output.text = result == 0
-                ? @"PASS: 11 real PPU instructions, register results, big-endian memory and cleanup.\n\nShare the startup log. Game boot is still pending."
+                ? @"PASS: 11 real PPU instructions, register results, big-endian memory and cleanup.\n\nTap Test PS3 PPU branches / loops next."
                 : [NSString stringWithFormat:@"PPU instruction test failed (%d). Share the startup log.", result];
+        });
+    });
+}
+- (void)testFlow {
+    self.flowButton.enabled = NO;
+    auto test = reinterpret_cast<int (*)()>(dlsym(self.coreHandle, "armsx3_core_test_ppu_control_flow"));
+    if (!test) {
+        ARMSX3StartupLog("P7 missing PPU control-flow test export");
+        self.output.text = @"PPU control-flow test export missing. Share the log.";
+        return;
+    }
+    self.output.text = @"Testing PS3 PPU branches and loops…";
+    ARMSX3StartupLog("P7 user requested PPU control-flow test; worker pending");
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        const int result = test();
+        dispatch_async(dispatch_get_main_queue(), ^{
+            self.output.text = result == 0
+                ? @"PASS: core PPU loops, branches, calls, returns and memory results.\n\nShare the startup log. Game boot is still pending."
+                : [NSString stringWithFormat:@"PPU control-flow test failed (%d). Share the startup log.", result];
         });
     });
 }

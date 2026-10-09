@@ -309,3 +309,130 @@ extern "C" __attribute__((visibility("default"))) int armsx3_core_test_ppu_instr
         return -1;
     }
 }
+
+
+// Test actual branch handlers with a bounded diagnostic dispatch loop.
+// The normal scheduler, syscalls and mutable JIT are still outside this probe.
+extern "C" __attribute__((visibility("default"))) int armsx3_core_test_ppu_control_flow()
+{
+    ARMSX3StartupLog("P7 BEFORE guest VM setup for PPU branches and loops");
+    bool initialized = false;
+    try
+    {
+        vm::init();
+        initialized = true;
+        if (!vm::reserve_map(vm::main, 0x10000, 0x20000))
+            throw std::runtime_error("P7 main memory block unavailable");
+        const u32 address = vm::alloc(0x10000, vm::main, 0x10000);
+        if (!address) throw std::runtime_error("P7 guest allocation failed");
+        ARMSX3StartupLog("P7 AFTER guest allocation; BEFORE private PPU context");
+        {
+            const ppu_thread_params params{static_cast<vm::addr_t>(address + 0x1000), 0x8000, 0, {}, 0, 0};
+            // The production registry already owns named_thread<ppu_thread>.
+            // Registering raw ppu_thread creates conflicting savestate metadata
+            // during dlopen. This isolated probe needs only a CPU register state.
+            struct ContextDeleter
+            {
+                void operator()(ppu_thread* context) const
+                {
+                    delete context;
+                    // Direct execution never enters cpu_task's cleanup wrapper.
+                    cpu_thread::g_threads_deleted++;
+                }
+            };
+            std::unique_ptr<ppu_thread, ContextDeleter> ppu;
+            {
+                // Constructor expects IDM's thread-local construction ID. Supply
+                // a valid PPU class ID only while constructing this private state;
+                // restore the worker's previous value even if construction throws.
+                struct ConstructionID
+                {
+                    u32 previous = id_manager::g_id;
+                    ConstructionID() { id_manager::g_id = ppu_thread::id_base; }
+                    ~ConstructionID() { id_manager::g_id = previous; }
+                } construction_id;
+                ppu.reset(new ppu_thread(params, "iOS PPU instruction probe", 1000));
+            }
+
+            auto interpreter = std::make_unique<ppu_interpreter_rt>();
+            using namespace ppu_instructions;
+            using namespace ppu_instructions::implicts;
+            for (const u32 count : {1u, 10u, 64u})
+            {
+                const std::array<u32, 18> program{
+                    LI(3, 0),                       // 0 accumulator = 0
+                    MTCTR(4),                       // 1 CTR = supplied loop count
+                    ADDI(3, 3, 1),                  // 2 accumulator++
+                    BC(16, 0, -4),                  // 3 bdnz back to 2
+                    CMPWI(3, count),                // 4 loop result
+                    BNE(40),                        // 5 fail at 15 if wrong
+                    B(24, false, true),             // 6 bl subroutine at 12
+                    STW(3, 6, 0),                   // 7 store returned value
+                    LWZ(7, 6, 0),                   // 8 reload
+                    CMPWI(7, count + 5),            // 9 memory result
+                    BEQ(32),                        // 10 success exit at 18
+                    B(16),                          // 11 fail at 15
+                    ADDI(3, 3, 5),                  // 12 subroutine
+                    BLR(),                          // 13 return to 7
+                    LI(12, 0xdead),                 // 14 must be skipped
+                    LI(12, 0xbad),                  // 15 failure marker
+                    B(8),                           // 16 exit at 18
+                    NOP(),                          // 17 must be skipped
+                };
+                auto* code = reinterpret_cast<be_t<u32>*>(vm::base(address));
+                for (std::size_t index = 0; index < program.size(); ++index)
+                    code[index] = program[index];
+                code[program.size()] = 0; // readable padding for handler transition
+                ppu_intrp_func boundary{+[](ppu_thread& context, ppu_opcode_t, be_t<u32>* next, ppu_intrp_func*)
+                {
+                    // Ordinary handlers tail-call this after one instruction.
+                    // Taken branch handlers return directly with their target CIA.
+                    context.cia = vm::get_addr(next);
+                }};
+                ppu->gpr[4] = count;
+                ppu->gpr[6] = address + 0x100;
+                ppu->gpr[12] = 0;
+                ppu->ctr = 0;
+                ppu->lr = 0;
+                ppu->cia = address;
+                u32 steps = 0;
+                char stage[180];
+                std::snprintf(stage, sizeof(stage), "P7 BEFORE core branch program: loop count=%u, instruction budget=512", count);
+                ARMSX3StartupLog(stage);
+                while (ppu->cia != address + program.size() * 4)
+                {
+                    const u32 offset = ppu->cia - address;
+                    if (offset % 4 || offset >= program.size() * 4)
+                        throw std::runtime_error("P7 branch target outside diagnostic program");
+                    if (++steps > 512) throw std::runtime_error("P7 instruction budget exceeded");
+                    auto* instruction = code + offset / 4;
+                    const u32 opcode = *instruction;
+                    const auto handler = interpreter->decode(opcode);
+                    if (!handler) throw std::runtime_error("P7 instruction decode failed");
+                    handler(*ppu, {opcode}, instruction, &boundary);
+                }
+                if (ppu->gpr[3] != count + 5 || ppu->gpr[7] != count + 5 ||
+                    ppu->gpr[12] != 0 || ppu->ctr != 0 || ppu->lr != address + 7 * 4 ||
+                    steps != count * 2 + 11)
+                    throw std::runtime_error("P7 branch, counter, return address or result mismatch");
+                const auto* data = static_cast<const unsigned char*>(vm::base(address + 0x100));
+                if (data[0] || data[1] || data[2] || data[3] != count + 5)
+                    throw std::runtime_error("P7 big-endian result mismatch");
+                std::snprintf(stage, sizeof(stage), "P7 PASS: loop count=%u, executed=%u, result=%u, CTR=0, link/return correct", count, steps, count + 5);
+                ARMSX3StartupLog(stage);
+            }
+        }
+        if (vm::dealloc(address, vm::main) != 0x10000)
+            throw std::runtime_error("P7 guest deallocation failed");
+        vm::close();
+        initialized = false;
+        ARMSX3StartupLog("P7 PASS: core PPU loops, conditional branches, call/return and cleanup; no game boot tested");
+        return 0;
+    }
+    catch (const std::exception& error)
+    {
+        ARMSX3StartupLog(error.what());
+        if (initialized) vm::close();
+        return -1;
+    }
+}

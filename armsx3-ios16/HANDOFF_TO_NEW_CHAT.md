@@ -291,3 +291,29 @@ Compiled the exact P6 function into a host object against the actual core
 headers. nm confirmed a direct PPU constructor reference and no instantiation
 of make_typeinfo<ppu_thread>, raw PPU id_traits_load_func or typedata registry
 initializer. Full Apple build and device P6 execution remain pending.
+
+
+## Build 15: P6 device pass; P7 bounded PPU control-flow probe
+
+ARMSX3-startup(1).log pid 81610 confirms build 14 passed all eleven actual
+PPU instructions, expected register/memory results and VM cleanup.
+
+Build 15 adds Test PS3 PPU branches / loops after P6. It reuses the private
+context pattern without registry registration, heap decoder and guest VM
+lifecycle. The 18-opcode program performs a CTR-counted increment loop,
+CMPWI/BNE check, BL subroutine call, ADDI then BLR, guest store/reload and
+CMPWI/BEQ success exit. Failure markers and unreachable instructions must
+remain skipped. Counts 1, 10 and 64 expect results 6, 15, 69 and instruction
+counts 13, 31, 139 respectively. CTR must end at zero and LR must identify
+the correct return address. A diagnostic dispatcher follows CIA with a
+512-instruction budget and bounds/alignment checks; it dispatches one core
+handler at a time. Ordinary handler continuation updates CIA through a
+boundary callback; actual taken branch handlers update CIA and return.
+It does not invoke the production CPU scheduler, syscalls or mutable JIT.
+
+Both PPU probes compiled to a host object against actual headers; nm found
+no duplicate raw PPU registry initializer. Host harness used exact B, BC
+and BCLR lambda bodies from pinned interpreter with logging/history hooks
+stubbed and simple arithmetic/memory/compare model; all three expected
+control-flow traces passed. The host harness is not full core execution;
+actual handlers and memory behavior are checked on iPhone by P7 next.
