@@ -16,6 +16,7 @@
 @property(nonatomic,strong) UIButton* dmaButton;
 @property(nonatomic,strong) UIButton* channelsButton;
 @property(nonatomic,strong) UIButton* queueButton;
+@property(nonatomic,strong) UIButton* channelInstructionsButton;
 @property(nonatomic,assign) void* coreHandle;
 @end
 @implementation LoadController
@@ -82,6 +83,11 @@
     self.queueButton.enabled = NO;
     [self.queueButton addTarget:self action:@selector(testQueue) forControlEvents:UIControlEventTouchUpInside];
     [stack addArrangedSubview:self.queueButton];
+    self.channelInstructionsButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    [self.channelInstructionsButton setTitle:@"Test SPU channel instructions" forState:UIControlStateNormal];
+    self.channelInstructionsButton.enabled = NO;
+    [self.channelInstructionsButton addTarget:self action:@selector(testChannelInstructions) forControlEvents:UIControlEventTouchUpInside];
+    [stack addArrangedSubview:self.channelInstructionsButton];
     UIButton* share = [UIButton buttonWithType:UIButtonTypeSystem];
     [share setTitle:@"Share startup log" forState:UIControlStateNormal];
     [share addTarget:self action:@selector(shareLog) forControlEvents:UIControlEventTouchUpInside];
@@ -299,9 +305,29 @@
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         const int result = test();
         dispatch_async(dispatch_get_main_queue(), ^{
+            self.channelInstructionsButton.enabled = result == 0;
             self.output.text = result == 0
-                ? @"PASS: 88 queued DMA transfers, fences/barriers, completion tags and cleanup.\n\nShare the startup log. Game boot is still pending."
+                ? @"PASS: 88 queued DMA transfers, fences/barriers, completion tags and cleanup.\n\nRun Test SPU channel instructions next. Game boot is still pending."
                 : [NSString stringWithFormat:@"SPU queue test failed (%d). Share the startup log.", result];
+        });
+    });
+}
+- (void)testChannelInstructions {
+    self.channelInstructionsButton.enabled = NO;
+    auto test = reinterpret_cast<int (*)()>(dlsym(self.coreHandle, "armsx3_core_test_spu_channel_instructions"));
+    if (!test) {
+        ARMSX3StartupLog("P12 missing SPU channel instruction test export");
+        self.output.text = @"SPU channel instruction test export missing. Share the log.";
+        return;
+    }
+    self.output.text = @"Testing SPU channel instructions and DMA transfers…";
+    ARMSX3StartupLog("P12 user requested SPU channel instruction test; worker pending");
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        const int result = test();
+        dispatch_async(dispatch_get_main_queue(), ^{
+            self.output.text = result == 0
+                ? @"PASS: SPU channel instructions, DMA transfers, completion tags and cleanup.\n\nShare the startup log. Game boot is still pending."
+                : [NSString stringWithFormat:@"SPU channel instruction test failed (%d). Share the startup log.", result];
         });
     });
 }

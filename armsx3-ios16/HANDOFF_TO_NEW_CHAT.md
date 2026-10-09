@@ -456,3 +456,35 @@ deterministic timestamp masks and mock tag channel: 768 dependency cases
 (256 starting seeds × 3 modes) and 256 full queues passed including data
 and guards. Does not validate Apple DMA/mappings or native thread waits;
 CI and P11 device pass remain pending. Firmware/game boot still untested.
+
+
+## Build 21: interpreted SPU channel instruction integration
+
+ARMSX3-startup(6).log pid 82450 confirms P11 passes all 24 ordering chains,
+full 16-slot queue and 88 total DMA transfers, completion, guards/aliases,
+capacity recovery and cleanup. Queue drains took 1–10 passes per chain.
+
+P12 adds Test SPU channel instructions after P11. Reuses the proven P10
+32-transfer suite but routes channel writes through actual decoded WRCH,
+reads through RDCH, counts through RCHCNT. Encodes real opcodes 0x10d/0x0d/
+0x0f in bits 21+, with channel in ra and register in rt. Fetches each opcode
+from real big-endian LS scratch address 0x30000, then restores the original
+word through RAII; scratch does not overlap any transfer. Heap real decoder.
+Hosts supply operand registers; this is a bounded synthetic instruction
+sequence, not an autonomous loaded SPU executable or production scheduler.
+
+Private context is cpu_init'ed; RAII temporarily clears its constructor CPU
+state so channel handlers return normally, then restores state before its
+private destructor. No registered CPU is changed. Shuffling/preferred SPU
+threads are zero during this synchronous probe; all config is restored.
+4096 instruction cap. RDCH guarded by interpreted RCHCNT readiness to avoid
+blocking waits. Checks result in preferred lane 3 and all other lanes zero,
+pre-filling all lanes with sentinels. WRCH source preferred lane preserved.
+Existing exact byte guards, aliases, LS mirrors, tag modes and cleanup apply.
+
+GCC C++23 actual-header compile passed. Host harness used actual SPU decoder
+and three actual handler bodies with mock channels: 105 opcode/preferred-lane
+cases passed, including high-bit/0xffffffff values. Apple compile/device DMA
+integration pending. No mutable guest JIT, actual CPU thread scheduling,
+firmware/game boot or renderer claim. Next: device P12 then CPU lifecycle/
+thread-wait support, including iOS 16 availability gap in Utilities/sync.h.

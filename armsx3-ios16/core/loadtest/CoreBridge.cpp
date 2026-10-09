@@ -22,6 +22,7 @@
 #include <atomic>
 #include <thread>
 #include <vector>
+#include <utility>
 // Read-only state inspection after dyld has run the real core constructors.
 // This does not initialize a title, allocate a JIT, or start emulation threads.
 extern "C" __attribute__((visibility("default"))) int armsx3_core_state()
@@ -1187,3 +1188,285 @@ extern "C" __attribute__((visibility("default"))) int armsx3_core_test_spu_queue
         return -1;
     }
 }
+
+extern "C" __attribute__((visibility("default"))) int armsx3_core_test_spu_channel_instructions()
+{
+    ARMSX3StartupLog("P12 BEFORE guest VM setup for SPU channel instructions");
+    bool initialized = false;
+    try
+    {
+        vm::init();
+        initialized = true;
+        if (!vm::reserve_map(vm::main, 0x10000, 0x30000))
+            throw std::runtime_error("P12 could not reserve DMA guest region");
+        constexpr u32 guest_size = 0x20000;
+        const u32 address = vm::alloc(guest_size, vm::main, 0x10000);
+        if (!address || !vm::check_addr(address, vm::page_readable | vm::page_writable, guest_size))
+            throw std::runtime_error("P12 guest DMA allocation failed");
+        {
+            // Baseline transfers only: no active RSX or competing guest CPUs.
+            // Restore every setting before returning, including exception paths.
+            struct DMASettings
+            {
+                u32 shuffle = g_cfg.core.mfc_transfers_shuffling.get();
+                u32 preferred = g_cfg.core.preferred_spu_threads.get();
+                bool accurate = g_cfg.core.spu_accurate_dma.get();
+                bool strict = g_cfg.video.strict_rendering_mode.get();
+                rsx_fifo_mode fifo = g_cfg.core.rsx_fifo_accuracy.get();
+                DMASettings()
+                {
+                    g_cfg.core.mfc_transfers_shuffling.set(0);
+                    g_cfg.core.preferred_spu_threads.set(0);
+                    g_cfg.core.spu_accurate_dma.set(false);
+                    g_cfg.video.strict_rendering_mode.set(false);
+                    g_cfg.core.rsx_fifo_accuracy.set(rsx_fifo_mode::fast);
+                }
+                ~DMASettings()
+                {
+                    g_cfg.core.rsx_fifo_accuracy.set(fifo);
+                    g_cfg.video.strict_rendering_mode.set(strict);
+                    g_cfg.core.spu_accurate_dma.set(accurate);
+                    g_cfg.core.preferred_spu_threads.set(preferred);
+                    g_cfg.core.mfc_transfers_shuffling.set(shuffle);
+                }
+            } dma_settings;
+            struct ContextDeleter
+            {
+                void operator()(spu_thread* context) const
+                {
+                    // cleanup() assumes a production named_thread and an LV2
+                    // local-store allocation; neither exists in this private probe.
+                    vm::free_range_lock(context->range_lock);
+                    delete context; // unmaps all LS mirrors and releases reservation
+                    cpu_thread::g_threads_deleted++;
+                }
+            };
+            std::unique_ptr<spu_thread, ContextDeleter> spu;
+            {
+                struct ConstructionSettings
+                {
+                    u32 previous_id = id_manager::g_id;
+                    spu_decoder_type previous_decoder = g_cfg.core.spu_decoder.get();
+                    ConstructionSettings()
+                    {
+                        id_manager::g_id = spu_thread::id_base;
+                        g_cfg.core.spu_decoder.set(spu_decoder_type::_static);
+                    }
+                    ~ConstructionSettings()
+                    {
+                        g_cfg.core.spu_decoder.set(previous_decoder);
+                        id_manager::g_id = previous_id;
+                    }
+                } settings;
+                ARMSX3StartupLog("P12 BEFORE private SPU context construction; interpreter selected");
+                spu.reset(new spu_thread(nullptr, 0, "iOS SPU channel instruction probe", 0));
+            }
+            ARMSX3StartupLog("P12 AFTER SPU context; BEFORE local-store mirror mappings");
+            spu_thread::map_ls(*spu->shm, spu->ls);
+            ARMSX3StartupLog("P12 AFTER 256 KiB SPU local store and five shared views mapped");
+            ARMSX3StartupLog("P12 BEFORE cpu_init to reset SPU channels and DMA fence masks");
+            spu->cpu_init();
+            ARMSX3StartupLog("P12 AFTER cpu_init; channel transfer sequence pending");
+            // These handlers check CPU state after channel access. Clear only
+            // this unregistered private context while running bounded probes;
+            // restore constructor state before its normal private destruction.
+            struct ExecutionState
+            {
+                spu_thread& context;
+                decltype(std::declval<spu_thread&>().state.load()) previous;
+                explicit ExecutionState(spu_thread& value) : context(value), previous(value.state.load())
+                { context.state.store(bs_t<cpu_flag>{}); }
+                ~ExecutionState() { context.state.store(previous); }
+            } execution_state(*spu);
+            auto interpreter = std::make_unique<spu_interpreter_rt>();
+            u32 executed = 0;
+            const auto instruction = [&](u32 primary, u32 channel, u32 reg)
+            {
+                if (++executed > 4096 || spu->state)
+                    throw std::runtime_error("P12 instruction budget or private CPU state mismatch");
+                spu_opcode_t op{primary << 21};
+                op.ra = channel; op.rt = reg;
+                // Fetch the encoded instruction through the real big-endian LS.
+                // Restore the scratch word so existing full-LS guard checks apply.
+                struct InstructionSlot
+                {
+                    be_t<u32>* word;
+                    be_t<u32> previous;
+                    ~InstructionSlot() { *word = previous; }
+                } slot{spu->_ptr<u32>(0x30000), spu->_ref<u32>(0x30000)};
+                *slot.word = op.opcode;
+                spu->pc = 0x30000;
+                const u32 fetched = spu->_ref<u32>(spu->pc);
+                const auto handler = interpreter->decode(fetched);
+                if (!handler || !handler(*spu, {fetched}))
+                    throw std::runtime_error("P12 SPU channel instruction did not complete");
+                spu->pc += 4;
+            };
+            const auto count = [&](u32 channel) -> u32
+            {
+                spu->gpr[3] = v128::from32p(0xdeadbeef);
+                instruction(0x0f, channel, 3); // RCHCNT
+                for (unsigned lane = 0; lane < 3; ++lane)
+                    if (spu->gpr[3]._u32[lane])
+                        throw std::runtime_error("P12 RCHCNT did not clear nonpreferred lanes");
+                return spu->gpr[3]._u32[3];
+            };
+            const auto write_channel = [&](u32 channel, u32 value)
+            {
+                // Host-provided operands; the actual WRCH handler performs all
+                // channel writes, including the MFC command and tag requests.
+                spu->gpr[2] = v128::from32r(value);
+                instruction(0x10d, channel, 2); // WRCH
+                if (spu->gpr[2]._u32[3] != value)
+                    throw std::runtime_error("P12 WRCH changed its source register");
+            };
+            const auto read_ready = [&](u32 channel) -> u32
+            {
+                if (count(channel) != 1)
+                    throw std::runtime_error("P12 RDCH guarded against an empty channel");
+                spu->gpr[4] = v128::from32p(0xdeadbeef);
+                instruction(0x0d, channel, 4); // RDCH
+                for (unsigned lane = 0; lane < 3; ++lane)
+                    if (spu->gpr[4]._u32[lane])
+                        throw std::runtime_error("P12 RDCH did not clear nonpreferred lanes");
+                return spu->gpr[4]._u32[3];
+            };
+            const auto completion = [&](u32 mask, u32 mode)
+            {
+                if (count(MFC_RdTagStat) != 0)
+                    throw std::runtime_error("P12 stale completion status before request");
+                write_channel(MFC_WrTagMask, mask);
+                if (read_ready(MFC_RdTagMask) != mask)
+                    throw std::runtime_error("P12 tag mask readback mismatch");
+                write_channel(MFC_WrTagUpdate, mode);
+                if (read_ready(MFC_RdTagStat) != mask)
+                    throw std::runtime_error("P12 completion mask mismatch");
+                if (count(MFC_RdTagStat) != 0)
+                    throw std::runtime_error("P12 tag status read did not consume result");
+            };
+            const auto submit = [&](const spu_mfc_cmd& command)
+            {
+                if (count(MFC_Cmd) != 16 || spu->mfc_size != 0)
+                    throw std::runtime_error("P12 MFC capacity mismatch before submission");
+                write_channel(MFC_LSA, command.lsa);
+                write_channel(MFC_EAH, command.eah);
+                write_channel(MFC_EAL, command.eal);
+                write_channel(MFC_Size, command.size);
+                write_channel(MFC_TagID, command.tag);
+                // Writing the command invokes the production process_mfc_cmd.
+                write_channel(MFC_Cmd, command.cmd);
+                if (spu->mfc_size || spu->mfc_fence || spu->mfc_barrier ||
+                    count(MFC_Cmd) != 16)
+                    throw std::runtime_error("P12 synchronous command did not complete");
+                const u32 mask = 1u << command.tag;
+                for (const u32 mode : {u32(MFC_TAG_UPDATE_IMMEDIATE), u32(MFC_TAG_UPDATE_ANY), u32(MFC_TAG_UPDATE_ALL)})
+                    completion(mask, mode);
+            };
+            completion(0, MFC_TAG_UPDATE_IMMEDIATE);
+            auto* guest = vm::_ptr<u8>(address);
+            auto* alias = reinterpret_cast<const u8*>(vm::g_sudo_addr + address);
+            struct Transfer { u16 size; u32 offset; u32 lsa; };
+            const std::array<Transfer, 8> transfers{{
+                {1, 3, 3}, {2, 6, 6}, {4, 12, 12}, {8, 24, 24},
+                {16, 0xff0, 0x1000}, {128, 0x3fc0, 0x2000},
+                {256, 0xff80, SPU_LS_SIZE - 256},
+                {16384, 0x3ff0, 0x8000},
+            }};
+            // Repeated passes also check that PUT range locks are released.
+            u32 transfer_index = 0;
+            for (u32 round = 0; round < 2; ++round)
+            {
+                for (const auto& transfer : transfers)
+                {
+                    if (transfer.offset + transfer.size > guest_size ||
+                        transfer.lsa + transfer.size > SPU_LS_SIZE)
+                        throw std::runtime_error("P12 DMA test span out of bounds");
+                    std::memset(guest, 0xa5, guest_size);
+                    std::memset(spu->ls, 0x5a, SPU_LS_SIZE);
+                    const auto pattern = [round](u32 index) -> u8
+                    {
+                        return static_cast<u8>((index * 37 + 11 + round * 53) & 255);
+                    };
+                    for (u32 i = 0; i < transfer.size; ++i)
+                        guest[transfer.offset + i] = pattern(i);
+                    spu_mfc_cmd command{};
+                    command.cmd = MFC_GET_CMD;
+                    constexpr std::array<u8, 3> tags{0, 7, 31};
+                    command.tag = tags[transfer_index++ % tags.size()];
+                    command.size = transfer.size;
+                    command.lsa = transfer.lsa;
+                    command.eal = address + transfer.offset;
+                    char message[180];
+                    std::snprintf(message, sizeof(message),
+                        "P12 BEFORE instruction DMA GET: round=%u size=%u EA=0x%08x LS=0x%05x",
+                        round + 1, unsigned(transfer.size), command.eal, command.lsa);
+                    ARMSX3StartupLog(message);
+                    submit(command);
+                    for (u32 i = 0; i < SPU_LS_SIZE; ++i)
+                    {
+                        const bool inside = i >= transfer.lsa && i < transfer.lsa + transfer.size;
+                        const u8 expected = inside ? pattern(i - transfer.lsa) : 0x5a;
+                        if (spu->ls[i] != expected)
+                            throw std::runtime_error("P12 GET data or local-store guard mismatch");
+                    }
+                    for (u32 i = 0; i < guest_size; ++i)
+                    {
+                        const bool inside = i >= transfer.offset && i < transfer.offset + transfer.size;
+                        const u8 expected = inside ? pattern(i - transfer.offset) : 0xa5;
+                        if (guest[i] != expected || alias[i] != expected)
+                            throw std::runtime_error("P12 GET changed guest source or alias");
+                    }
+                    for (u32 i = 0; i < transfer.size; ++i)
+                        spu->ls[transfer.lsa + i] = pattern(i) ^ 0xff;
+                    command.cmd = MFC_PUT_CMD;
+                    ARMSX3StartupLog("P12 BEFORE instruction DMA PUT of transformed local-store data");
+                    submit(command);
+                    for (u32 i = 0; i < guest_size; ++i)
+                    {
+                        const bool inside = i >= transfer.offset && i < transfer.offset + transfer.size;
+                        const u8 expected = inside ? (pattern(i - transfer.offset) ^ 0xff) : 0xa5;
+                        if (guest[i] != expected || alias[i] != expected)
+                            throw std::runtime_error("P12 PUT data, guest guard or alias mismatch");
+                    }
+                    for (const s64 mirror : {-2ll, -1ll, 0ll, 1ll, 2ll})
+                    {
+                        const auto* view = spu->ls + mirror * SPU_LS_SIZE;
+                        for (u32 i = 0; i < SPU_LS_SIZE; ++i)
+                        {
+                            const bool inside = i >= transfer.lsa && i < transfer.lsa + transfer.size;
+                            const u8 expected = inside ? (pattern(i - transfer.lsa) ^ 0xff) : 0x5a;
+                            if (view[i] != expected)
+                                throw std::runtime_error("P12 PUT changed local store or shared mirror");
+                        }
+                    }
+                    if (spu->range_lock->load() != 0)
+                        throw std::runtime_error("P12 PUT left a guest range lock held");
+                    std::snprintf(message, sizeof(message),
+                        "P12 PASS: round=%u size=%u WRCH/RDCH/RCHCNT GET/PUT, all completion modes, guards, aliases and lock release",
+                        round + 1, unsigned(transfer.size));
+                    ARMSX3StartupLog(message);
+                }
+            }
+            completion((1u << 0) | (1u << 7) | (1u << 31), MFC_TAG_UPDATE_ALL);
+            char summary[160];
+            std::snprintf(summary, sizeof(summary), "P12 PASS: executed %u real SPU channel instructions for 32 DMA transfers", executed);
+            ARMSX3StartupLog(summary);
+        }
+        ARMSX3StartupLog("P12 AFTER private SPU cleanup; BEFORE guest deallocation");
+        if (vm::dealloc(address, vm::main) != guest_size)
+            throw std::runtime_error("P12 guest deallocation size mismatch");
+        if (vm::check_addr(address))
+            throw std::runtime_error("P12 guest region still accessible after deallocation");
+        vm::close();
+        initialized = false;
+        ARMSX3StartupLog("P12 PASS: SPU WRCH/RDCH/RCHCNT, 32 DMA transfers, completion and cleanup; scheduling and game boot remain untested");
+        return 0;
+    }
+    catch (const std::exception& error)
+    {
+        ARMSX3StartupLog(error.what());
+        if (initialized) vm::close();
+        return -1;
+    }
+}
+
