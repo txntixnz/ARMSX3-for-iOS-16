@@ -661,3 +661,44 @@ and notified empty exit. This checks queue-wait algorithm, not full iOS atomic
 backend. Automated catalog15 stages/exports verified; whitespace check passes.
 Apple build and device persistent-CPU wait/wake remain pending user results.
 Next: P16 device report, then bounded normal guest dispatch/scheduler work.
+
+## Build 27: normal PPU fetch/cache dispatcher with diagnostic bounds
+
+Device startup(20261009-183734).log pid87211 confirms P16 all32 batches,
+192 instructions on one persistent PPU worker, notifications/waits/guards/
+aliases and cleanup pass. Final AUTO PASS confirms all15 stages completed.
+
+P17 adds actual ppu_thread::exec_task static-interpreter guest fetch/cache
+path on real named_thread<ppu_thread>. Commit RW handler-pointer cache for
+the diagnostic64KiB guest allocation (128KiB cache), populate18 decoded
+instruction pointers, and fetch from guest memory at CIA. Reuses P7 program:
+CTR loops1/10/64, comparisons, branches, bl/blr, guest store/reload. Expected
+13/31/139 instructions, result6/15/69, CTR0 and LR at instruction7.
+These are now dispatched by exec_task rather than the bridge's own loop.
+
+Patch0016 adds iOS-only thread-local diagnostic range/budget scope invoked
+through armsx3_ios_ppu_exec_bounded. Normal execution leaves scope null.
+Diagnostic mode uses existing ppu_ret single-step boundary so each fetch is
+range-checked and counted before handler invocation. Program end returns
+count; invalid CIA -1; exhausted budget -2; early stop -3; bad input/mode -4.
+Two negative cases test eight-step exhaustion in64-iteration loop and initial
+CIA above end, verifying no output memory writes. TLS probe scope restores
+on all exits, including nested scopes. Host deadline2s per real worker.
+Normal context still bypasses LV2 admission and enters via queued ptr_call;
+no fast_call/firmware/syscalls/autonomous loader/full LV2 scheduler claimed.
+
+Port fix: exec_task previously called apple_jit_write_protect unconditionally.
+On this iPhone pthread_jit_write_protect_np is absent and shim aborts. The
+call now belongs only inside non-static (native-JIT gateway) branch. Static
+interpreter uses already-published handler code and needs no such API.
+Native-JIT protection failure check remains intact; no mutable JIT enabled.
+Handler cache is data RW, not RWX native code. VM close decommits it.
+
+P17 automatically stage16 in Run all tests; CFBundleVersion27. Artifact
+unchanged ARMSX3_iOS16_INSTALL_THIS_IPA. Exact bridge compiles against pinned
+headers GCC C++23. Patch16 applies cleanly after15. Exact patched exec_task
+and bounded helper host harness with mock handlers validates fetch/end/
+range/budget/stop/input guards, TLS scope restoration and static/native-JIT
+protection routing. This host check does not run actual PPU instruction
+handlers; those need Apple CI/device integration. Whitespace passed.
+Next: device P17, then guest loading/admission and fuller execution path.

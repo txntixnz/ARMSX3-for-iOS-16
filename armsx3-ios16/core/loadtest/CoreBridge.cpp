@@ -25,6 +25,7 @@
 #include <utility>
 #include "Utilities/Thread.h"
 #include "Utilities/sync.h"
+#include "util/vm.hpp"
 #include <chrono>
 #include <cerrno>
 // Read-only state inspection after dyld has run the real core constructors.
@@ -1906,6 +1907,135 @@ extern "C" __attribute__((visibility("default"))) int armsx3_core_test_ppu_queue
             throw std::runtime_error("P16 guest deallocation failed");
         vm::close(); initialized = false;
         ARMSX3StartupLog("P16 PASS: one persistent PPU worker, 32 notified batches, 192 instructions and cleanup; full LV2 scheduling and game boot remain untested");
+        return 0;
+    }
+    catch (const std::exception& error)
+    {
+        ARMSX3StartupLog(error.what());
+        if (initialized) vm::close();
+        return -1;
+    }
+}
+
+
+extern "C" int armsx3_ios_ppu_exec_bounded(ppu_thread*, u32, u32, u32);
+extern "C" __attribute__((visibility("default"))) int armsx3_core_test_ppu_dispatch()
+{
+    ARMSX3StartupLog("P17 BEFORE bounded normal PPU interpreter dispatch");
+    bool initialized = false;
+    try
+    {
+        if (!Emu.IsStopped()) throw std::runtime_error("P17 requires stopped emulator");
+        struct Configuration
+        {
+            bool ppu = g_cfg.core.ppu_prof.get(), spu = g_cfg.core.spu_prof.get(), debug = g_cfg.core.spu_debug.get();
+            thread_scheduler_mode scheduler = g_cfg.core.thread_scheduler.get();
+            ppu_decoder_type decoder = g_cfg.core.ppu_decoder.get();
+            Configuration() { g_cfg.core.ppu_prof.set(false); g_cfg.core.spu_prof.set(false);
+                g_cfg.core.spu_debug.set(false); g_cfg.core.thread_scheduler.set(thread_scheduler_mode::os);
+                g_cfg.core.ppu_decoder.set(ppu_decoder_type::_static); }
+            ~Configuration() { g_cfg.core.ppu_prof.set(ppu); g_cfg.core.spu_prof.set(spu);
+                g_cfg.core.spu_debug.set(debug); g_cfg.core.thread_scheduler.set(scheduler);
+                g_cfg.core.ppu_decoder.set(decoder); }
+        } configuration;
+        vm::init(); initialized = true;
+        if (!vm::reserve_map(vm::main, 0x10000, 0x20000))
+            throw std::runtime_error("P17 main memory block unavailable");
+        const u32 address = vm::alloc(0x10000, vm::main, 0x10000);
+        if (!address) throw std::runtime_error("P17 guest allocation failed");
+        auto interpreter = std::make_unique<ppu_interpreter_rt>();
+        // This core cache stores handler pointers, not executable native machine code.
+        // Commit only the diagnostic allocation's corresponding cache region.
+        utils::memory_commit(vm::g_exec_addr + u64(address) * 2, 0x20000, utils::protection::rw);
+        auto* cache = reinterpret_cast<ppu_intrp_func*>(vm::g_exec_addr + u64(address) * 2);
+        struct Program { u32 begin, end, budget; int result = -99; bool tls = false;
+            std::atomic<bool> completed{false}; };
+        using namespace ppu_instructions;
+        using namespace ppu_instructions::implicts;
+        for (u32 test = 0; test < 5; ++test)
+        {
+            const u32 count = test == 0 ? 1 : test == 1 ? 10 : 64;
+            const std::array<u32, 18> instructions{
+                LI(3, 0), MTCTR(4), ADDI(3, 3, 1), BC(16, 0, -4),
+                CMPWI(3, count), BNE(40), B(24, false, true),
+                STW(3, 6, 0), LWZ(7, 6, 0), CMPWI(7, count + 5), BEQ(32), B(16),
+                ADDI(3, 3, 5), BLR(), LI(12, 0xdead), LI(12, 0xbad), B(8), NOP()
+            };
+            auto* code = reinterpret_cast<be_t<u32>*>(vm::base(address));
+            for (u32 i = 0; i < instructions.size(); ++i)
+            {
+                code[i] = instructions[i];
+                cache[i].fn = interpreter->decode(instructions[i]);
+                if (!cache[i].fn) throw std::runtime_error("P17 interpreter cache decode failed");
+            }
+            code[instructions.size()] = 0;
+            auto* output = static_cast<u8*>(vm::base(address + 0x100));
+            std::memset(output - 16, 0xa5, 36);
+            Program program{address, address + u32(instructions.size()) * 4, test == 3 ? 8u : 512u};
+            const auto created = cpu_thread::g_threads_created.load();
+            const auto deleted = cpu_thread::g_threads_deleted.load();
+            const u64 live = armsx3_ios_live_cpu_threads();
+            {
+                std::unique_ptr<named_thread<ppu_thread>> worker;
+                {
+                    struct ConstructionID { u32 previous = id_manager::g_id;
+                        ConstructionID() { id_manager::g_id = ppu_thread::id_base; }
+                        ~ConstructionID() { id_manager::g_id = previous; } } construction_id;
+                    const ppu_thread_params params{static_cast<vm::addr_t>(address + 0x1000), 0x8000, 0, {}, 0, 0};
+                    worker = std::make_unique<named_thread<ppu_thread>>(stx::launch_retainer{}, params, "iOS normal PPU dispatch", 1000);
+                }
+                struct StopWorker { named_thread<ppu_thread>& worker;
+                    ~StopWorker() { worker.state += cpu_flag::exit; worker.state.notify_one();
+                        worker.cmd_notify.store(1); worker.cmd_notify.notify_one(); } } stop{*worker};
+                const ppu_intrp_func_t execute = +[](ppu_thread& context, ppu_opcode_t, be_t<u32>*, ppu_intrp_func*) {
+                    auto& program = *reinterpret_cast<Program*>(context.gpr[30]);
+                    program.tls = get_current_cpu_thread() == &context && thread_ctrl::get_current() != nullptr;
+                    program.result = armsx3_ios_ppu_exec_bounded(&context, program.begin, program.end, program.budget);
+                    context.state += cpu_flag::exit;
+                    program.completed.store(true, std::memory_order_release);
+                };
+                worker->cmd_list({{ppu_cmd::ptr_call, 0}, std::bit_cast<u64>(execute)});
+                worker->gpr[4] = count; worker->gpr[6] = address + 0x100;
+                worker->gpr[12] = 0; worker->gpr[30] = u64(reinterpret_cast<uintptr_t>(&program));
+                worker->ctr = 0; worker->lr = 0;
+                worker->cia = test == 4 ? program.end + 4 : address;
+                worker->state -= cpu_flag::stop + cpu_flag::exit + cpu_flag::suspend + cpu_flag::memory + cpu_flag::wait;
+                ARMSX3StartupLog("P17 BEFORE actual exec_task guest fetch/cache dispatch on PPU worker");
+                *worker = thread_state::created;
+                const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+                while (!program.completed.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline)
+                    std::this_thread::yield();
+                if (!program.completed.load(std::memory_order_acquire))
+                    throw std::runtime_error("P17 normal PPU dispatch deadline exceeded");
+                (*worker)();
+                if (!program.tls) throw std::runtime_error("P17 CPU TLS mismatch");
+                if (test < 3)
+                {
+                    if (program.result != int(count * 2 + 11) || worker->gpr[3] != count + 5 ||
+                        worker->gpr[7] != count + 5 || worker->gpr[12] != 0 || worker->ctr != 0 ||
+                        worker->lr != address + 7 * 4 || worker->cia != program.end)
+                        throw std::runtime_error("P17 normal dispatch branch/return/result mismatch");
+                }
+                else if (program.result != (test == 3 ? -2 : -1))
+                    throw std::runtime_error("P17 budget or range guard did not stop dispatch");
+            }
+            for (int i = -16; i < 20; ++i)
+            {
+                const u8 expected = test < 3 && i >= 0 && i < 4 ? u8((count + 5) >> (24 - i * 8)) : 0xa5;
+                if (output[i] != expected || static_cast<const u8*>(vm::get_super_ptr(address + 0x100))[i] != expected)
+                    throw std::runtime_error("P17 guest store, alias or guard mismatch");
+            }
+            if (armsx3_ios_live_cpu_threads() != live || cpu_thread::g_threads_created.load() != created + 1 ||
+                cpu_thread::g_threads_deleted.load() != deleted + 1)
+                throw std::runtime_error("P17 CPU lifecycle counters did not balance");
+            char message[180];
+            std::snprintf(message, sizeof(message), "P17 PASS: case=%u loop=%u dispatch_result=%d normal core fetch/cache, range/budget guard and cleanup", test + 1, count, program.result);
+            ARMSX3StartupLog(message);
+        }
+        if (vm::dealloc(address, vm::main) != 0x10000 || vm::check_addr(address))
+            throw std::runtime_error("P17 guest deallocation failed");
+        vm::close(); initialized = false;
+        ARMSX3StartupLog("P17 PASS: normal static interpreter exec_task, branches/call/return, budget/range guards and cleanup; full LV2 scheduling and game boot remain untested");
         return 0;
     }
     catch (const std::exception& error)

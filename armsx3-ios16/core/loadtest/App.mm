@@ -21,6 +21,7 @@ static constexpr DiagnosticStage stages[] = {
     {14, "Stopped PPU thread lifecycle", "armsx3_core_test_ppu_lifecycle"},
     {15, "PPU worker instructions", "armsx3_core_test_ppu_worker_instructions"},
     {16, "Persistent PPU queue wait/wake", "armsx3_core_test_ppu_queue_wake"},
+    {17, "PPU guest fetch and dispatch", "armsx3_core_test_ppu_dispatch"},
 };
 static constexpr NSUInteger stageCount = sizeof(stages) / sizeof(stages[0]);
 static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";

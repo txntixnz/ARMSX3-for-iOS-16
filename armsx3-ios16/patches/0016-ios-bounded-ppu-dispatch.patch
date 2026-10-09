@@ -1,0 +1,78 @@
+--- a/rpcs3/Emu/Cell/PPUThread.cpp
++++ b/rpcs3/Emu/Cell/PPUThread.cpp
+@@ -35,6 +35,9 @@
+ #if TARGET_OS_IPHONE
+ static atomic_t<u64> s_ios_ppu_command_waits{0};
+ extern "C" u64 armsx3_ios_ppu_command_waits() { return s_ios_ppu_command_waits.load(); }
++// Diagnostic-only range/budget boundary; normal execution leaves this null.
++struct ios_ppu_dispatch_probe { u32 begin, end, budget, steps = 0; int result = -3; };
++static thread_local ios_ppu_dispatch_probe* s_ios_ppu_dispatch_probe = nullptr;
+ #endif
+ #endif
+ 
+@@ -3126,13 +3129,12 @@
+ 
+ void ppu_thread::exec_task()
+ {
++	if (g_cfg.core.ppu_decoder != ppu_decoder_type::_static)
++	{
+ #ifdef __APPLE__
+-	// Ensure correct state before executing JIT code
+-	utils::apple_jit_write_protect(true);
++		// Static interpreter dispatch does not execute generated native code.
++		utils::apple_jit_write_protect(true);
+ #endif
+-
+-	if (g_cfg.core.ppu_decoder != ppu_decoder_type::_static)
+-	{
+ 		// HVContext push to allow recursion. This happens with guest callback invocations.
+ 		const auto old_hv_ctx = hv_ctx;
+ 
+@@ -3157,6 +3159,15 @@
+ 
+ 	while (true)
+ 	{
++#if defined(__APPLE__) && TARGET_OS_IPHONE
++		if (auto* probe = s_ios_ppu_dispatch_probe)
++		{
++			if (cia == probe->end) { probe->result = static_cast<int>(probe->steps); return; }
++			if (cia < probe->begin || cia >= probe->end || cia % 4) { probe->result = -1; return; }
++			if (probe->steps == probe->budget) { probe->result = -2; return; }
++			probe->steps++;
++		}
++#endif
+ 		if (test_stopped()) [[unlikely]]
+ 		{
+ 			return;
+@@ -3167,9 +3178,28 @@
+ 		// Execute instruction (may be step; execute only one instruction if state)
+ 		const auto op = reinterpret_cast<be_t<u32>*>(mem_ + u64{cia});
+ 		const auto fn = reinterpret_cast<ppu_intrp_func*>(cache + u64{cia} * 2);
+-		fn->fn(*this, {*op}, op, state ? &ppu_ret : fn + 1);
+-	}
+-}
++		auto* next = state ? &ppu_ret : fn + 1;
++#if defined(__APPLE__) && TARGET_OS_IPHONE
++		// Use the existing core step boundary so every fetch remains budgeted.
++		if (s_ios_ppu_dispatch_probe) next = &ppu_ret;
++#endif
++		fn->fn(*this, {*op}, op, next);
++	}
++}
++
++#if defined(__APPLE__) && TARGET_OS_IPHONE
++extern "C" int armsx3_ios_ppu_exec_bounded(ppu_thread* context, u32 begin, u32 end, u32 budget)
++{
++	if (!context || begin >= end || begin % 4 || end % 4 || !budget || budget > 4096 ||
++		g_cfg.core.ppu_decoder != ppu_decoder_type::_static) return -4;
++	ios_ppu_dispatch_probe probe{begin, end, budget};
++	struct Restore { ios_ppu_dispatch_probe* previous = s_ios_ppu_dispatch_probe;
++		~Restore() { s_ios_ppu_dispatch_probe = previous; } } restore;
++	s_ios_ppu_dispatch_probe = &probe;
++	context->exec_task();
++	return probe.result;
++}
++#endif
+ 
+ ppu_thread::~ppu_thread()
+ {
