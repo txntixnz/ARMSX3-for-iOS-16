@@ -5,8 +5,12 @@
 #include "Utilities/File.h"
 #include "Emu/system_config_types.h"
 #include "Emu/Memory/vm.h"
+#include "Emu/Memory/vm_locking.h"
 #include "Emu/Cell/PPUThread.h"
 #include "Emu/Cell/PPUInterpreter.h"
+#include "Emu/Cell/SPUThread.h"
+#include "Emu/Cell/SPUInterpreter.h"
+#include "Emu/system_config.h"
 #include "Emu/IdManager.h"
 #include <array>
 #include <cstdio>
@@ -427,6 +431,125 @@ extern "C" __attribute__((visibility("default"))) int armsx3_core_test_ppu_contr
         vm::close();
         initialized = false;
         ARMSX3StartupLog("P7 PASS: core PPU loops, conditional branches, call/return and cleanup; no game boot tested");
+        return 0;
+    }
+    catch (const std::exception& error)
+    {
+        ARMSX3StartupLog(error.what());
+        if (initialized) vm::close();
+        return -1;
+    }
+}
+
+
+extern "C" __attribute__((visibility("default"))) int armsx3_core_test_spu_instructions()
+{
+    ARMSX3StartupLog("P8 BEFORE guest VM setup for SPU instructions");
+    bool initialized = false;
+    try
+    {
+        vm::init();
+        initialized = true;
+        {
+            struct ContextDeleter
+            {
+                void operator()(spu_thread* context) const
+                {
+                    // cleanup() assumes a production named_thread and an LV2
+                    // local-store allocation; neither exists in this private probe.
+                    vm::free_range_lock(context->range_lock);
+                    delete context; // unmaps all LS mirrors and releases reservation
+                    cpu_thread::g_threads_deleted++;
+                }
+            };
+            std::unique_ptr<spu_thread, ContextDeleter> spu;
+            {
+                struct ConstructionSettings
+                {
+                    u32 previous_id = id_manager::g_id;
+                    spu_decoder_type previous_decoder = g_cfg.core.spu_decoder.get();
+                    ConstructionSettings()
+                    {
+                        id_manager::g_id = spu_thread::id_base;
+                        g_cfg.core.spu_decoder.set(spu_decoder_type::_static);
+                    }
+                    ~ConstructionSettings()
+                    {
+                        g_cfg.core.spu_decoder.set(previous_decoder);
+                        id_manager::g_id = previous_id;
+                    }
+                } settings;
+                ARMSX3StartupLog("P8 BEFORE private SPU context construction; interpreter selected");
+                spu.reset(new spu_thread(nullptr, 0, "iOS SPU instruction probe", 0));
+            }
+            ARMSX3StartupLog("P8 AFTER SPU context; BEFORE local-store mirror mappings");
+            spu_thread::map_ls(*spu->shm, spu->ls);
+            ARMSX3StartupLog("P8 AFTER 256 KiB SPU local store and five shared views mapped");
+            auto interpreter = std::make_unique<spu_interpreter_rt>();
+            const auto il = [](u32 reg, s32 value)
+            {
+                spu_opcode_t op{0x81u << 23};
+                op.rt = reg;
+                op.si16 = value;
+                return op.opcode;
+            };
+            const auto ri10 = [](u32 primary, u32 target, u32 base, s32 immediate)
+            {
+                spu_opcode_t op{primary << 24};
+                op.rt = target;
+                op.ra = base;
+                op.si10 = immediate;
+                return op.opcode;
+            };
+            spu_opcode_t add{0xc0u << 21};
+            add.rt = 4;
+            add.ra = 2;
+            add.rb = 3;
+            const std::array<u32, 8> program{
+                il(2, 42), il(3, -7), add.opcode,
+                ri10(0x1c, 5, 4, -3),       // AI -> four lanes of 32
+                il(6, 0x100),
+                ri10(0x24, 5, 6, 0),        // STQD to local store
+                ri10(0x34, 7, 6, 0),        // LQD from local store
+                ri10(0x44, 8, 7, -1),       // XORI -> four lanes of ~32
+            };
+            auto* code = spu->_ptr<u32>(0);
+            for (std::size_t index = 0; index < program.size(); ++index)
+                code[index] = program[index];
+            ARMSX3StartupLog("P8 BEFORE executing eight real SPU instructions via core interpreter");
+            spu->pc = 0;
+            for (std::size_t index = 0; index < program.size(); ++index)
+            {
+                const u32 opcode = code[index];
+                const auto handler = interpreter->decode(opcode);
+                if (!handler || !handler(*spu, {opcode}))
+                    throw std::runtime_error("P8 SPU instruction did not complete");
+                spu->pc += 4;
+            }
+            ARMSX3StartupLog("P8 AFTER SPU instruction sequence returned");
+            for (unsigned lane = 0; lane < 4; ++lane)
+            {
+                if (spu->gpr[2]._u32[lane] != 42 || spu->gpr[3]._u32[lane] != 0xfffffff9u ||
+                    spu->gpr[4]._u32[lane] != 35 || spu->gpr[5]._u32[lane] != 32 ||
+                    spu->gpr[7]._u32[lane] != 32 || spu->gpr[8]._u32[lane] != 0xffffffdfu)
+                    throw std::runtime_error("P8 SPU SIMD lane result mismatch");
+                const auto* data = spu->ls + 0x100 + lane * 4;
+                if (data[0] || data[1] || data[2] || data[3] != 32)
+                    throw std::runtime_error("P8 big-endian SPU quadword store mismatch");
+            }
+            // Exercise the real mirror mappings at the end of local storage.
+            spu->_ref<u32>(SPU_LS_SIZE - 16) = 0x12345678;
+            for (const s64 mirror : {-2ll, -1ll, 0ll, 1ll, 2ll})
+            {
+                const auto* word = reinterpret_cast<const be_t<u32>*>(spu->ls + mirror * SPU_LS_SIZE + SPU_LS_SIZE - 16);
+                if (*word != 0x12345678) throw std::runtime_error("P8 SPU local-store mirror mismatch");
+            }
+            ARMSX3StartupLog("P8 PASS: eight SPU instructions, four SIMD lanes, big-endian local-store data and five mirrors");
+        }
+        ARMSX3StartupLog("P8 AFTER private SPU cleanup; BEFORE vm::close");
+        vm::close();
+        initialized = false;
+        ARMSX3StartupLog("P8 PASS: SPU instructions, local memory and cleanup completed; no game boot tested");
         return 0;
     }
     catch (const std::exception& error)

@@ -12,6 +12,7 @@
 @property(nonatomic,strong) UIButton* memoryButton;
 @property(nonatomic,strong) UIButton* cpuButton;
 @property(nonatomic,strong) UIButton* flowButton;
+@property(nonatomic,strong) UIButton* spuButton;
 @property(nonatomic,assign) void* coreHandle;
 @end
 @implementation LoadController
@@ -58,6 +59,11 @@
     self.flowButton.enabled = NO;
     [self.flowButton addTarget:self action:@selector(testFlow) forControlEvents:UIControlEventTouchUpInside];
     [stack addArrangedSubview:self.flowButton];
+    self.spuButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    [self.spuButton setTitle:@"Test PS3 SPU instructions" forState:UIControlStateNormal];
+    self.spuButton.enabled = NO;
+    [self.spuButton addTarget:self action:@selector(testSPU) forControlEvents:UIControlEventTouchUpInside];
+    [stack addArrangedSubview:self.spuButton];
     UIButton* share = [UIButton buttonWithType:UIButtonTypeSystem];
     [share setTitle:@"Share startup log" forState:UIControlStateNormal];
     [share addTarget:self action:@selector(shareLog) forControlEvents:UIControlEventTouchUpInside];
@@ -195,9 +201,29 @@
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         const int result = test();
         dispatch_async(dispatch_get_main_queue(), ^{
+            self.spuButton.enabled = result == 0;
             self.output.text = result == 0
-                ? @"PASS: core PPU loops, branches, calls, returns and memory results.\n\nShare the startup log. Game boot is still pending."
+                ? @"PASS: core PPU loops, branches, calls, returns and memory results.\n\nTap Test PS3 SPU instructions next."
                 : [NSString stringWithFormat:@"PPU control-flow test failed (%d). Share the startup log.", result];
+        });
+    });
+}
+- (void)testSPU {
+    self.spuButton.enabled = NO;
+    auto test = reinterpret_cast<int (*)()>(dlsym(self.coreHandle, "armsx3_core_test_spu_instructions"));
+    if (!test) {
+        ARMSX3StartupLog("P8 missing SPU instruction test export");
+        self.output.text = @"SPU test export missing. Share the log.";
+        return;
+    }
+    self.output.text = @"Testing PS3 SPU instructions and local memory…";
+    ARMSX3StartupLog("P8 user requested SPU instruction test; worker pending");
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        const int result = test();
+        dispatch_async(dispatch_get_main_queue(), ^{
+            self.output.text = result == 0
+                ? @"PASS: SPU SIMD instructions, local memory and cleanup.\n\nShare the startup log. Game boot is still pending."
+                : [NSString stringWithFormat:@"SPU test failed (%d). Share the startup log.", result];
         });
     });
 }

@@ -317,3 +317,31 @@ and BCLR lambda bodies from pinned interpreter with logging/history hooks
 stubbed and simple arithmetic/memory/compare model; all three expected
 control-flow traces passed. The host harness is not full core execution;
 actual handlers and memory behavior are checked on iPhone by P7 next.
+
+
+## Build 16: P7 device pass; P8 SPU SIMD and local-store probe
+
+ARMSX3-startup(2).log pid 81732 confirms all three P7 runs: loop counts
+1/10/64, executed 13/31/139, results 6/15/69, CTR zero, LR/return correct,
+conditional branches and cleanup all passed on iPhone14,3 / iOS 16.0.
+
+Build 16 adds Test PS3 SPU instructions after P7. A private raw-style
+spu_thread state (no registry or named_thread) uses a valid construction ID.
+SPU decoder setting is temporarily _static during construction and restored
+through RAII. It allocates the real 256 KiB shared local store and maps the
+five real mirrored views through spu_thread::map_ls. The actual core
+spu_interpreter_rt decodes/executes IL, IL, A, AI, IL, STQD, LQD, XORI.
+Checks each of four SIMD lanes (42, -7, 35, 32, reload 32, ~32), exact
+big-endian quadword bytes, and a marker near the end of LS through all five
+mirrors. Deleter frees the VM range lock, invokes the real destructor to
+unmap local-store mirrors/release reservation, and balances the direct
+context CPU lifecycle counter. It never calls production cleanup(), which
+requires a named_thread/LV2 mapping; VM closes after the context is gone.
+
+Local compile of all three CPU probes against real headers passed; nm
+found no raw PPU/SPU savestate registry initializers. Host probe used the
+actual SPU decoder and eight actual instruction handler bodies, with a
+simple in-memory local-store context and SSE gv_add32 helper stub; four
+SIMD lane checks and byte-order checks passed. This does not validate the
+Apple SIMD backend or Mach/iOS mappings; those are pending P8 device test.
+No SPU codegen, DMA/channel, scheduler, firmware or game boot is tested.
