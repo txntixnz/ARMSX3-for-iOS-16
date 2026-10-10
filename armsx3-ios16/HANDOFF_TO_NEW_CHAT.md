@@ -1377,3 +1377,16 @@ share the new .txt log). P31 and the sharing controls await device validation.
 Global process setup, TLS initialization, firmware/LV2/RSX/game boot remain
 untested. No commercial PS3 game has booted.
 
+
+## Build44 / Objective-C ARC log-button compile repair — 2026-10-10
+
+User reported build43 Actions failure. Run38080667626/job114296742293
+shows successful patch application, emulator archive compilation and full
+ARMSX3Core.dylib link. The only compiler error is App.mm:52: property follows
+Cocoa naming convention for returning owned objects: copyButton. Rename the
+property and all six references to resultsCopyButton so the implicit getter
+is outside the copy method family. The Copy results button/action and .txt
+export behavior remain as implemented. Bundle44. Local property-family audit
+and plist validation PASS; Xcode/UIKit recompilation still requires Actions.
+No P31/core/patch or log selection logic changed. User will report Actions
+completion; do not monitor. After success install the IPA and run30 tests.
