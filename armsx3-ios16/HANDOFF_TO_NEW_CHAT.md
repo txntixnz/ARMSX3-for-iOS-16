@@ -829,3 +829,62 @@ static false-return semantics. Does not exercise full production module
 initialization or real PPU handlers on host; Apple CI/device pending.
 Catalog,exports,whitespace checks PASS. Next: P20 device report, fuller
 loader/process initialization and admission.
+
+
+## Build 31: actual fast_call, guest stack frame and HLE return
+
+Device startup(20261010-091005).log pid94257 confirms P20 analyser finds
+one entry function/block, production ppu_initialize prepares seven handlers,
+loaded execution/return and cleanup PASS. Final AUTO PASS all19 stages.
+Older startup(20261010-083732).log was previous installed P19, all18 PASS;
+correct build30 artifact link provided, later device result above is P20.
+
+P21 extends trusted ELF fixture to14 guest instructions plus readable
+padding (60-byte code segment, bounded analysis end=code+56). Guest saves
+LR in a128-byte stack frame with MFLR/STDU/STD, copies callee TOC into r9,
+executes arithmetic/store/reload/OR, reloads saved LR with LD, restores SP,
+MTLR/BLR. Actual analyser on loaded ELF segments and OPD discovers entry;
+normal static module initialization prepares all14 handlers as in P20.
+
+Core function manager is targeted-initialized if absent, requires addr0,
+and temporarily points to private guest address+0x800. Only actual index1
+HLE RETURN handler is registered at address+0x80c, with normal fake OPD
+at address+0x808. This is not full HLE module/dispatch table initialization.
+Scoped manager address restores to its previous0 on all exits and explicitly
+before VM teardown; initialized core object retained until normal reset.
+
+Patch0018 extends iOS TLS diagnostic probe with optional return_addr;
+existing exec_bounded defaults0 retain end/range/budget semantics including
+CIA0 rejection outside range. Call probe admits only its executable interval
+and exactly one HLE stop slot. Recognizes completion only when actual HLE
+handler sets RET and CIA=stop+4; bare fallthrough to code end is failure.
+New armsx3_ios_ppu_call_bounded validates static mode, active function
+manager/stop address, nonzero caller CIA, no pending RET/savestate, disjoint
+aligned ranges and budget. Calls actual context.fast_call(begin, calleeTOC),
+then verifies restored caller CIA/TOC/LR/function/log-prefix and cleared RET.
+Normal fast_call code is unchanged; normal dispatch has null diagnostic TLS.
+No native JIT or autonomous scheduler introduced.
+
+Expected14 guest instructions +1 actual HLE RETURN handler =15 dispatch
+steps. Bridge seeds distinct caller CIA/TOC/LR and SP=address+0x8000, checks
+result35/0x123, guest r9=ELF TOC, restored caller registers and stack pointer.
+Whole64KiB guest/privileged alias comparison includes exactly stack backchain
+and saved return address, fake OPD and output store; no outside writes or
+cache mutations except explicit stop handler. Named CPU counters balanced,
+manager addr reset, segment cache decommitted and VM closed. Still private
+CPU admission, diagnostic mapper/stop-slot setup, no full ppu_load_exec,
+firmware/syscalls/external imports/game boot. interrupt_thread_executing
+follows normal fast_call semantics; no claim it is restored by the core.
+
+Automatic stage20, CFBundleVersion31. Patch0018 applies after0017. Exact
+bridge compiles GNU C++23 with pinned headers. Host actual analyser with
+new fixture finds entry0x10100,size56,one block,TOC0x10400 and covers14
+instructions (same limited logging/formatting stubs as P20). Exact real
+fast_call/exec_task and both bounded helpers host harness with mocked CPU,
+flags, VM and instruction/HLE handlers verifies normal HLE return, budgets1/
+2/3/64, invalid range, fallthrough rejection, caller context restoration,
+nested TLS and prior zero-CIA guard. Mock flags implement bitset add/remove
+like core, not integer subtraction. This does not execute actual PPU guest
+handlers or iOS VM stack writes; Apple CI/device integration pending.
+Catalog,exports,selected whitespace PASS. Next: P21 device report then
+broader loader/process admission and syscall integration.

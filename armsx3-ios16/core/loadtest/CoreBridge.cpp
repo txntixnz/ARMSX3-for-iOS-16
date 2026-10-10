@@ -28,6 +28,7 @@
 #include "util/vm.hpp"
 #include "Loader/ELF.h"
 #include "Emu/Cell/PPUAnalyser.h"
+#include "Emu/Cell/PPUFunction.h"
 #include "Emu/Cell/lv2/sys_sync.h"
 #include <chrono>
 #include <cerrno>
@@ -2642,6 +2643,256 @@ extern "C" __attribute__((visibility("default"))) int armsx3_core_test_analyzed_
             throw std::runtime_error("P20 guest deallocation failed");
         vm::close(); initialized = false;
         ARMSX3StartupLog("P20 PASS: core executable analysis, production static module preparation, seven loaded PPU instructions with return and cleanup; full executable loader/firmware/game boot remain untested");
+        return 0;
+    }
+    catch (const std::exception& error) { ARMSX3StartupLog(error.what()); if (initialized) vm::close(); return -1; }
+}
+
+extern "C" int armsx3_ios_ppu_call_bounded(ppu_thread*, u32, u32, u64, u32, u32);
+extern "C" __attribute__((visibility("default"))) int armsx3_core_test_elf_call()
+{
+    ARMSX3StartupLog("P21 BEFORE core ELF reader, segment mapping and PPU execution");
+    bool initialized = false;
+    try
+    {
+        if (!Emu.IsStopped()) throw std::runtime_error("P21 requires stopped emulator");
+        struct Configuration
+        {
+            bool debugPPU = g_cfg.core.ppu_debug.get();
+            bool ppu = g_cfg.core.ppu_prof.get(), spu = g_cfg.core.spu_prof.get(), debug = g_cfg.core.spu_debug.get();
+            thread_scheduler_mode scheduler = g_cfg.core.thread_scheduler.get();
+            ppu_decoder_type decoder = g_cfg.core.ppu_decoder.get();
+            Configuration() { g_cfg.core.ppu_debug.set(false); g_cfg.core.ppu_prof.set(false); g_cfg.core.spu_prof.set(false);
+                g_cfg.core.spu_debug.set(false); g_cfg.core.thread_scheduler.set(thread_scheduler_mode::os);
+                g_cfg.core.ppu_decoder.set(ppu_decoder_type::_static); }
+            ~Configuration() { g_cfg.core.ppu_debug.set(debugPPU); g_cfg.core.ppu_prof.set(ppu); g_cfg.core.spu_prof.set(spu);
+                g_cfg.core.spu_debug.set(debug); g_cfg.core.thread_scheduler.set(scheduler);
+                g_cfg.core.ppu_decoder.set(decoder); }
+        } configuration;
+        vm::init(); initialized = true;
+        if (!vm::reserve_map(vm::main, 0x10000, 0x20000))
+            throw std::runtime_error("P21 main memory block unavailable");
+        const u32 address = vm::alloc(0x10000, vm::main, 0x10000);
+        if (!address) throw std::runtime_error("P21 guest allocation failed");
+        const u32 codeAddress = address + 0x100, dataAddress = address + 0x400;
+        const auto dform = [](u32 op, u32 reg, u32 base, u32 imm) {
+            return (op << 26) | (reg << 21) | (base << 16) | (imm & 0xffff);
+        };
+        using namespace ppu_instructions;
+        using namespace ppu_instructions::implicts;
+        const std::array<u32, 15> opcodes{MFLR(0), STDU(1, 1, -128), STD(0, 1, 16), dform(24, 2, 9, 0),
+            dform(14, 3, 0, 42), dform(14, 4, 0, 0xfff9),
+            (31u << 26) | (5u << 21) | (3u << 16) | (4u << 11) | (266u << 1),
+            dform(36, 5, 6, 0), dform(32, 7, 6, 0), dform(24, 7, 8, 0x100),
+            LD(0, 1, 16), ADDI(1, 1, 128), MTLR(0), BLR(), 0};
+        ppu_exec_object::ehdr_t header{};
+        header.e_magic = "\177ELF"_u32; header.e_class = 2; header.e_data = 2;
+        header.e_curver = 1; header.e_os_abi = elf_os::lv2; header.e_type = elf_type::exec;
+        header.e_machine = elf_machine::ppc64; header.e_version = 1;
+        header.e_entry = dataAddress; header.e_phoff = sizeof(header);
+        header.e_ehsize = sizeof(header); header.e_phentsize = sizeof(ppu_exec_object::phdr_t); header.e_phnum = 2;
+        std::array<ppu_exec_object::phdr_t, 2> segments{};
+        segments[0].p_type = 1; segments[0].p_flags = 5; segments[0].p_offset = 0x100;
+        segments[0].p_vaddr = codeAddress; segments[0].p_filesz = sizeof(opcodes);
+        segments[0].p_memsz = sizeof(opcodes); segments[0].p_align = 16;
+        segments[1].p_type = 1; segments[1].p_flags = 6; segments[1].p_offset = 0x200;
+        segments[1].p_vaddr = dataAddress; segments[1].p_filesz = 8;
+        segments[1].p_memsz = 64; segments[1].p_align = 16;
+        std::vector<u8> fixture(0x208, 0);
+        std::memcpy(fixture.data(), &header, sizeof(header));
+        std::memcpy(fixture.data() + sizeof(header), segments.data(), sizeof(segments));
+        for (u32 i = 0; i < opcodes.size(); ++i) {
+            const be_t<u32> word = opcodes[i]; std::memcpy(fixture.data() + 0x100 + i * 4, &word, 4);
+        }
+        const std::array<be_t<u32>, 2> descriptor{codeAddress, dataAddress};
+        std::memcpy(fixture.data() + 0x200, descriptor.data(), sizeof(descriptor));
+        // Reject malformed header/short payload with the actual core reader.
+        for (unsigned test = 0; test < 5; ++test) {
+            auto malformed = fixture;
+            if (test == 0) malformed[0] = 0;
+            if (test == 1) malformed[4] = 1;
+            if (test == 2) malformed[5] = 1;
+            if (test == 3) malformed[19] = 0x17;
+            if (test == 4) malformed.resize(0x204);
+            const auto stream = fs::make_stream(std::move(malformed));
+            ppu_exec_object rejected(stream);
+            const std::array<elf_error, 5> errors{elf_error::header_magic, elf_error::header_class,
+                elf_error::header_endianness, elf_error::header_machine, elf_error::stream_data};
+            if (rejected.get_error() != errors[test]) throw std::runtime_error("P21 malformed ELF was not rejected correctly");
+        }
+        ARMSX3StartupLog("P21 PASS: core ELF reader rejects bad magic/class/endian/machine and truncated data");
+        const auto validSegment = [&](const ppu_exec_object::prog_t& segment) {
+            const u64 base = segment.p_vaddr, length = segment.p_memsz, fileSize = segment.p_filesz;
+            return segment.p_type == 1u && base >= address && base < u64(address) + 0x10000 &&
+                length <= 0x10000 - (base - address) && fileSize <= length && fileSize == segment.bin.size();
+        };
+        // ELF parsing does not imply safe mapping; independently bound segment sizes.
+        auto oversized = fixture; auto huge = segments[1]; huge.p_memsz = ~u64{0};
+        std::memcpy(oversized.data() + sizeof(header) + sizeof(huge), &huge, sizeof(huge));
+        const auto oversizedStream = fs::make_stream(std::move(oversized));
+        ppu_exec_object badMapping(oversizedStream);
+        if (badMapping.get_error() != elf_error::ok || validSegment(badMapping.progs.at(1)))
+            throw std::runtime_error("P21 segment mapping bounds guard failed");
+        const std::string path = fs::get_cache_dir() + "ARMSX3-P21-diagnostic.elf";
+        struct RemoveFixture { std::string path; ~RemoveFixture() { fs::remove_file(path); } } remove{path};
+        {
+            fs::file file(path, fs::rewrite);
+            if (!file || file.write(fixture.data(), fixture.size()) != fixture.size())
+                throw std::runtime_error("P21 ELF file write failed");
+        }
+        const fs::file file(path, fs::read);
+        ppu_exec_object elf(file);
+        if (elf.get_error() != elf_error::ok || elf.progs.size() != 2 || elf.header.e_entry != dataAddress)
+            throw std::runtime_error("P21 on-disk ELF header or segment parse failed");
+        for (const auto& segment : elf.progs) if (!validSegment(segment))
+            throw std::runtime_error("P21 ELF segment outside diagnostic allocation");
+        auto* guest = static_cast<u8*>(vm::base(address)); std::memset(guest, 0xa5, 0x10000);
+        for (const auto& segment : elf.progs) {
+            auto* target = vm::base(u32(segment.p_vaddr));
+            std::memset(target, 0, u64(segment.p_memsz));
+            std::memcpy(target, segment.bin.data(), segment.bin.size());
+        }
+        const auto* opd = static_cast<const be_t<u32>*>(vm::base(u32(elf.header.e_entry)));
+        if (opd[0] != codeAddress || opd[1] != dataAddress)
+            throw std::runtime_error("P21 loaded entry descriptor mismatch");
+        for (u32 i = 8; i < 64; ++i) if (guest[0x400 + i] != 0)
+            throw std::runtime_error("P21 data segment BSS was not zero-filled");
+        // Use the core-owned decoder and the loader's real registration routines.
+        // Retain the fixed object until the core resets its object table on next boot.
+        if (!g_fxo->is_init()) throw std::runtime_error("P21 fixed object table unavailable");
+        if (!g_fxo->is_init<ppu_interpreter_rt>() && !g_fxo->init<ppu_interpreter_rt>())
+            throw std::runtime_error("P21 core interpreter initialization failed");
+        auto& interpreter = g_fxo->get<ppu_interpreter_rt>();
+        auto* cache = reinterpret_cast<ppu_intrp_func*>(vm::g_exec_addr + u64(codeAddress) * 2);
+        const auto* loadedCode = static_cast<const be_t<u32>*>(vm::base(codeAddress));
+        struct SegmentCacheCleanup {
+            u8* pointer; bool active = false;
+            void release() { if (active) { utils::memory_decommit(pointer, 0x8000); active = false; } }
+            ~SegmentCacheCleanup() { release(); }
+        } segmentCleanup{vm::g_exec_addr + vm::g_exec_addr_seg_offset + (address >> 1)};
+        ppu_module<lv2_obj> module;
+        module.name = "iOS analyzed ELF probe"; module.path = path;
+        for (const auto& segment : elf.progs) {
+            module.addr_to_seg_index.emplace(u32(segment.p_vaddr), u32(module.segs.size()));
+            module.segs.push_back({u32(segment.p_vaddr), u32(segment.p_memsz), u32(segment.p_type),
+                u32(segment.p_flags), u32(segment.p_filesz), vm::base(u32(segment.p_vaddr))});
+        }
+        // A descriptor section gives the analyser an explicit OPD boundary.
+        module.secs.push_back({dataAddress, 8, 1, 2, 8, vm::base(dataAddress)});
+        const auto analysisDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        ARMSX3StartupLog("P21 BEFORE actual executable analysis from loaded ELF segments and OPD");
+        if (!module.analyse(0, dataAddress, codeAddress + 56, {}, {}, [&] {
+                return std::chrono::steady_clock::now() >= analysisDeadline; }))
+            throw std::runtime_error("P21 core executable analysis failed or timed out");
+        if (module.funcs.empty()) throw std::runtime_error("P21 analysis found no functions");
+        bool entryFound = false;
+        for (const auto& function : module.funcs) {
+            if (function.addr == codeAddress) entryFound = true;
+            if (function.addr < codeAddress || function.addr >= codeAddress + 56 ||
+                function.addr % 4 || function.size > codeAddress + 56 - function.addr)
+                throw std::runtime_error("P21 analysed function outside loaded executable");
+            for (const auto& block : function.blocks)
+                if (block.first < codeAddress || block.first >= codeAddress + 56 || block.first % 4 ||
+                    block.second % 4 || block.second > codeAddress + 56 - block.first)
+                    throw std::runtime_error("P21 analysed block outside loaded executable");
+        }
+        if (!entryFound) throw std::runtime_error("P21 analyser missed entry function");
+        segmentCleanup.active = true;
+        ppu_register_range(codeAddress, 56);
+        if (!vm::check_addr(address, vm::page_executable, 0x10000))
+            throw std::runtime_error("P21 executable page flags missing");
+        const auto fallback = cache[0].fn;
+        const auto* allCache = reinterpret_cast<const ppu_intrp_func*>(vm::g_exec_addr + u64(address) * 2);
+        ARMSX3StartupLog("P21 BEFORE production static module initialization of analysed functions");
+        if (armsx3_ios_ppu_prepare_module(&module) != 0)
+            throw std::runtime_error("P21 static module preparation failed");
+        for (u32 i = 0; i < 14; ++i)
+            if (!cache[i].fn || cache[i].fn != interpreter.decode(loadedCode[i]) || cache[i].fn == fallback)
+                throw std::runtime_error("P21 module initialization did not decode analysed code");
+        char analysisMessage[160];
+        std::snprintf(analysisMessage, sizeof(analysisMessage), "P21 PASS: actual analyser found %zu functions; static module initialization decoded fourteen instructions", module.funcs.size());
+        ARMSX3StartupLog(analysisMessage);
+        if (!g_fxo->is_init<ppu_function_manager>() && !g_fxo->init<ppu_function_manager>())
+            throw std::runtime_error("P21 function manager initialization failed");
+        auto& manager = g_fxo->get<ppu_function_manager>();
+        if (manager.addr) throw std::runtime_error("P21 requires unused function manager address");
+        const u32 managerAddress = address + 0x800, returnAddress = managerAddress + 12;
+        struct ManagerAddress { ppu_function_manager& manager; u32 previous;
+            ~ManagerAddress() { manager.addr = previous; } } managerScope{manager, manager.addr};
+        manager.addr = managerAddress;
+        const auto& hleFunctions = ppu_function_manager::get();
+        if (hleFunctions.size() < 2 || !hleFunctions[1] || manager.func_addr(1, true) != returnAddress)
+            throw std::runtime_error("P21 core HLE return handler unavailable");
+        vm::write32(managerAddress + 8, returnAddress); vm::write32(returnAddress, 0);
+        ppu_register_function_at(returnAddress, 4, hleFunctions[1]);
+        const u32 initialStack = address + 0x8000, frameAddress = initialStack - 128;
+        struct Program { u32 begin, end, returnAddress; u64 toc; int result = -99; bool tls = false;
+            std::atomic<bool> completed{false}; } program{u32(opd[0]), codeAddress + 56, returnAddress, u64(opd[1])};
+        const auto created = cpu_thread::g_threads_created.load(), deleted = cpu_thread::g_threads_deleted.load();
+        const u64 live = armsx3_ios_live_cpu_threads();
+        {
+            std::unique_ptr<named_thread<ppu_thread>> worker;
+            {
+                struct ConstructionID { u32 previous = id_manager::g_id;
+                    ConstructionID() { id_manager::g_id = ppu_thread::id_base; }
+                    ~ConstructionID() { id_manager::g_id = previous; } } construction_id;
+                const ppu_thread_params params{static_cast<vm::addr_t>(address + 0x1000), 0x8000, 0, {}, 0, 0};
+                worker = std::make_unique<named_thread<ppu_thread>>(stx::launch_retainer{}, params, "iOS loaded ELF probe", 1000);
+            }
+            struct StopWorker { named_thread<ppu_thread>& worker;
+                ~StopWorker() { worker.state += cpu_flag::exit; worker.state.notify_one();
+                    worker.cmd_notify.store(1); worker.cmd_notify.notify_one(); } } stop{*worker};
+            const ppu_intrp_func_t execute = +[](ppu_thread& context, ppu_opcode_t, be_t<u32>*, ppu_intrp_func*) {
+                auto& program = *reinterpret_cast<Program*>(context.gpr[30]);
+                program.tls = get_current_cpu_thread() == &context && thread_ctrl::get_current() != nullptr;
+                program.result = armsx3_ios_ppu_call_bounded(&context, program.begin, program.end, program.toc, program.returnAddress, 64);
+                context.state += cpu_flag::exit; program.completed.store(true, std::memory_order_release);
+            };
+            worker->cmd_list({{ppu_cmd::ptr_call, 0}, std::bit_cast<u64>(execute)});
+            worker->cia = address + 0x900; worker->lr = address + 0x904;
+            worker->gpr[1] = initialStack; worker->gpr[2] = 0x13579; worker->gpr[6] = dataAddress + 32;
+            worker->gpr[30] = u64(reinterpret_cast<uintptr_t>(&program));
+            worker->state -= cpu_flag::stop + cpu_flag::exit + cpu_flag::suspend + cpu_flag::memory + cpu_flag::wait;
+            ARMSX3StartupLog("P21 BEFORE actual fast_call, guest stack frame and core HLE return handler");
+            *worker = thread_state::created;
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+            while (!program.completed.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline)
+                std::this_thread::yield();
+            if (!program.completed.load(std::memory_order_acquire)) throw std::runtime_error("P21 loaded ELF execution deadline exceeded");
+            (*worker)();
+            if (!program.tls || program.result != 15 || worker->gpr[5] != 35 || worker->gpr[7] != 35 ||
+                worker->gpr[8] != 0x123 || worker->gpr[9] != dataAddress || worker->gpr[2] != 0x13579 || worker->cia != address + 0x900 ||
+                worker->lr != address + 0x904 || worker->gpr[1] != initialStack || worker->state & cpu_flag::ret)
+                throw std::runtime_error("P21 loaded ELF execution result mismatch");
+        }
+        for (u32 i = 0; i < 0x10000; ++i) {
+            u8 expected = 0xa5;
+            if (i >= 0x100 && i < 0x100 + sizeof(opcodes)) expected = fixture[i];
+            if (i >= 0x400 && i < 0x440) expected = i < 0x408 ? fixture[0x200 + i - 0x400] : 0;
+            if (i >= 0x420 && i < 0x424) expected = i == 0x423 ? 35 : 0;
+            if (i >= 0x808 && i < 0x80c) expected = u8(returnAddress >> (24 - (i - 0x808) * 8));
+            if (i >= 0x80c && i < 0x810) expected = 0;
+            const u32 frameOffset = frameAddress - address;
+            if (i >= frameOffset && i < frameOffset + 8) expected = u8(u64(initialStack) >> (56 - (i - frameOffset) * 8));
+            if (i >= frameOffset + 16 && i < frameOffset + 24) expected = u8(u64(returnAddress) >> (56 - (i - frameOffset - 16) * 8));
+            if (guest[i] != expected || static_cast<const u8*>(vm::get_super_ptr(address))[i] != expected)
+                throw std::runtime_error("P21 loaded segment, BSS, guest guard or alias mismatch");
+        }
+        if (armsx3_ios_live_cpu_threads() != live || cpu_thread::g_threads_created.load() != created + 1 ||
+            cpu_thread::g_threads_deleted.load() != deleted + 1)
+            throw std::runtime_error("P21 worker counters did not balance");
+        for (u32 i = 0; i < 14; ++i)
+            if (cache[i].fn != interpreter.decode(loadedCode[i]))
+                throw std::runtime_error("P21 executed cache did not contain core decoded handlers");
+        for (u32 i = 0; i < 0x10000 / 4; ++i)
+            if ((i < 0x100 / 4 || i >= 0x100 / 4 + 14) && i != (returnAddress - address) / 4 && allCache[i].fn != fallback)
+                throw std::runtime_error("P21 dispatch changed handler outside loaded code");
+        manager.addr = managerScope.previous;
+        segmentCleanup.release();
+        if (vm::dealloc(address, vm::main) != 0x10000 || vm::check_addr(address))
+            throw std::runtime_error("P21 guest deallocation failed");
+        vm::close(); initialized = false;
+        ARMSX3StartupLog("P21 PASS: analysed ELF fast_call, fourteen guest instructions, stack/LR save and restore, actual HLE return and caller context cleanup; full executable loader/firmware/game boot remain untested");
         return 0;
     }
     catch (const std::exception& error) { ARMSX3StartupLog(error.what()); if (initialized) vm::close(); return -1; }

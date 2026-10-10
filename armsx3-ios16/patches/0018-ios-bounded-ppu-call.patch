@@ -1,0 +1,55 @@
+--- a/rpcs3/Emu/Cell/PPUThread.cpp
++++ b/rpcs3/Emu/Cell/PPUThread.cpp
+@@ -36,7 +36,7 @@
+ static atomic_t<u64> s_ios_ppu_command_waits{0};
+ extern "C" u64 armsx3_ios_ppu_command_waits() { return s_ios_ppu_command_waits.load(); }
+ // Diagnostic-only range/budget boundary; normal execution leaves this null.
+-struct ios_ppu_dispatch_probe { u32 begin, end, budget, steps = 0; int result = -3; };
++struct ios_ppu_dispatch_probe { u32 begin, end, budget, steps = 0; int result = -3; u32 return_addr = 0; };
+ static thread_local ios_ppu_dispatch_probe* s_ios_ppu_dispatch_probe = nullptr;
+ #endif
+ #endif
+@@ -3162,8 +3162,11 @@
+ #if defined(__APPLE__) && TARGET_OS_IPHONE
+ 		if (auto* probe = s_ios_ppu_dispatch_probe)
+ 		{
+-			if (cia == probe->end) { probe->result = static_cast<int>(probe->steps); return; }
+-			if (cia < probe->begin || cia >= probe->end || cia % 4) { probe->result = -1; return; }
++			if (probe->return_addr && cia == probe->return_addr + 4 && state & cpu_flag::ret)
++			{ probe->result = static_cast<int>(probe->steps); return; }
++			if (!probe->return_addr && cia == probe->end) { probe->result = static_cast<int>(probe->steps); return; }
++			if ((cia < probe->begin || cia >= probe->end || cia % 4) && (!probe->return_addr || cia != probe->return_addr))
++			{ probe->result = -1; return; }
+ 			if (probe->steps == probe->budget) { probe->result = -2; return; }
+ 			probe->steps++;
+ 		}
+@@ -3199,6 +3202,29 @@
+ 	context->exec_task();
+ 	return probe.result;
+ }
++extern "C" int armsx3_ios_ppu_call_bounded(ppu_thread* context, u32 begin, u32 end, u64 rtoc, u32 return_addr, u32 budget)
++{
++	if (!context || begin >= end || begin % 4 || end % 4 || !return_addr || return_addr % 4 ||
++		return_addr > 0xfffffffbu || (return_addr >= begin && return_addr < end) || !budget || budget > 4096 ||
++		g_cfg.core.ppu_decoder != ppu_decoder_type::_static || !g_fxo->is_init<ppu_function_manager>() ||
++		g_fxo->get<ppu_function_manager>().func_addr(1, true) != return_addr || !context->cia ||
++		context->loaded_from_savestate || context->state & cpu_flag::ret) return -4;
++	const auto cia = context->cia;
++	const auto toc = context->gpr[2];
++	const auto lr = context->lr;
++	const auto function = context->current_function;
++	const auto prefix = g_tls_log_prefix;
++	ios_ppu_dispatch_probe probe{begin, end, budget};
++	probe.return_addr = return_addr;
++	struct Restore { ios_ppu_dispatch_probe* previous = s_ios_ppu_dispatch_probe;
++		~Restore() { s_ios_ppu_dispatch_probe = previous; } } restore;
++	s_ios_ppu_dispatch_probe = &probe;
++	context->fast_call(begin, rtoc);
++	if (context->cia != cia || context->gpr[2] != toc || context->lr != lr ||
++		context->current_function != function || g_tls_log_prefix != prefix || context->state & cpu_flag::ret) return -5;
++	return probe.result;
++}
++
+ #endif
+ 
+ ppu_thread::~ppu_thread()
