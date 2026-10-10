@@ -2897,3 +2897,97 @@ extern "C" __attribute__((visibility("default"))) int armsx3_core_test_elf_call(
     }
     catch (const std::exception& error) { ARMSX3StartupLog(error.what()); if (initialized) vm::close(); return -1; }
 }
+
+
+// Exercise the allocator used by ppu_load_exec with separate 64 KiB pages.
+extern "C" __attribute__((visibility("default"))) int armsx3_core_test_elf_fixed_segments()
+{
+    ARMSX3StartupLog("P22 BEFORE fixed-address ELF segment allocation");
+    bool initialized = false;
+    try {
+        if (!Emu.IsStopped()) throw std::runtime_error("P22 requires stopped emulator");
+        vm::init(); initialized = true;
+        const auto area = vm::reserve_map(vm::main, 0x10000, 0x40000, vm::block_size_64k);
+        if (!area || area->addr != 0x10000 || (area->flags & 0xf00) != vm::block_size_64k)
+            throw std::runtime_error("P22 main allocation area mismatch");
+        constexpr u32 codeAddress = 0x10100, dataAddress = 0x30400;
+        ppu_exec_object::ehdr_t header{};
+        header.e_magic = "\177ELF"_u32; header.e_class = 2; header.e_data = 2;
+        header.e_curver = 1; header.e_os_abi = elf_os::lv2; header.e_type = elf_type::exec;
+        header.e_machine = elf_machine::ppc64; header.e_version = 1;
+        header.e_entry = dataAddress; header.e_phoff = sizeof(header);
+        header.e_ehsize = sizeof(header); header.e_phentsize = sizeof(ppu_exec_object::phdr_t); header.e_phnum = 2;
+        std::array<ppu_exec_object::phdr_t, 2> segments{};
+        segments[0].p_type = 1; segments[0].p_flags = 5; segments[0].p_offset = 0x100;
+        segments[0].p_vaddr = codeAddress; segments[0].p_filesz = 8; segments[0].p_memsz = 64; segments[0].p_align = 16;
+        segments[1].p_type = 1; segments[1].p_flags = 6; segments[1].p_offset = 0x200;
+        segments[1].p_vaddr = dataAddress; segments[1].p_filesz = 8; segments[1].p_memsz = 128; segments[1].p_align = 16;
+        std::vector<u8> fixture(0x208, 0);
+        std::memcpy(fixture.data(), &header, sizeof(header));
+        std::memcpy(fixture.data() + sizeof(header), segments.data(), sizeof(segments));
+        const std::array<be_t<u32>, 2> instructions{0x3860002au, 0x4e800020u};
+        const std::array<be_t<u32>, 2> descriptor{codeAddress, dataAddress};
+        std::memcpy(fixture.data() + 0x100, instructions.data(), 8);
+        std::memcpy(fixture.data() + 0x200, descriptor.data(), 8);
+        const std::string path = fs::get_cache_dir() + "ARMSX3-P22-diagnostic.elf";
+        struct RemoveFixture { std::string path; ~RemoveFixture() { fs::remove_file(path); } } remove{path};
+        { fs::file file(path, fs::rewrite);
+          if (!file || file.write(fixture.data(), fixture.size()) != fixture.size())
+              throw std::runtime_error("P22 fixture write failed"); }
+        const fs::file file(path, fs::read); const ppu_exec_object elf(file);
+        if (elf.get_error() != elf_error::ok || elf.progs.size() != 2)
+            throw std::runtime_error("P22 ELF parse failed");
+        const auto validSegment = [](const ppu_exec_object::prog_t& p) {
+            const u64 address = p.p_vaddr, size = p.p_memsz;
+            return p.p_type == 1 && address >= 0x10000 && address < 0x50000 && size &&
+                size <= 0x50000 - address && u64(p.p_filesz) <= size && p.bin.size() == p.p_filesz;
+        };
+        for (const auto& p : elf.progs) if (!validSegment(p))
+            throw std::runtime_error("P22 segment bounds invalid");
+        // Failure after the first allocation must release that allocation.
+        // The second segment deliberately collides with the first 64 KiB page.
+        if (!area->falloc(codeAddress, 64)) throw std::runtime_error("P22 initial fixed allocation failed");
+        if (area->falloc(codeAddress + 32, 128)) throw std::runtime_error("P22 overlapping allocation accepted");
+        if (area->dealloc(0x10000) != 0x10000 || vm::check_addr(0x10000))
+            throw std::runtime_error("P22 partial allocation rollback failed");
+        if (area->falloc(0x4fff0, 32) || area->falloc(0x8000, 64))
+            throw std::runtime_error("P22 allocation outside reserved area accepted");
+        ARMSX3StartupLog("P22 PASS: actual fixed allocator rejects overlap and area boundaries; partial allocation rollback");
+        for (const auto& p : elf.progs) {
+            // Same reserve/flag/falloc operations used by the production loader.
+            const u32 address = u32(p.p_vaddr), size = u32(p.p_memsz);
+            const auto targetArea = vm::reserve_map(vm::any, 0x10000, 0x10000000, vm::block_size_64k);
+            if (targetArea != area || !targetArea->falloc(address, size))
+                throw std::runtime_error("P22 loader-style fixed allocation failed");
+            const auto* before = static_cast<const u8*>(vm::base(address));
+            for (u32 i = 0; i < size; ++i) if (before[i])
+                throw std::runtime_error("P22 new segment was not zero-filled");
+            std::memcpy(vm::base(address), p.bin.data(), p.bin.size());
+        }
+        if (vm::check_addr(0x20000) || vm::check_addr(0x40000))
+            throw std::runtime_error("P22 unmapped segment gaps became allocated");
+        // Verify every byte of both backing pages, including alignment padding,
+        // untouched BSS and both guest aliases; do not write either gap page.
+        for (u32 page : {0x10000u, 0x30000u}) {
+            if (!vm::check_addr(page, vm::page_readable | vm::page_writable, 0x10000))
+                throw std::runtime_error("P22 mapped page permissions missing");
+            const auto* normal = static_cast<const u8*>(vm::base(page));
+            const auto* privileged = static_cast<const u8*>(vm::get_super_ptr(page));
+            const u32 offset = page == 0x10000 ? 0x100 : 0x400;
+            const u32 fileOffset = page == 0x10000 ? 0x100 : 0x200;
+            for (u32 i = 0; i < 0x10000; ++i) {
+                const u8 expected = i >= offset && i < offset + 8 ? fixture[fileOffset + i - offset] : 0;
+                if (normal[i] != expected || privileged[i] != expected)
+                    throw std::runtime_error("P22 segment payload/BSS/padding/alias mismatch");
+            }
+        }
+        if (area->dealloc(0x30000) != 0x10000 || area->dealloc(0x10000) != 0x10000 ||
+            vm::check_addr(0x10000) || vm::check_addr(0x30000))
+            throw std::runtime_error("P22 fixed segment cleanup failed");
+        vm::close(); initialized = false;
+        ARMSX3StartupLog("P22 PASS: on-disk ELF, separate fixed code/data allocations, zero-filled BSS/padding, aliases, conflict rejection and rollback; full executable loader/firmware/game boot remain untested");
+        return 0;
+    } catch (const std::exception& error) {
+        ARMSX3StartupLog(error.what()); if (initialized) vm::close(); return -1;
+    }
+}

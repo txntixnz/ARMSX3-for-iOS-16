@@ -888,3 +888,30 @@ like core, not integer subtraction. This does not execute actual PPU guest
 handlers or iOS VM stack writes; Apple CI/device integration pending.
 Catalog,exports,selected whitespace PASS. Next: P21 device report then
 broader loader/process admission and syscall integration.
+
+## 2026-10-10 — P21 device PASS; build32 / P22 fixed ELF segments
+Device log ARMSX3-startup(20261010-134804).log, pid95866 confirms all20
+stages PASS, including14 guest instructions +actual HLE return through
+fast_call with guest stack/LR and caller context restoration.
+
+P22 adds armsx3_core_test_elf_fixed_segments. An on-disk ELF has code at
+0x10100 and data/OPD at0x30400, separated64KiB backing pages. Uses actual
+vm::reserve_map and block_t::falloc used by ppu_load_exec, not vm::alloc
+followed by a memcpy inside one existing allocation. Diagnostic reserves a
+small256KiB main area, then repeats loader-style any/reserve/flags/falloc
+operations. Requires exact area reuse; checks fresh zero fill before copy,
+full page payload/BSS/alignment padding and privileged aliases. Gap pages
+0x20000/0x40000 must stay unallocated. Actual overlapping and below/end-area
+allocations must fail. First successful fixed allocation is rolled back
+before retrying the two-segment mapping. Exact64KiB deallocation and absent
+mapping flags checked; VM close also handles exceptions.
+
+Automatic stage21; CFBundleVersion32. No new core patch. Exact P22 bridge
+compiles GNU C++23 against pinned headers. Actual core ELF reader host test
+validates separate segment addresses, sizes, entry/OPD, and rejects mapping
+of oversized, end-overflow, below-area and filesz>memsz parsed segments.
+Catalog/exports and selected whitespace checks PASS. Host cannot validate
+iOS VM mappings; new device stage pending. Does not call full ppu_load_exec,
+set ELF read-only page protections, analyze/execute the P22 fixture or load
+firmware. P20/P21 continue covering analysis/preparation/execution. Next:
+loader process/HLE initialization, real executable loading and syscalls.
