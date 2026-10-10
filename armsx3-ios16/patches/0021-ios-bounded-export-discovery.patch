@@ -1,0 +1,34 @@
+--- a/rpcs3/Emu/Cell/PPUModule.cpp
++++ b/rpcs3/Emu/Cell/PPUModule.cpp
+@@ -977,4 +977,31 @@
+ 	return result;
+ }
+ 
++#if defined(__APPLE__) && TARGET_OS_IPHONE
++// Observe a bounded synthetic PRX export using RPCS3's actual export scanner.
++// Observation deliberately does not register global libraries or overwrite HLE links.
++extern "C" int armsx3_ios_ppu_observe_probe_exports(const ppu_module<lv2_obj>* info, u32 start)
++{
++	if (!info || !Emu.IsStopped() || info->segs.size() != 2 ||
++		start != info->segs[1].addr + 192 || info->segs[1].size != 256) return -1;
++	const auto& lib = info->get_ref<const ppu_prx_module_info>(start);
++	if (lib.size != sizeof(ppu_prx_module_info) || lib.attributes != PRX_EXPORT_LIBRARY_FLAG ||
++		lib.num_func != 1 || lib.num_var || lib.num_tlsvar ||
++		lib.name.addr() != info->segs[1].addr + 128 ||
++		lib.nids.addr() != info->segs[1].addr + 160 ||
++		lib.addrs.addr() != info->segs[1].addr + 236 ||
++		std::memcmp(info->get_ptr<char>(lib.name.addr()), "iOSProbe", 9) ||
++		info->get_ref<u32>(lib.nids, 0) != 0x49524e31 ||
++		info->get_ref<u32>(lib.addrs, 0) != info->segs[1].addr) return -2;
++	ppu_linkage_info localLink;
++	std::vector<u32> observed;
++	const auto special = ppu_load_exports(*info, &localLink, start,
++		start + sizeof(ppu_prx_module_info), true, &observed);
++	if (!special.empty() || observed.size() != 1 ||
++		observed.front() != info->segs[1].addr || !localLink.modules.empty())
++		return -3;
++	return 0;
++}
++#endif
++
+ using import_result_t = std::pair<std::unordered_map<u32, void*>, std::unordered_map<u32, u32>>;
