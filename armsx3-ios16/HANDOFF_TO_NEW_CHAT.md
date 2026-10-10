@@ -1873,3 +1873,90 @@ Do not monitor Actions after pushing; user reports completion/failure.
 On success install ARMSX3_iOS16_INSTALL_THIS_IPA, run all36 diagnostics and
 share the new .txt. Scheduler admission/context switching, full TLS HLE,
 firmware, RSX and game boot remain untested.
+
+## 2026-10-11 — build51 device PASS; build52 adds P38 scheduler queue
+
+Latest device log ARMSX3-startup-20261010-225321-729-560.txt identifies build51,
+PID560,5500 lines. All36 diagnostics P2-P37 PASS; final P37 confirms actual
+LV2 self-priority mutation1100->1200, loaded guest self-query1200, restoration
+1100, signed order tags/global counter cleanup and TLS42 on the A15 phone.
+The expected EFAULT/EINVAL log lines are deliberate negative diagnostic
+cases. Exported .txt remains readable. Game boot remains untested.
+
+Baseline main864ae3263e7fec3ab6d7db00931415d3c3839b95,
+tree03f0c2ebf609447146d393040c2d1ebb514c16dc. Build52 appends P38
+armsx3_core_test_scheduler_queue,37 tests P2-P38. Same unchanged five-header
+ELF/process/arguments/TLS/PRX fixture and golden SHA1
+86d1d7ea9c980461ea025add7dfb43bb77f3de41;27 words/108 code bytes,352 DATA
+bytes,27 guest instructions+HLE RETURN28. Old P2-P37 prefix is561088 bytes,
+Git blob170bcd05ffee3260045362c32dc7376838fae925, verified against main.
+
+Patch0033-ios-single-worker-scheduler-queue.patch adds an iOS-only bounded
+lv2_obj::ios_probe_scheduler_queue_and_call member and C export
+armsx3_ios_ppu_probe_scheduler_queue_and_call. Before entry it requires
+stopped/current/static/fresh real worker, stack30000:8000/entry10000/prio1100,
+at least one configured PPU hardware slot, empty running/pending/timeout/
+sleep/awake/notification queues, scheduler not ready, no yield frequency,
+reservation notifications, suspend acknowledgement, hardware delay, start
+time, cancelled sleep or worker suspend flag. Production ppu_state must
+report STOP. Nested syscall statistics scopes are rejected.
+
+The wrapper calls public production lv2_obj::awake(context) with its default
+enqueue command. Unchanged awake_unlocked admits this single real worker
+into g_ppu. It must be the sole node at position0, production ppu_state must
+report ONPROC/0 and count_non_sleeping_threads must report one. The wrapper
+does not make the scheduler ready or resume any other worker. The same ten
+P37 SC service calls execute via the retained worker and existing bounded
+guest interpreter: invalid/no-change checks, real SC47 priority1100->1200,
+loaded callee SC48 query1200, caller SC46 join-state query and TLS return42,
+then SC47 restore1100 and SC48 confirm1100. Both join states repeat.
+
+On an admitted worker the production priority branch successfully unqueues
+it, sets priority without modifying its order, and reinserts it into the real
+running queue. P38 therefore requires unchanged original order and global
+priority tag at both changes, unlike P37's unregistered-worker tag increments.
+CoreBridge validates actual get_running_ppu(0), null next link and ONPROC/0
+after admission and each priority change. End-state wrapper checks require
+the full original priority union, unchanged global tag, single-node queue and
+all isolation invariants. RAII invokes actual production unqueue under
+g_mutex and restores the original priority union/tag on every return and
+exception. After wrapper return CoreBridge requires no running worker/link,
+production STOP status and restored priority/tag. All guest DATA/code/stack/
+TLS/aliases/caches/counters match P37; post-call service operations preserve
+the guest return/continuation. Counts46=2,47=5,48=2,6=1,others0 and nine BIND
+history records remain the P37 policy. P35/P36/P37 and normal statistics
+paths are unchanged. Production awake/awake_unlocked/schedule_all/service/
+state-reporting code is untouched; only the guarded diagnostic wrapper and
+Apple-guarded member declaration are added. Prior0030 iOS exception override
+and PCH skip remain necessary for lv2.cpp RAII callbacks.
+
+Host validation passes C++20 -Wall -Wextra -Werror, ASAN/UBSAN with
+-fno-exceptions then-fexceptions. Patch0033 applies after0030/0031/0032 to
+pinned source. Harness compiles unchanged complete production awake,
+awake_unlocked and schedule_all bodies, actual inline set_priority/unqueue,
+count_non_sleeping_threads/ppu_state/get_running_ppu, production priority/
+join handlers, full BIND_FUNC/GPR casts/SC/dispatcher and actual new
+CoreBridge performSyscalls callback. Host primitives for VM/atomic/mutex/
+CPU state and bounded guest execution are shims; notify_all's relevant
+non-suspended PPU prefix is retained. Full scheduler bodies are checked
+byte-identical against pinned upstream. Tests exercise actual admission,
+priority removal/reinsertion, queue/status preservation, one and two hardware
+slots, both join states, exact raw priority/order/global counters/normal stats,
+counts/history and cleanup. Negative/exception/count/final-state failures,
+nested scope,14 isolation guards, zero hardware slots/null input rejection
+pass. P35/P36/P37 scopes still pass against the new scheduler harness.
+Independent PPC model of compiled actual P38 fixture checks temporary1200
+query, final1100 memory, TLS42, full image/frame/register/TOC/SP/LR bytes.
+Production process/TLS loader sanitizer checks validate actual constructor/
+golden hash/metadata/malformed shapes/rollback. Production TLS bootstrap/
+allocator/free checks pass with actual P38 ELF TLS bytes and25 injected access
+exceptions. No local iOS/Xcode SDK: real P38 queue behavior awaits Actions
+and device verification.
+
+App has37 ordered unique exports; Info build52; log export/resultsCopyButton
+ARC repair retained. Do not observe Actions after push: user reports build
+completion/failure. Install ARMSX3_iOS16_INSTALL_THIS_IPA after success, run
+all37 diagnostics and share .txt. This is bounded single-worker admission,
+not scheduler start or multiworker context switching. Scheduler start,
+multiple workers/context switching, full TLS HLE, firmware, RSX and actual
+game boot remain untested.
