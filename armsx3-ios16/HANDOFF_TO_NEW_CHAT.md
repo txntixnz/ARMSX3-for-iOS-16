@@ -1459,3 +1459,33 @@ run all31 diagnostics and send the .txt log or pasted Copy results. This
 stage does not parse a PT_TLS header, invoke the complete TLS HLE or create
 its process mutexes. Full process admission, firmware/LV2/RSX/game boot are
 still untested; no commercial PS3 game has booted.
+
+
+## Build46 / P32 compiler repair — 2026-10-10
+
+User reported build45 workflow failure. Run38083168255, job114304091838,
+failed compiling Cell/Modules/sys_ppu_thread_.cpp with two exact errors:
+line99 Emu undeclared, and line126 try unsupported with exceptions disabled.
+The compile command includes -fno-exceptions. Archive/link/IPA stages were
+not reached; P32 has not yet run on device.
+
+Patch0027 now includes Emu/System.h explicitly to declare Emu. Its additional
+rpcs3/Emu/CMakeLists.txt hunk appends -fexceptions to the source options for
+Cell/Modules/sys_ppu_thread_.cpp under ARMSX3_IOS only. It also excludes that
+source from precompiled headers, following the existing upstream exception
+source convention. This preserves the diagnostic's catch/RAII cleanup and
+leaves the global exception setting unchanged. No TLS bootstrap, allocator,
+wrapper, bridge, guest fixture, UI or log export behavior changed. Bundle46.
+
+Validation: combined patch0027 applies after the earlier0004/0005 CMake
+changes. Explicit header and scoped source option audits PASS. The actual
+bootstrap/allocator/free/wrapper host harness is now compiled with both
+-fno-exceptions then -fexceptions to check the override and passes ASAN/UBSAN,
+including callback failure and25 injected VM exceptions with cleanup. A
+negative syntax compile with only -fno-exceptions reproduces the exception
+handling error. P32 actual opcodes/independent guest model still reads TLS i
+and returns42 with exact preservation checks. Bundle46 plist valid. No local
+Xcode SDK; Actions must validate the complete iOS compilation. User reports
+completion; do not monitor the new run. After success install the IPA, run
+all31 stages and send the .txt log. Firmware/process admission/game boot
+remain untested.

@@ -1,10 +1,11 @@
 --- a/rpcs3/Emu/Cell/Modules/sys_ppu_thread_.cpp
 +++ b/rpcs3/Emu/Cell/Modules/sys_ppu_thread_.cpp
-@@ -5,6 +5,11 @@
+@@ -5,6 +5,12 @@
  #include "Emu/Cell/lv2/sys_lwmutex.h"
  #include "Emu/Cell/lv2/sys_mutex.h"
  #include "sysPrxForUser.h"
 +#include "Emu/Memory/vm_locking.h"
++#include "Emu/System.h"
 +
 +#if defined(__APPLE__)
 +#include <TargetConditionals.h>
@@ -12,7 +13,7 @@
  
  LOG_CHANNEL(sysPrxForUser);
  
-@@ -42,6 +47,7 @@
+@@ -42,6 +48,7 @@
  		addr = vm::alloc(s_tls_size, vm::main);
  	}
  
@@ -20,7 +21,7 @@
  	std::memset(vm::base(addr), 0, 0x30); // Clear system area (TODO)
  	std::memcpy(vm::base(addr + 0x30), vm::base(s_tls_addr), s_tls_file); // Copy TLS image
  	std::memset(vm::base(addr + 0x30 + s_tls_file), 0, s_tls_zero); // Clear the rest
-@@ -67,24 +73,93 @@
+@@ -67,24 +74,93 @@
  	}
  }
  
@@ -121,3 +122,21 @@
  
  	sysPrxForUser.notice("TLS initialized (addr=0x%x, size=0x%x, max=0x%x)", s_tls_area - 0x30, s_tls_size, s_tls_max);
  
+--- a/rpcs3/Emu/CMakeLists.txt
++++ b/rpcs3/Emu/CMakeLists.txt
+@@ -110,6 +110,15 @@
+     COMPILE_FLAGS "$<IF:$<CXX_COMPILER_ID:MSVC>,/EHsc,-fexceptions>"
+     SKIP_PRECOMPILE_HEADERS ON
+ )
++
++if(ARMSX3_IOS)
++    # The bounded TLS diagnostic catches bootstrap/callback failures so its
++    # owned pool and thread pointer are restored before reporting an error.
++    set_property(SOURCE Cell/Modules/sys_ppu_thread_.cpp APPEND PROPERTY
++        COMPILE_OPTIONS -fexceptions)
++    set_source_files_properties(Cell/Modules/sys_ppu_thread_.cpp PROPERTIES
++        SKIP_PRECOMPILE_HEADERS ON)
++endif()
+ 
+ # Crypto
+ target_sources(rpcs3_emu PRIVATE
