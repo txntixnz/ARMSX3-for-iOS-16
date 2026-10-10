@@ -1313,3 +1313,67 @@ segment loading and PRX parameter linking using private module/linkage state;
 global main-module/process setup, firmware/LV2/RSX/game boot are still untested.
 No commercial PS3 game has booted in this diagnostic app.
 
+## Build43 / P31 executable arguments and log export — 2026-10-10
+
+Latest device PID98060 passes P30 and AUTO PASS all29 diagnostics. The
+ppu_load_exec Bad magic message is the intentional rejection test, followed
+by two successful loaded-ELF PRX linkage/BCTRL/BLR cycles and cleanup.
+Do not monitor Actions completion; user continues to report it themselves.
+
+Build43 adds P31 as the30th ordered diagnostic. Patch0026 extracts the normal
+ppu_load_exec argv/envp/exitspawn argument packing body byte-for-byte into
+ppu_pack_exec_arguments. The normal loader and bounded iOS probe both call
+that same helper. The probe preflights fresh retained worker state, the owned
+32KiB stack at0x30000, counts/string/data limits, room for the112-byte initial
+stack offset plus128-byte guest frame, and readable/writable mapping before
+any production writes. Invalid or already prepared input leaves memory,
+registers and output pointers unchanged.
+
+P31 reuses P30's real segment loader, PRX parameter linker and linked guest
+fixture. Real PPU constructor parameters carry the ELF entry OPD at0x20008,
+so entry_func is0x10000/TOC0x20020 and initial SP is0x37f90. Arguments:
+argv={probe,15-digit string,16-digit string}, envp={LANG=C,empty string},
+17 exitspawn bytes0xa0..0xb0. Independent golden storage is64 pointer bytes
+plus96 aligned string bytes plus32 reserved data bytes; argv0x37f40,
+envp0x37f60, prepared SP0x37ed0. The actual worker queue executes set_args8
+and set_gpr11/12 before a bounded callback checks argc/argv/envp/env count,
+thread ID, zero TLS metadata, ELF entry OPD and64KiB malloc page size. Only
+after this ABI check does the fixture repurpose r6/r10 for its result/import
+slot and call the existing bounded interpreter. Two worker cycles verify42,
+21 dispatches, exact packed arguments/frame/data and all aliases, retained
+dispatch/HLE protection, balanced thread counts, unload and deallocation.
+Emu.argv/envp/data are restored by RAII. This does not enqueue entry_call,
+global initialize or sys_initialize_tls, nor admit a full LV2 main process.
+
+User additionally requested fixing the log-file issue: repeated attachments
+were listed but unavailable to the conversation, and a pasted excerpt came
+from an older run. App.mm now exports a unique plain UTF-8 .txt snapshot of
+the latest launch with build metadata and stage results first. Copy results
+copies the summary plus the last60 log lines directly for pasting into chat.
+Both controls are disabled during testing. Append-only original logging is
+preserved. On reopening with an unfinished-stage marker, export selects the
+previous diagnostic run and skips intervening idle launches until a new run
+starts. Read/export failures show an alert. This addresses app-side export
+and provides a fallback; it does not claim to repair ChatGPT/browser upload
+handling. LogExport.h is included from the copied core overlay directory.
+
+Validation: patch0026 applies after0019-0025 with unchanged extracted body;
+host C++20 harness compiles that actual packer and actual upstream set_args/
+set_gpr command cases with mocked VM/thread/configuration. Golden addresses,
+big-endian pointers/null termination, whole-page expected writes, empty/max
+arguments, 15/16/31/32/127/128-byte boundaries, 0..64-byte data boundaries,
+repeated preparation and all preflight rejection paths PASS under address/
+undefined-behavior sanitizers (host leak scanning disabled due to ptrace).
+P30 actual shared segment/parameter/linker harness regressions PASS, including
+150 injected read exceptions. Independent PPC model with actual upstream
+opcode encodings confirms the prepared stack's arguments/data survive the
+linked guest call and exact frame writes. Log session selection and tail
+tests PASS, including repeated idle relaunches and final PASS preservation.
+No local iOS SDK/UIKit build; Actions does the actual Xcode compilation.
+
+Bundle43; App.mm30 ordered stages. Install ARMSX3_iOS16_INSTALL_THIS_IPA after
+Actions succeeds, run all30 tests, tap Copy results and paste into chat (or
+share the new .txt log). P31 and the sharing controls await device validation.
+Global process setup, TLS initialization, firmware/LV2/RSX/game boot remain
+untested. No commercial PS3 game has booted.
+

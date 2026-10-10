@@ -3,6 +3,7 @@
 #include <dlfcn.h>
 #include <cstdio>
 #include "StartupLog.h"
+#include "LogExport.h"
 
 struct DiagnosticStage { unsigned phase; const char* title; const char* symbol; };
 static constexpr DiagnosticStage stages[] = {
@@ -35,6 +36,7 @@ static constexpr DiagnosticStage stages[] = {
     {28, "Linked guest function call and return", "armsx3_core_test_linked_guest_call"},
     {29, "Production ELF segment loading", "armsx3_core_test_production_elf_segments"},
     {30, "Loaded ELF PRX linkage and guest call", "armsx3_core_test_loaded_elf_linkage"},
+    {31, "Executable arguments and entry registers", "armsx3_core_test_executable_arguments"},
 };
 static constexpr NSUInteger stageCount = sizeof(stages) / sizeof(stages[0]);
 static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
@@ -47,6 +49,8 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
 @property(nonatomic,strong) UIButton* nextButton;
 @property(nonatomic,strong) UIButton* stopButton;
 @property(nonatomic,strong) UIButton* shareButton;
+@property(nonatomic,strong) UIButton* copyButton;
+@property(nonatomic,assign) BOOL previousRunPending;
 @property(nonatomic,assign) void* coreHandle;
 @property(nonatomic,assign) NSUInteger nextStage;
 @property(nonatomic,assign) BOOL running;
@@ -94,17 +98,24 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
     [self.stopButton addTarget:self action:@selector(requestStop) forControlEvents:UIControlEventTouchUpInside];
     [stack addArrangedSubview:self.stopButton];
     self.shareButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    [self.shareButton setTitle:@"Share startup log" forState:UIControlStateNormal];
+    [self.shareButton setTitle:@"Share log (.txt)" forState:UIControlStateNormal];
     [self.shareButton addTarget:self action:@selector(shareLog) forControlEvents:UIControlEventTouchUpInside];
-    [stack addArrangedSubview:self.shareButton];
+    self.copyButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    [self.copyButton setTitle:@"Copy results" forState:UIControlStateNormal];
+    [self.copyButton addTarget:self action:@selector(copyResults) forControlEvents:UIControlEventTouchUpInside];
+    UIStackView* logControls = [[UIStackView alloc] initWithArrangedSubviews:@[self.shareButton, self.copyButton]];
+    logControls.distribution = UIStackViewDistributionFillEqually;
+    logControls.spacing = 12;
+    [stack addArrangedSubview:logControls];
     self.output = [[UITextView alloc] init];
     self.output.editable = NO;
     self.output.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
-    self.output.text = @"Tap Run all tests. The core loads and every test runs in order. The sequence stops on the first failure.\n\nWhen finished, tap Share startup log. Game boot is still pending.";
+    self.output.text = @"Tap Run all tests. The core loads and every test runs in order. The sequence stops on the first failure.\n\nWhen finished, share the .txt log or tap Copy results and paste into chat. Game boot is still pending.";
     [stack addArrangedSubview:self.output];
     NSString* pending = [NSUserDefaults.standardUserDefaults stringForKey:pendingStageKey];
     if (pending.length) {
-        self.output.text = [NSString stringWithFormat:@"Previous run did not finish: %@.\n\nShare the startup log if the app crashed. Run all tests starts a fresh sequence in this process. Game boot is still pending.", pending];
+        self.previousRunPending = YES;
+        self.output.text = [NSString stringWithFormat:@"Previous run did not finish: %@.\n\nShare log or Copy results includes that previous run until you start testing again. Run all tests starts a fresh sequence in this process. Game boot is still pending.", pending];
     }
     [self refreshControls];
     [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(enteredBackground:)
@@ -120,6 +131,7 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
     self.nextButton.enabled = available;
     self.stopButton.enabled = self.running && self.runAll && !self.stopRequested;
     self.shareButton.enabled = !self.running;
+    self.copyButton.enabled = !self.running;
     [self.runButton setTitle:self.nextStage ? @"Run remaining tests" : @"Run all tests" forState:UIControlStateNormal];
     self.progress.progress = float(self.nextStage) / float(stageCount);
 }
@@ -128,6 +140,7 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
 - (void)startSequence:(BOOL)all {
     if (self.running || self.failed || self.nextStage >= stageCount) return;
     self.running = YES;
+    self.previousRunPending = NO;
     self.runAll = all;
     self.stopRequested = NO;
     self.previousIdleTimerDisabled = UIApplication.sharedApplication.idleTimerDisabled;
@@ -243,10 +256,52 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
         [self pauseSequence];
     }
 }
+- (void)showLogMessage:(NSString*)title detail:(NSString*)detail {
+    UIAlertController* alert = [UIAlertController alertControllerWithTitle:title message:detail preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+- (NSString*)logTextWithTail:(BOOL)tail {
+    NSURL* docs = [[NSFileManager defaultManager] URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask].firstObject;
+    NSError* error = nil;
+    NSData* bytes = [NSData dataWithContentsOfURL:[docs URLByAppendingPathComponent:@"ARMSX3-startup.log"] options:0 error:&error];
+    if (!bytes.length) {
+        [self showLogMessage:@"Could not read startup log" detail:error.localizedDescription ?: @"The startup log is empty."];
+        return nil;
+    }
+    NSString* text = [[NSString alloc] initWithData:bytes encoding:NSUTF8StringEncoding];
+    if (!text) text = [[NSString alloc] initWithData:bytes encoding:NSISOLatin1StringEncoding];
+    const auto session = armsx3_startup_log_session(text.UTF8String, self.previousRunPending);
+    const auto selected = tail ? armsx3_startup_log_tail(session, 60) : session;
+    NSString* build = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleVersion"] ?: @"unknown";
+    NSString* summary = self.previousRunPending ? [NSString stringWithFormat:@"Previous unfinished run: %@\n",
+        [NSUserDefaults.standardUserDefaults stringForKey:pendingStageKey] ?: @"unknown stage"] : self.transcript;
+    return [NSString stringWithFormat:@"ARMSX3 diagnostics · build %@\n%@\n%@%@", build, summary,
+        tail ? @"Last 60 log lines from this run:\n" : @"Full log from this run:\n",
+        [NSString stringWithUTF8String:selected.c_str()]];
+}
+- (void)copyResults {
+    if (self.running) return;
+    NSString* text = [self logTextWithTail:YES];
+    if (!text) return;
+    UIPasteboard.generalPasteboard.string = text;
+    [self showLogMessage:@"Results copied" detail:@"Paste into chat. This includes the test results and the end of the log."];
+}
 - (void)shareLog {
     if (self.running) return;
-    NSURL* docs = [[NSFileManager defaultManager] URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask].firstObject;
-    NSURL* log = [docs URLByAppendingPathComponent:@"ARMSX3-startup.log"];
+    NSString* text = [self logTextWithTail:NO];
+    if (!text) return;
+    NSDateFormatter* format = [[NSDateFormatter alloc] init];
+    format.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
+    format.timeZone = [NSTimeZone timeZoneForSecondsFromGMT:0];
+    format.dateFormat = @"yyyyMMdd-HHmmss-SSS";
+    NSString* filename = [NSString stringWithFormat:@"ARMSX3-startup-%@-%d.txt", [format stringFromDate:NSDate.date], NSProcessInfo.processInfo.processIdentifier];
+    NSURL* log = [[NSURL fileURLWithPath:NSTemporaryDirectory() isDirectory:YES] URLByAppendingPathComponent:filename];
+    NSError* error = nil;
+    if (![text writeToURL:log atomically:YES encoding:NSUTF8StringEncoding error:&error]) {
+        [self showLogMessage:@"Could not export startup log" detail:error.localizedDescription];
+        return;
+    }
     UIActivityViewController* share = [[UIActivityViewController alloc] initWithActivityItems:@[log] applicationActivities:nil];
     share.popoverPresentationController.sourceView = self.shareButton;
     share.popoverPresentationController.sourceRect = self.shareButton.bounds;

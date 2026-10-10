@@ -1,0 +1,169 @@
+--- a/rpcs3/Emu/Cell/PPUModule.cpp
++++ b/rpcs3/Emu/Cell/PPUModule.cpp
+@@ -2711,6 +2711,99 @@
+ }
+ #endif
+ 
++static std::pair<vm::ptr<u64>, vm::ptr<u64>> ppu_pack_exec_arguments(ppu_thread& context)
++{
++	auto* ppu = &context;
++	// Write initial data (exitspawn)
++	if (!Emu.data.empty())
++	{
++		std::memcpy(vm::base(ppu->stack_addr + ppu->stack_size - ::size32(Emu.data)), Emu.data.data(), Emu.data.size());
++		ppu->gpr[1] -= utils::align<u32>(::size32(Emu.data), 0x10);
++	}
++
++	// Initialize process arguments
++
++	// Calculate storage requirements on the stack
++	const u32 pointers_storage_size = u32{sizeof(u64)} * utils::align<u32>(::size32(Emu.envp) + ::size32(Emu.argv) + 2, 2);
++
++	u32 stack_alloc_size = pointers_storage_size;
++
++	for (const auto& arg : Emu.argv)
++	{
++		stack_alloc_size += utils::align<u32>(::size32(arg) + 1, 0x10);
++	}
++
++	for (const auto& arg : Emu.envp)
++	{
++		stack_alloc_size += utils::align<u32>(::size32(arg) + 1, 0x10);
++	}
++
++	ensure(ppu->stack_size > stack_alloc_size);
++
++	vm::ptr<u64> args = vm::cast(static_cast<u32>(ppu->stack_addr + ppu->stack_size - stack_alloc_size - utils::align<u32>(::size32(Emu.data), 0x10)));
++	vm::ptr<u8> args_data = vm::cast(args.addr() + pointers_storage_size);
++
++	const vm::ptr<u64> argv = args;
++
++	for (const auto& arg : Emu.argv)
++	{
++		const u32 arg_size = ::size32(arg) + 1;
++
++		std::memcpy(args_data.get_ptr(), arg.data(), arg_size);
++
++		*args++ = args_data.addr();
++		args_data = vm::cast(args_data.addr() + utils::align<u32>(arg_size, 0x10));
++	}
++
++	*args++ = 0;
++
++	const vm::ptr<u64> envp = args;
++	args = envp;
++
++	for (const auto& arg : Emu.envp)
++	{
++		const u32 arg_size = ::size32(arg) + 1;
++
++		std::memcpy(args_data.get_ptr(), arg.data(), arg_size);
++
++		*args++ = args_data.addr();
++		args_data = vm::cast(args_data.addr() + utils::align<u32>(arg_size, 0x10));
++	}
++
++	*args++ = 0;
++
++	ppu->gpr[1] -= stack_alloc_size;
++
++	return {argv, envp};
++}
++
++#if defined(__APPLE__) && TARGET_OS_IPHONE
++// Use the executable loader's argument packer only on a fresh, retained probe
++// worker. Preflight every bound before the production code writes guest memory.
++extern "C" int armsx3_ios_ppu_prepare_probe_arguments(ppu_thread* ppu, u32* argv_address, u32* envp_address)
++{
++	if (!ppu || !argv_address || !envp_address || argv_address == envp_address || !Emu.IsStopped() ||
++		ppu->stack_addr != 0x30000u || ppu->stack_size != 0x8000u ||
++		ppu->gpr[1] != 0x38000u - ppu_stack_start_offset ||
++		!(ppu->state & cpu_flag::suspend) || get_current_cpu_thread() == ppu) return -1;
++	if (Emu.argv.size() > 16 || Emu.envp.size() > 16 || Emu.data.size() > 64) return -2;
++	u64 storage = 8 * ((Emu.argv.size() + Emu.envp.size() + 3) & ~u64{1});
++	for (const auto* strings : {&Emu.argv, &Emu.envp})
++		for (const auto& arg : *strings)
++		{
++			if (arg.size() > 128) return -2;
++			storage += (arg.size() + 16) & ~u64{15};
++		}
++	const u64 data_storage = (Emu.data.size() + 15) & ~u64{15};
++	if (storage + data_storage + ppu_stack_start_offset + 128 >= ppu->stack_size ||
++		!vm::check_addr(ppu->stack_addr, vm::page_readable | vm::page_writable, ppu->stack_size)) return -3;
++	const auto [argv, envp] = ppu_pack_exec_arguments(*ppu);
++	*argv_address = argv.addr();
++	*envp_address = envp.addr();
++	return 0;
++}
++#endif
++
+ bool ppu_load_exec(const ppu_exec_object& elf, bool virtual_load, const std::string& elf_path, utils::serial* ar)
+ {
+ 	if (elf != elf_error::ok)
+@@ -3294,65 +3387,7 @@
+ 
+ 	auto ppu = idm::make_ptr<named_thread<ppu_thread>>(p, "main_thread", primary_prio, 1);
+ 
+-	// Write initial data (exitspawn)
+-	if (!Emu.data.empty())
+-	{
+-		std::memcpy(vm::base(ppu->stack_addr + ppu->stack_size - ::size32(Emu.data)), Emu.data.data(), Emu.data.size());
+-		ppu->gpr[1] -= utils::align<u32>(::size32(Emu.data), 0x10);
+-	}
+-
+-	// Initialize process arguments
+-
+-	// Calculate storage requirements on the stack
+-	const u32 pointers_storage_size = u32{sizeof(u64)} * utils::align<u32>(::size32(Emu.envp) + ::size32(Emu.argv) + 2, 2);
+-
+-	u32 stack_alloc_size = pointers_storage_size;
+-
+-	for (const auto& arg : Emu.argv)
+-	{
+-		stack_alloc_size += utils::align<u32>(::size32(arg) + 1, 0x10);
+-	}
+-
+-	for (const auto& arg : Emu.envp)
+-	{
+-		stack_alloc_size += utils::align<u32>(::size32(arg) + 1, 0x10);
+-	}
+-
+-	ensure(ppu->stack_size > stack_alloc_size);
+-
+-	vm::ptr<u64> args = vm::cast(static_cast<u32>(ppu->stack_addr + ppu->stack_size - stack_alloc_size - utils::align<u32>(::size32(Emu.data), 0x10)));
+-	vm::ptr<u8> args_data = vm::cast(args.addr() + pointers_storage_size);
+-
+-	const vm::ptr<u64> argv = args;
+-
+-	for (const auto& arg : Emu.argv)
+-	{
+-		const u32 arg_size = ::size32(arg) + 1;
+-
+-		std::memcpy(args_data.get_ptr(), arg.data(), arg_size);
+-
+-		*args++ = args_data.addr();
+-		args_data = vm::cast(args_data.addr() + utils::align<u32>(arg_size, 0x10));
+-	}
+-
+-	*args++ = 0;
+-
+-	const vm::ptr<u64> envp = args;
+-	args = envp;
+-
+-	for (const auto& arg : Emu.envp)
+-	{
+-		const u32 arg_size = ::size32(arg) + 1;
+-
+-		std::memcpy(args_data.get_ptr(), arg.data(), arg_size);
+-
+-		*args++ = args_data.addr();
+-		args_data = vm::cast(args_data.addr() + utils::align<u32>(arg_size, 0x10));
+-	}
+-
+-	*args++ = 0;
+-
+-	ppu->gpr[1] -= stack_alloc_size;
++	const auto [argv, envp] = ppu_pack_exec_arguments(*ppu);
+ 
+ 	ensure(g_fxo->get<lv2_memory_container>().take(primary_stacksize + segs_size));
+ 
