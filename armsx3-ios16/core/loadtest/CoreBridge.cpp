@@ -2907,7 +2907,7 @@ extern "C" __attribute__((visibility("default"))) int armsx3_core_test_elf_fixed
     try {
         if (!Emu.IsStopped()) throw std::runtime_error("P22 requires stopped emulator");
         vm::init(); initialized = true;
-        const auto area = vm::reserve_map(vm::main, 0x10000, 0x40000, vm::block_size_64k);
+        auto area = vm::reserve_map(vm::main, 0x10000, 0x40000, vm::block_size_64k);
         if (!area || area->addr != 0x10000 || (area->flags & 0xf00) != vm::block_size_64k)
             throw std::runtime_error("P22 main allocation area mismatch");
         constexpr u32 codeAddress = 0x10100, dataAddress = 0x30400;
@@ -2984,6 +2984,9 @@ extern "C" __attribute__((visibility("default"))) int armsx3_core_test_elf_fixed
         if (area->dealloc(0x30000) != 0x10000 || area->dealloc(0x10000) != 0x10000 ||
             vm::check_addr(0x10000) || vm::check_addr(0x30000))
             throw std::runtime_error("P22 fixed segment cleanup failed");
+        // vm::close requires the VM table to own the only block reference.
+        ARMSX3StartupLog("P22 BEFORE releasing block reference and closing guest VM");
+        area.reset();
         vm::close(); initialized = false;
         ARMSX3StartupLog("P22 PASS: on-disk ELF, separate fixed code/data allocations, zero-filled BSS/padding, aliases, conflict rejection and rollback; full executable loader/firmware/game boot remain untested");
         return 0;

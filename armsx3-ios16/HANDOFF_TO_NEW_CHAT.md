@@ -915,3 +915,18 @@ iOS VM mappings; new device stage pending. Does not call full ppu_load_exec,
 set ELF read-only page protections, analyze/execute the P22 fixture or load
 firmware. P20/P21 continue covering analysis/preparation/execution. Next:
 loader process/HLE initialization, real executable loading and syscalls.
+
+## 2026-10-10 — build33 / P22 block ownership cleanup fix
+Archive(4).zip includes build32 crash, pid96101 and startup log. P2..P21
+PASS. P22 overlap/boundary rejection and partial rollback PASS. Fatal
+vm::close ensure(block.use_count()==1), vm.cpp2796. Diagnostic retained
+`const auto area` shared_ptr while closing the VM on its success path.
+Scope unwinding would release it on an exception; explicit success close
+occurred before scope exit. Build33 changes area to mutable auto, explicitly
+resets it immediately before vm::close, and logs the cleanup boundary.
+No core assertion weakened. P22 payload/BSS checks have no individual pass
+marker, so not independently claimed as confirmed from this crash log.
+CFBundleVersion33, still21 automatic stages. Exact corrected bridge compile
+PASS. Host shared ownership teardown harness reproduces retained-reference
+failure and verifies reset gives sole VM ownership; this is a ownership
+model, not actual iOS VM integration. Device retest pending.
