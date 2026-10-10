@@ -1,0 +1,79 @@
+--- a/rpcs3/Emu/Cell/lv2/lv2.cpp
++++ b/rpcs3/Emu/Cell/lv2/lv2.cpp
+@@ -57,6 +57,10 @@
+ #include "sys_uart.h"
+ #include "sys_crypto_engine.h"
+ #include "sys_bluetooth.h"
++
++#if defined(__APPLE__)
++#include <TargetConditionals.h>
++#endif
+ 
+ #include <algorithm>
+ #include <optional>
+@@ -1680,6 +1684,41 @@
+ 	static constexpr auto thread_name = "PPU Syscall Usage Thread"sv;
+ };
+ 
++#if defined(__APPLE__) && TARGET_OS_IPHONE
++// Only the statistics destination is scoped here. The SC interpreter,
++// production table, bindings and system-service handlers remain unchanged.
++struct ios_ppu_syscall_probe { std::array<u32, 1024> counts{}; };
++static thread_local ios_ppu_syscall_probe* s_ios_ppu_syscall_probe = nullptr;
++extern "C" int armsx3_ios_ppu_probe_syscalls_and_call(ppu_thread* context,
++    int (*execute)(ppu_thread*, void*), void* user)
++{
++	if (!context || !execute || !Emu.IsStopped() || cpu_thread::get_current() != context ||
++		g_cfg.core.ppu_decoder != ppu_decoder_type::_static || context->stack_addr != 0x30000u ||
++		context->stack_size != 0x8000u || context->entry_func.addr != 0x10000u) return -1;
++	if (s_ios_ppu_syscall_probe) return -2;
++	ios_ppu_syscall_probe probe;
++	struct Restore { ~Restore() { s_ios_ppu_syscall_probe = nullptr; } } restore;
++	s_ios_ppu_syscall_probe = &probe;
++	const int result = execute(context, user);
++	if (result < 0) return result;
++	for (u32 code = 0; code < probe.counts.size(); ++code)
++		if (probe.counts[code] != (code == 46 ? 2u : (code == 49 || code == 6 ? 1u : 0u))) return -3;
++	return result;
++}
++#endif
++
++static void ppu_record_syscall_usage(u64 code)
++{
++#if defined(__APPLE__) && TARGET_OS_IPHONE
++	if (auto* probe = s_ios_ppu_syscall_probe)
++	{
++		probe->counts[code]++;
++		return;
++	}
++#endif
++	g_fxo->get<named_thread<ppu_syscall_usage>>().stat[code]++;
++}
++
+ extern void ppu_execute_syscall(ppu_thread& ppu, u64 code)
+ {
+ 	if (g_cfg.core.ppu_decoder == ppu_decoder_type::llvm)
+@@ -1689,7 +1728,7 @@
+ 
+ 	if (code < g_ppu_syscall_table.size())
+ 	{
+-		g_fxo->get<named_thread<ppu_syscall_usage>>().stat[code]++;
++		ppu_record_syscall_usage(code);
+ 
+ 		if (const auto func = g_ppu_syscall_table[code].first)
+ 		{
+--- a/rpcs3/Emu/CMakeLists.txt
++++ b/rpcs3/Emu/CMakeLists.txt
+@@ -118,6 +118,12 @@
+         COMPILE_OPTIONS -fexceptions)
+     set_source_files_properties(Cell/Modules/sys_ppu_thread_.cpp PROPERTIES
+         SKIP_PRECOMPILE_HEADERS ON)
++endif()
++
++if(ARMSX3_IOS)
++    # Restore scoped syscall counters if a diagnostic callback unwinds.
++    set_property(SOURCE Cell/lv2/lv2.cpp APPEND PROPERTY COMPILE_OPTIONS -fexceptions)
++    set_source_files_properties(Cell/lv2/lv2.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+ endif()
+ 
+ # Crypto

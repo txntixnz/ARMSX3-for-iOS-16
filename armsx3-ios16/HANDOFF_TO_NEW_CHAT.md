@@ -1643,3 +1643,84 @@ upstream. No local Xcode SDK; full iOS compilation/device P34 remain pending.
 Bundle48;33 stages P2-P34. After Actions succeeds install the IPA and run
 all33 tests, then send the .txt log. Full process/firmware/LV2/RSX/game boot
 remain untested; no commercial PS3 game has booted.
+
+## 2026-10-10 build48 device PASS; build49 P35 guest syscalls
+
+User supplied ARMSX3-startup-20261010-213755-845-99797.txt, PID99797,
+build48,5162 lines. All33 stages P2-P34 and final AUTO PASS completed.
+P34 confirms the production executable process parser drives real worker
+priority1100, stack0x8000, malloc-page r12 and TLS metadata, with actual
+linked guest TLS result42 and repeated cleanup. Exported .txt remains readable.
+Build48 HEAD was88f2be48d2fd0d23ffd3a6f68f5ba036dfba9ca1,
+tree669fe603bb58c43a22dd041c29b701bf4228c0df.
+
+Build49 adds P35, armsx3_core_test_guest_syscalls,34 total tests P2-P35.
+The same production-loaded five-header ELF/arguments/process/TLS image
+now executes two actual SC(0) instructions through the existing interpreter,
+ppu_execute_syscall, production LV2 table, full BIND_FUNC register/return
+bindings and unmodified sys_ppu_thread handlers. Linked callee10060 calls
+syscall49 (get_stack_information); caller1003c calls syscall46 (get_join_state),
+then reads the real initialized TLS byte and returns42. Constructor cycle1
+is joinable, cycle2 detached; actual service outputs must reflect each state.
+Stack query reports base30000,size8000. DATA offsets40/44 hold stack values,
+48 holds successful stack return as u64,56 holds join-state u32,60 holds
+successful join return u32; these free bytes end before the PRX record at64.
+Caller grows to24 instructions/96bytes, callee remains3 instructions/12bytes;
+total code stays108bytes, DATA352bytes.27 guest instructions plus HLE RETURN
+give28 bounded dispatches. Full image/stack/TLS/aliases/cache/HLE/CPU counters
+and repeated link/TLS/worker cleanup still checked. New production ELF SHA1
+d0c52d6772dd173f67886d67dde0cf8a013091d2.
+
+Before the bounded guest call, the worker executes the same loaded SC opcode
+with r11=46,r3=0, expecting CELL_EFAULT, and r11=6, expecting CELL_ENOSYS.
+Both leave all DATA/aliases unchanged and advance CIA by4. IMPORTANT: the
+error_code binding sign-extends its signed32 stored error to64, so EFAULT
+must equal u64(s64(s32(CELL_EFAULT))); uns_func_ assigns CellError directly,
+so ENOSYS is zero-extended. Full BIND_FUNC retains history for the null error
+and both successful services, total3 entries even if history ring size1;
+unused service6 bypasses binding/history. Last history verifies syscall46,
+loaded CIA1003c,error0 and current_function restoration.
+
+New patch0030-ios-scoped-syscall-statistics.patch extracts the existing
+production usage-counter line to ppu_record_syscall_usage. Normal execution
+still increments g_fxo->get<named_thread<ppu_syscall_usage>>().stat[code].
+That FXO is not initialized by this diagnostic-only startup: fixed_typemap
+get() returns potentially uninitialized memory, not a lazily created object.
+The new iOS diagnostic-only armsx3_ios_ppu_probe_syscalls_and_call validates
+stopped emulator/current real worker/static decoder/owned stack+entry, then
+scopes a thread-local1024-counter array around its callback. Only statistics
+recording is redirected; SC/table/bindings/services are unchanged. Require
+counts46=2,49=1,6=1,all others0. No usage thread or unrelated global process
+FXO is created, and normal global statistics are preserved. Nested entry
+rejects-2; input-1; counts mismatch-3; negative callback returns propagate.
+RAII restores the thread-local pointer on normal, error and exception exits.
+Patch also adds iOS-only -fexceptions/PCH skip for Cell/lv2/lv2.cpp so callback
+unwind actually runs that restoration under the otherwise -fno-exceptions
+core build, following the earlier TLS module source-option pattern.
+
+Host verification: exact C++ P35 fixture constructor/selected upstream opcode
+helpers and five-header process/TLS segment loader pass existing sanitizer
+checks for malformed input, default/priority boundaries, output sentinels,
+allocation/exception rollback, LOAD/BSS/hash and metadata. Independent PPC
+model of actual ELF opcodes confirms both SC addresses/numbers/arguments,
+joinable/detached BE outputs,27+1 dispatches, TLS result42 and exact whole
+memory changes/arguments/TLS/TOC/SP/LR preservation. Actual SC interpreter,
+patched production dispatcher, full BIND_FUNC/templates/GPR casts, original
+stack/join handlers and scoped statistics wrapper compiled with host VM/type
+shims using -fno-exceptions followed by -fexceptions and ASAN/UBSAN: signed
+EFAULT,unsigned ENOSYS, BE stack/join results, CIA/history/arguments/function
+restore, normal vs scoped counts, invalid opcode/number, LLVM code selection,
+nested/invalid wrapper inputs, repeated scopes, mismatch/negative callbacks
+and injected exception cleanup all PASS. Actual P35 ELF TLS bytes also pass
+production TLS bootstrap/allocator/free sanitizer harness including25 injected
+access failures. Patch applies with existing CMake patches; old P2-P34 prefix
+unchanged,435414 bytes/Git blob299fe73a97cb502ae90adef84ddd1ee20638ab54.
+Build49 plist,34 ordered unique app/bridge exports and resultsCopyButton
+ARC repair retained. No local Xcode/iOS SDK: build49 compilation and device
+P35 are still unverified until user reports them.
+
+After pushing, DO NOT monitor Actions: user reports workflow completion,
+failure or the new device log. On success install build49 and run all34 tests.
+Full process admission, full sys_initialize_tls mutex/HLE initialization,
+firmware, scheduling/synchronization services, RSX and game boot remain
+untested. P35 validates only the two real worker-query services and errors.
