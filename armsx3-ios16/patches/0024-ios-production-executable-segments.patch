@@ -1,0 +1,263 @@
+--- a/rpcs3/Emu/Cell/PPUModule.cpp
++++ b/rpcs3/Emu/Cell/PPUModule.cpp
+@@ -2386,6 +2386,153 @@
+ 	}
+ }
+ 
++static bool ppu_load_exec_segments(const ppu_exec_object& elf, bool virtual_load, utils::serial* ar,
++    ppu_module<lv2_obj>& _main, bool has_private_ppu_executable_area, u32& segs_size, sha1_context& sha)
++{
++	// Allocate memory at fixed positions
++	for (const auto& prog : elf.progs)
++	{
++		ppu_loader.notice("** Segment: p_type=0x%x, p_vaddr=0x%llx, p_filesz=0x%llx, p_memsz=0x%llx, flags=0x%x", prog.p_type, prog.p_vaddr, prog.p_filesz, prog.p_memsz, prog.p_flags);
++
++		ppu_segment _seg;
++		const u32 addr = _seg.addr = vm::cast(prog.p_vaddr);
++		const u32 size = _seg.size = ::narrow<u32>(prog.p_memsz);
++		const u32 type = _seg.type = prog.p_type;
++
++		_seg.flags  = prog.p_flags;
++		_seg.filesz = ::narrow<u32>(prog.p_filesz);
++
++		// Hash big-endian values
++		sha1_update(&sha, reinterpret_cast<const uchar*>(&prog.p_type), sizeof(prog.p_type));
++		sha1_update(&sha, reinterpret_cast<const uchar*>(&prog.p_flags), sizeof(prog.p_flags));
++
++		if (type == 0x1 /* LOAD */ && prog.p_memsz)
++		{
++			if (prog.bin.size() > size || prog.bin.size() != prog.p_filesz)
++			{
++				ppu_loader.error("ppu_load_exec(): Invalid binary size (0x%llx, memsz=0x%x)", prog.bin.size(), size);
++				return false;
++			}
++
++			const bool already_loaded = ar && vm::check_addr(addr, vm::page_readable, size);
++
++			_seg.ptr = vm::base(addr);
++
++			if (virtual_load)
++			{
++				// Leave additional room for the analyser so it can safely access beyond limit a bit
++				// Because with VM the address sapce is not really a limit so any u32 address is valid there, here it is UB to create pointer that goes beyond the boundaries
++				// TODO: Use make_shared_for_overwrite when all compilers support it
++				const usz alloc_size = utils::align<usz>(size, 0x10000) + 4096;
++				_main.allocations.push_back(std::shared_ptr<u8[]>(new u8[alloc_size]));
++				_seg.ptr = _main.allocations.back().get();
++				std::memset(static_cast<u8*>(_seg.ptr) + prog.bin.size(), 0, alloc_size - 4096 - prog.bin.size());
++			}
++			else if (already_loaded)
++			{
++			}
++			else if (![&]() -> bool
++			{
++				// 1M pages if it is RSX shared
++				const u32 area_flags = (_seg.flags >> 28) ? vm::block_size_1m : vm::block_size_64k;
++				const u32 alloc_at = has_private_ppu_executable_area && addr >= 0x10000000 ? 0x10000000 : std::max<u32>(addr & -0x10000000, 0x10000);
++
++				const auto area = vm::reserve_map(vm::any, alloc_at, 0x10000000, area_flags);
++
++				if (!area)
++				{
++					return false;
++				}
++
++				if (area->addr != alloc_at || (area->flags & 0xf00) != area_flags)
++				{
++					ppu_loader.error("Failed to allocate memory at 0x%x - conflicting memory area exists: area->addr=0x%x, area->flags=0x%x", addr, area->addr, area->flags);
++					return false;
++				}
++
++				return area->falloc(addr, size);
++			}())
++			{
++				ppu_loader.error("ppu_load_exec(): vm::falloc() failed (addr=0x%x, memsz=0x%x)", addr, size);
++				return false;
++			}
++
++			// Store only LOAD segments (TODO)
++			_main.segs.emplace_back(_seg);
++			_main.addr_to_seg_index.emplace(addr, ::size32(_main.segs) - 1);
++
++			// Copy segment data, hash it
++			if (!already_loaded)
++			{
++				std::memcpy(_main.get_ptr<void>(addr), prog.bin.data(), prog.bin.size());
++			}
++			else
++			{
++				// For backwards compatibility: already loaded memory will always be writable
++				const u32 size0 = utils::align(size + addr % 0x10000, 0x10000);
++				const u32 addr0 = addr & -0x10000;
++				vm::page_protect(addr0, size0, 0, vm::page_writable | vm::page_readable, vm::page_executable);
++			}
++
++			sha1_update(&sha, reinterpret_cast<const uchar*>(&prog.p_vaddr), sizeof(prog.p_vaddr));
++			sha1_update(&sha, reinterpret_cast<const uchar*>(&prog.p_memsz), sizeof(prog.p_memsz));
++			sha1_update(&sha, prog.bin.data(), prog.bin.size());
++
++			// Initialize executable code if necessary
++			if (prog.p_flags & 0x1 && !virtual_load)
++			{
++				ppu_register_range(addr, size);
++			}
++
++			segs_size += utils::align<u32>(size + (addr % 0x10000), 0x10000);
++		}
++	}
++
++	return true;
++}
++
++#if defined(__APPLE__) && TARGET_OS_IPHONE
++// Restrict the shared production segment loader to two private diagnostic pages.
++extern "C" int armsx3_ios_ppu_load_probe_segments(const ppu_exec_object* elf, ppu_module<lv2_obj>* info)
++{
++	if (!elf || !info || *elf != elf_error::ok || !Emu.IsStopped() ||
++		g_cfg.core.ppu_decoder != ppu_decoder_type::_static || !g_fxo->is_init() ||
++		!g_fxo->is_init<ppu_interpreter_rt>() || !info->segs.empty() ||
++		!info->addr_to_seg_index.empty() || elf->progs.size() != 2 || elf->header.e_entry != 0x20000) return -1;
++	for (u32 index = 0; index < 2; ++index)
++	{
++		const auto& prog = elf->progs[index];
++		const u32 address = 0x10000 + index * 0x10000;
++		if (prog.p_type != 1u || prog.p_vaddr != address || prog.p_memsz != 0x10000u ||
++			prog.p_flags != (index ? 6u : 5u) || !prog.p_filesz || prog.p_filesz > 256u ||
++			prog.bin.size() != prog.p_filesz || vm::check_addr(address, vm::page_allocated, 1)) return -2;
++	}
++	struct Rollback
++	{
++		ppu_module<lv2_obj>& info;
++		bool active = true;
++		~Rollback()
++		{
++			if (!active) return;
++			// Both pages were verified unallocated before this loader invocation.
++			for (u32 address : {0x10000u, 0x20000u})
++				if (vm::check_addr(address, vm::page_allocated, 1)) vm::dealloc(address);
++			utils::memory_decommit(vm::g_exec_addr + vm::g_exec_addr_seg_offset + (0x10000 >> 1), 0x8000);
++			info.segs.clear(); info.addr_to_seg_index.clear();
++		}
++	} rollback{*info};
++	sha1_context sha;
++	sha1_starts(&sha);
++	u32 size = 0;
++	if (!ppu_load_exec_segments(*elf, false, nullptr, *info, false, size, sha)) return -3;
++	if (size != 0x20000 || info->segs.size() != 2 || info->addr_to_seg_index.size() != 2) return -4;
++	sha1_finish(&sha, info->sha1);
++	rollback.active = false;
++	return 0;
++}
++#endif
++
++
+ bool ppu_load_exec(const ppu_exec_object& elf, bool virtual_load, const std::string& elf_path, utils::serial* ar)
+ {
+ 	if (elf != elf_error::ok)
+@@ -2597,104 +2744,8 @@
+ 
+ 	u32 segs_size = 0;
+ 
+-	// Allocate memory at fixed positions
+-	for (const auto& prog : elf.progs)
+-	{
+-		ppu_loader.notice("** Segment: p_type=0x%x, p_vaddr=0x%llx, p_filesz=0x%llx, p_memsz=0x%llx, flags=0x%x", prog.p_type, prog.p_vaddr, prog.p_filesz, prog.p_memsz, prog.p_flags);
+-
+-		ppu_segment _seg;
+-		const u32 addr = _seg.addr = vm::cast(prog.p_vaddr);
+-		const u32 size = _seg.size = ::narrow<u32>(prog.p_memsz);
+-		const u32 type = _seg.type = prog.p_type;
+-
+-		_seg.flags  = prog.p_flags;
+-		_seg.filesz = ::narrow<u32>(prog.p_filesz);
+-
+-		// Hash big-endian values
+-		sha1_update(&sha, reinterpret_cast<const uchar*>(&prog.p_type), sizeof(prog.p_type));
+-		sha1_update(&sha, reinterpret_cast<const uchar*>(&prog.p_flags), sizeof(prog.p_flags));
+-
+-		if (type == 0x1 /* LOAD */ && prog.p_memsz)
+-		{
+-			if (prog.bin.size() > size || prog.bin.size() != prog.p_filesz)
+-			{
+-				ppu_loader.error("ppu_load_exec(): Invalid binary size (0x%llx, memsz=0x%x)", prog.bin.size(), size);
+-				return false;
+-			}
+-
+-			const bool already_loaded = ar && vm::check_addr(addr, vm::page_readable, size);
+-
+-			_seg.ptr = vm::base(addr);
+-
+-			if (virtual_load)
+-			{
+-				// Leave additional room for the analyser so it can safely access beyond limit a bit
+-				// Because with VM the address sapce is not really a limit so any u32 address is valid there, here it is UB to create pointer that goes beyond the boundaries
+-				// TODO: Use make_shared_for_overwrite when all compilers support it
+-				const usz alloc_size = utils::align<usz>(size, 0x10000) + 4096;
+-				_main.allocations.push_back(std::shared_ptr<u8[]>(new u8[alloc_size]));
+-				_seg.ptr = _main.allocations.back().get();
+-				std::memset(static_cast<u8*>(_seg.ptr) + prog.bin.size(), 0, alloc_size - 4096 - prog.bin.size());
+-			}
+-			else if (already_loaded)
+-			{
+-			}
+-			else if (![&]() -> bool
+-			{
+-				// 1M pages if it is RSX shared
+-				const u32 area_flags = (_seg.flags >> 28) ? vm::block_size_1m : vm::block_size_64k;
+-				const u32 alloc_at = has_private_ppu_executable_area && addr >= 0x10000000 ? 0x10000000 : std::max<u32>(addr & -0x10000000, 0x10000);
+-
+-				const auto area = vm::reserve_map(vm::any, alloc_at, 0x10000000, area_flags);
+-
+-				if (!area)
+-				{
+-					return false;
+-				}
+-
+-				if (area->addr != alloc_at || (area->flags & 0xf00) != area_flags)
+-				{
+-					ppu_loader.error("Failed to allocate memory at 0x%x - conflicting memory area exists: area->addr=0x%x, area->flags=0x%x", addr, area->addr, area->flags);
+-					return false;
+-				}
+-
+-				return area->falloc(addr, size);
+-			}())
+-			{
+-				ppu_loader.error("ppu_load_exec(): vm::falloc() failed (addr=0x%x, memsz=0x%x)", addr, size);
+-				return false;
+-			}
+-
+-			// Store only LOAD segments (TODO)
+-			_main.segs.emplace_back(_seg);
+-			_main.addr_to_seg_index.emplace(addr, ::size32(_main.segs) - 1);
+-
+-			// Copy segment data, hash it
+-			if (!already_loaded)
+-			{
+-				std::memcpy(_main.get_ptr<void>(addr), prog.bin.data(), prog.bin.size());
+-			}
+-			else
+-			{
+-				// For backwards compatibility: already loaded memory will always be writable
+-				const u32 size0 = utils::align(size + addr % 0x10000, 0x10000);
+-				const u32 addr0 = addr & -0x10000;
+-				vm::page_protect(addr0, size0, 0, vm::page_writable | vm::page_readable, vm::page_executable);
+-			}
+-
+-			sha1_update(&sha, reinterpret_cast<const uchar*>(&prog.p_vaddr), sizeof(prog.p_vaddr));
+-			sha1_update(&sha, reinterpret_cast<const uchar*>(&prog.p_memsz), sizeof(prog.p_memsz));
+-			sha1_update(&sha, prog.bin.data(), prog.bin.size());
+-
+-			// Initialize executable code if necessary
+-			if (prog.p_flags & 0x1 && !virtual_load)
+-			{
+-				ppu_register_range(addr, size);
+-			}
+-
+-			segs_size += utils::align<u32>(size + (addr % 0x10000), 0x10000);
+-		}
+-	}
++	if (!ppu_load_exec_segments(elf, virtual_load, ar, _main, has_private_ppu_executable_area, segs_size, sha))
++		return false;
+ 
+ 	// Load section list, used by the analyser
+ 	for (const auto& s : elf.shdrs)

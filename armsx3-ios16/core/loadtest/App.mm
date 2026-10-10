@@ -33,6 +33,7 @@ static constexpr DiagnosticStage stages[] = {
     {26, "PRX export descriptor discovery", "armsx3_core_test_elf_export_discovery"},
     {27, "PRX registration and import backpatch", "armsx3_core_test_elf_export_registration"},
     {28, "Linked guest function call and return", "armsx3_core_test_linked_guest_call"},
+    {29, "Production ELF segment loading", "armsx3_core_test_production_elf_segments"},
 };
 static constexpr NSUInteger stageCount = sizeof(stages) / sizeof(stages[0]);
 static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";

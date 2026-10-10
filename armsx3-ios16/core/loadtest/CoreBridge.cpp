@@ -4459,3 +4459,225 @@ extern "C" __attribute__((visibility("default"))) int armsx3_core_test_linked_gu
     }
     catch (const std::exception& error) { ARMSX3StartupLog(error.what()); if (initialized) vm::close(); return -1; }
 }
+
+extern "C" int armsx3_ios_ppu_load_probe_segments(const ppu_exec_object*, ppu_module<lv2_obj>*);
+extern "C" __attribute__((visibility("default"))) int armsx3_core_test_production_elf_segments()
+{
+    ARMSX3StartupLog("P29 BEFORE production executable segment allocation/copy/hash/registration");
+    bool initialized = false;
+    try
+    {
+        if (!Emu.IsStopped()) throw std::runtime_error("P29 requires stopped emulator");
+        struct Configuration
+        {
+            bool debugPPU = g_cfg.core.ppu_debug.get();
+            bool ppu = g_cfg.core.ppu_prof.get(), spu = g_cfg.core.spu_prof.get(), debug = g_cfg.core.spu_debug.get();
+            thread_scheduler_mode scheduler = g_cfg.core.thread_scheduler.get();
+            ppu_decoder_type decoder = g_cfg.core.ppu_decoder.get();
+            Configuration() { g_cfg.core.ppu_debug.set(false); g_cfg.core.ppu_prof.set(false); g_cfg.core.spu_prof.set(false);
+                g_cfg.core.spu_debug.set(false); g_cfg.core.thread_scheduler.set(thread_scheduler_mode::os);
+                g_cfg.core.ppu_decoder.set(ppu_decoder_type::_static); }
+            ~Configuration() { g_cfg.core.ppu_debug.set(debugPPU); g_cfg.core.ppu_prof.set(ppu); g_cfg.core.spu_prof.set(spu);
+                g_cfg.core.spu_debug.set(debug); g_cfg.core.thread_scheduler.set(scheduler);
+                g_cfg.core.ppu_decoder.set(decoder); }
+        } configuration;
+        if (!g_fxo->is_init() ||
+            (!g_fxo->is_init<ppu_interpreter_rt>() && !g_fxo->init<ppu_interpreter_rt>()))
+            throw std::runtime_error("P29 fixed objects/interpreter unavailable");
+        const u32 codeAddress = 0x10000, dataAddress = 0x20000, stackAddress = 0x30000;
+        using namespace ppu_instructions;
+        using namespace ppu_instructions::implicts;
+        const std::array<u32, 2> opcodes{ADDI(3, 0, 42), BLR()};
+        ppu_exec_object::ehdr_t header{};
+        header.e_magic = "\177ELF"_u32; header.e_class = 2; header.e_data = 2;
+        header.e_curver = 1; header.e_os_abi = elf_os::lv2; header.e_type = elf_type::exec;
+        header.e_machine = elf_machine::ppc64; header.e_version = 1;
+        header.e_entry = dataAddress; header.e_phoff = sizeof(header);
+        header.e_ehsize = sizeof(header); header.e_phentsize = sizeof(ppu_exec_object::phdr_t); header.e_phnum = 2;
+        std::array<ppu_exec_object::phdr_t, 2> segments{};
+        segments[0].p_type = 1; segments[0].p_flags = 5; segments[0].p_offset = 0x100;
+        segments[0].p_vaddr = codeAddress; segments[0].p_filesz = sizeof(opcodes);
+        segments[0].p_memsz = 0x10000; segments[0].p_align = 0x100;
+        segments[1].p_type = 1; segments[1].p_flags = 6; segments[1].p_offset = 0x200;
+        segments[1].p_vaddr = dataAddress; segments[1].p_filesz = 32;
+        segments[1].p_memsz = 0x10000; segments[1].p_align = 0x100;
+        std::vector<u8> fixture(0x220, 0);
+        std::memcpy(fixture.data(), &header, sizeof(header));
+        std::memcpy(fixture.data() + sizeof(header), segments.data(), sizeof(segments));
+        for (u32 i = 0; i < opcodes.size(); ++i) {
+            const be_t<u32> word = opcodes[i]; std::memcpy(fixture.data() + 0x100 + i * 4, &word, 4);
+        }
+        const std::array<be_t<u32>, 2> descriptor{codeAddress, dataAddress};
+        std::memcpy(fixture.data() + 0x200, descriptor.data(), sizeof(descriptor));
+        for (u32 i = 8; i < 32; ++i) fixture[0x200 + i] = u8(0xa0 + i);
+        const auto stream = fs::make_stream(fixture);
+        ppu_exec_object elf(stream);
+        if (elf.get_error() != elf_error::ok || elf.progs.size() != 2)
+            throw std::runtime_error("P29 fixture reader failed");
+        const auto created = cpu_thread::g_threads_created.load(), deleted = cpu_thread::g_threads_deleted.load();
+        const u64 live = armsx3_ios_live_cpu_threads();
+        vm::init(); initialized = true;
+        if (!vm::reserve_map(vm::main, codeAddress, 0x10000))
+            throw std::runtime_error("P29 rollback memory block unavailable");
+        {
+            ppu_module<lv2_obj> partial;
+            if (armsx3_ios_ppu_load_probe_segments(&elf, &partial) != -3 || !partial.segs.empty() ||
+                !partial.addr_to_seg_index.empty() || vm::check_addr(codeAddress) || vm::check_addr(dataAddress))
+                throw std::runtime_error("P29 failed second allocation did not roll back first segment");
+        }
+        ARMSX3StartupLog("P29 PASS: production second-segment allocation failure rolls back first segment and metadata");
+        vm::close(); initialized = false;
+        vm::init(); initialized = true;
+        if (!vm::reserve_map(vm::main, codeAddress, 0x50000))
+            throw std::runtime_error("P29 main memory block unavailable");
+        // Invalid metadata must be rejected before any production allocation.
+        for (unsigned test = 0; test < 5; ++test) {
+            auto malformed = fixture; auto bad = segments;
+            if (test == 0) bad[1].p_vaddr = codeAddress;
+            if (test == 1) bad[1].p_memsz = ~u64{0};
+            if (test == 2) bad[0].p_flags = 7;
+            if (test == 3) bad[1].p_type = 7;
+            if (test == 4) bad[1].p_filesz = 257;
+            std::memcpy(malformed.data() + sizeof(header), bad.data(), sizeof(bad));
+            if (test == 4) malformed.resize(0x301);
+            const auto badStream = fs::make_stream(std::move(malformed));
+            ppu_exec_object rejected(badStream); ppu_module<lv2_obj> empty;
+            if (rejected.get_error() != elf_error::ok || armsx3_ios_ppu_load_probe_segments(&rejected, &empty) != -2 ||
+                !empty.segs.empty() || vm::check_addr(codeAddress) || vm::check_addr(dataAddress))
+                throw std::runtime_error("P29 bounded loader accepted invalid metadata or allocated memory");
+        }
+        if (armsx3_ios_ppu_load_probe_segments(nullptr, nullptr) != -1)
+            throw std::runtime_error("P29 null loader inputs were accepted");
+        std::array<std::vector<u8>, 2> expected{std::vector<u8>(0x10000, 0), std::vector<u8>(0x10000, 0)};
+        std::memcpy(expected[0].data(), fixture.data() + 0x100, sizeof(opcodes));
+        std::memcpy(expected[1].data(), fixture.data() + 0x200, 32);
+        for (unsigned repeat = 0; repeat < 2; ++repeat) {
+            ppu_module<lv2_obj> module;
+            struct SegmentCleanup {
+                void release() {
+                    utils::memory_decommit(vm::g_exec_addr + vm::g_exec_addr_seg_offset + (0x10000 >> 1), 0x8000);
+                }
+                ~SegmentCleanup() { release(); }
+            } segmentCleanup;
+            if (armsx3_ios_ppu_load_probe_segments(&elf, &module) != 0 || module.segs.size() != 2 ||
+                module.addr_to_seg_index.at(codeAddress) != 0 || module.addr_to_seg_index.at(dataAddress) != 1)
+                throw std::runtime_error("P29 production segment loading failed");
+            for (u32 index = 0; index < 2; ++index) {
+                const auto& seg = module.segs[index];
+                const u32 address = codeAddress + index * 0x10000;
+                if (seg.addr != address || seg.size != 0x10000 || seg.type != 1 || seg.flags != (index ? 6u : 5u) ||
+                    seg.filesz != (index ? 32u : 8u) || seg.ptr != vm::base(address) ||
+                    std::memcmp(vm::base(address), expected[index].data(), 0x10000) ||
+                    std::memcmp(vm::get_super_ptr(address), expected[index].data(), 0x10000))
+                    throw std::runtime_error("P29 segment metadata, copied bytes, zero BSS or alias mismatch");
+            }
+            const std::array<u8, 20> expectedHash{0x9a, 0xb8, 0x51, 0x3a, 0x9f, 0xbc, 0xe4, 0x23, 0x40, 0x74, 0x12, 0xa3, 0xec, 0x41, 0x76, 0x48, 0x5a, 0x18, 0x7e, 0x94};
+            if (std::memcmp(module.sha1, expectedHash.data(), expectedHash.size()))
+                throw std::runtime_error("P29 production executable segment hash mismatch");
+            ppu_module<lv2_obj> occupied;
+            if (armsx3_ios_ppu_load_probe_segments(&elf, &occupied) != -2 || !occupied.segs.empty())
+                throw std::runtime_error("P29 loader overwrote an occupied guest page");
+            ppu_function function{}; function.addr = codeAddress; function.toc = dataAddress; function.size = sizeof(opcodes);
+            function.blocks.emplace(codeAddress, sizeof(opcodes)); module.funcs.push_back(std::move(function));
+            auto& interpreter = g_fxo->get<ppu_interpreter_rt>();
+            const auto* codeCache = reinterpret_cast<const ppu_intrp_func*>(vm::g_exec_addr + u64(codeAddress) * 2);
+            const auto fallback = codeCache[0].fn;
+            if (armsx3_ios_ppu_prepare_module(&module) != 0 || codeCache[0].fn == fallback || codeCache[1].fn == fallback ||
+                codeCache[0].fn != interpreter.decode(opcodes[0]) || codeCache[1].fn != interpreter.decode(opcodes[1]))
+                throw std::runtime_error("P29 loaded code preparation failed");
+            std::vector<ppu_intrp_func_t> codeHandlers;
+            for (u32 i = 0; i < 0x10000 / 4; ++i) codeHandlers.push_back(codeCache[i].fn);
+            if (vm::alloc(0x10000, vm::main, 0x10000) != stackAddress)
+                throw std::runtime_error("P29 worker stack allocation failed");
+            const auto* stack = static_cast<const u8*>(vm::base(stackAddress));
+            const std::vector<u8> stackBefore(stack, stack + 0x10000);
+            if (!g_fxo->is_init<ppu_function_manager>() && !g_fxo->init<ppu_function_manager>())
+                throw std::runtime_error("P29 function manager initialization failed");
+            auto& manager = g_fxo->get<ppu_function_manager>();
+            if (manager.addr) throw std::runtime_error("P29 requires unused function manager address");
+            struct TableCleanup {
+                ppu_function_manager& manager;
+                void release() {
+                    if (!manager.addr) return;
+                    const u32 address = manager.addr; manager.addr = 0;
+                    utils::memory_decommit(vm::g_exec_addr + vm::g_exec_addr_seg_offset + (address >> 1), 0x8000);
+                }
+                ~TableCleanup() { release(); }
+            } tableCleanup{manager};
+            if (armsx3_ios_ppu_prepare_hle_table() != 0 || manager.addr != 0x40000)
+                throw std::runtime_error("P29 HLE return table preparation failed");
+            const u32 tableAddress = manager.addr;
+            const auto* table = static_cast<const u8*>(vm::base(tableAddress));
+            const std::vector<u8> tableBefore(table, table + 0x10000);
+            const auto* tableCache = reinterpret_cast<const ppu_intrp_func*>(vm::g_exec_addr + u64(tableAddress) * 2);
+            std::vector<ppu_intrp_func_t> tableHandlers;
+            for (u32 i = 0; i < 0x10000 / 4; ++i) tableHandlers.push_back(tableCache[i].fn);
+            struct Program { u32 begin, end, toc, returnAddress;
+                int result = -99; bool tls = false; std::atomic<bool> completed{false};
+            } program{codeAddress, codeAddress + u32(sizeof(opcodes)), dataAddress, manager.func_addr(1, true)};
+            {
+                std::unique_ptr<named_thread<ppu_thread>> worker;
+                {
+                    struct ConstructionID { u32 previous = id_manager::g_id;
+                        ConstructionID() { id_manager::g_id = ppu_thread::id_base; }
+                        ~ConstructionID() { id_manager::g_id = previous; } } construction_id;
+                    const ppu_thread_params params{static_cast<vm::addr_t>(stackAddress), 0x8000, 0, {}, 0, 0};
+                    worker = std::make_unique<named_thread<ppu_thread>>(stx::launch_retainer{}, params, "iOS production ELF segment probe", 1000);
+                }
+                struct StopWorker { named_thread<ppu_thread>& worker;
+                    ~StopWorker() { worker.state += cpu_flag::exit; worker.state.notify_one();
+                        worker.cmd_notify.store(1); worker.cmd_notify.notify_one(); } } stop{*worker};
+                const ppu_intrp_func_t execute = +[](ppu_thread& context, ppu_opcode_t, be_t<u32>*, ppu_intrp_func*) {
+                    auto& program = *reinterpret_cast<Program*>(context.gpr[30]);
+                    program.tls = get_current_cpu_thread() == &context && thread_ctrl::get_current() != nullptr;
+                    program.result = armsx3_ios_ppu_call_bounded(&context, program.begin, program.end, program.toc, program.returnAddress, 16);
+                    context.state += cpu_flag::exit; program.completed.store(true, std::memory_order_release);
+                };
+                worker->cmd_list({{ppu_cmd::ptr_call, 0}, std::bit_cast<u64>(execute)});
+                worker->cia = codeAddress + 0x900; worker->lr = codeAddress + 0x904;
+                worker->gpr[1] = stackAddress + 0x8000; worker->gpr[2] = 0x13579;
+                worker->gpr[30] = u64(reinterpret_cast<uintptr_t>(&program));
+                worker->state -= cpu_flag::stop + cpu_flag::exit + cpu_flag::suspend + cpu_flag::memory + cpu_flag::wait;
+                ARMSX3StartupLog("P29 BEFORE bounded execution from production-loaded ELF code page");
+                *worker = thread_state::created;
+                const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+                while (!program.completed.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline)
+                    std::this_thread::yield();
+                if (!program.completed.load(std::memory_order_acquire)) throw std::runtime_error("P29 loaded guest execution deadline exceeded");
+                (*worker)();
+                if (!program.tls || program.result != 3 || worker->gpr[3] != 42 || worker->gpr[2] != 0x13579 ||
+                    worker->gpr[1] != stackAddress + 0x8000 || worker->cia != codeAddress + 0x900 ||
+                    worker->lr != codeAddress + 0x904 || worker->state & cpu_flag::ret)
+                    throw std::runtime_error("P29 loaded guest result or restored caller context mismatch");
+            }
+            for (u32 index = 0; index < 2; ++index)
+                if (std::memcmp(vm::base(codeAddress + index * 0x10000), expected[index].data(), 0x10000) ||
+                    std::memcmp(vm::get_super_ptr(codeAddress + index * 0x10000), expected[index].data(), 0x10000))
+                    throw std::runtime_error("P29 loader rejection/execution mutated code, data or BSS");
+            if (std::memcmp(stack, stackBefore.data(), 0x10000) ||
+                std::memcmp(vm::get_super_ptr(stackAddress), stackBefore.data(), 0x10000) ||
+                std::memcmp(table, tableBefore.data(), 0x10000) ||
+                std::memcmp(vm::get_super_ptr(tableAddress), tableBefore.data(), 0x10000))
+                throw std::runtime_error("P29 execution mutated stack/HLE memory or aliases");
+            for (u32 i = 0; i < codeHandlers.size(); ++i)
+                if (codeCache[i].fn != codeHandlers[i] || tableCache[i].fn != tableHandlers[i])
+                    throw std::runtime_error("P29 execution mutated code/HLE dispatch handlers");
+            for (u32 offset = 0; offset < 0x10000; offset += 0x1000)
+                if (!vm::check_addr(tableAddress + offset, vm::page_readable | vm::page_executable) ||
+                    vm::check_addr(tableAddress + offset, vm::page_writable))
+                    throw std::runtime_error("P29 HLE page protection mismatch");
+            tableCleanup.release(); segmentCleanup.release();
+            for (u32 address : {tableAddress, stackAddress, dataAddress, codeAddress})
+                if (vm::dealloc(address, vm::main) != 0x10000 || vm::check_addr(address))
+                    throw std::runtime_error("P29 guest allocation cleanup failed");
+            module.segs.clear(); module.addr_to_seg_index.clear();
+        }
+        if (armsx3_ios_live_cpu_threads() != live || cpu_thread::g_threads_created.load() != created + 2 ||
+            cpu_thread::g_threads_deleted.load() != deleted + 2)
+            throw std::runtime_error("P29 worker lifecycle did not balance");
+        vm::close(); initialized = false;
+        ARMSX3StartupLog("P29 PASS: shared production ELF segment allocation/copy/BSS/hash/code-registration, second-allocation rollback, malformed/occupied input rejection, repeated loaded guest result42/HLE return and cleanup; complete process/firmware/game boot remain untested");
+        return 0;
+    }
+    catch (const std::exception& error) { ARMSX3StartupLog(error.what()); if (initialized) vm::close(); return -1; }
+}

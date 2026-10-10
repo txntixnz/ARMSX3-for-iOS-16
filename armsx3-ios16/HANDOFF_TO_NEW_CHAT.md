@@ -1197,3 +1197,58 @@ inspect newest PID. P28 device execution remains unverified. Next is actual
 executable-loader/module/process integration; firmware/LV2/RSX/game boot
 remain untested, and no commercial PS3 game has booted in this diagnostic app.
 
+## 2026-10-10 — P28 device PASS; build41 / P29 production ELF segments
+User provided ARMSX3-startup(20261010-173609).log. Latest PID97285 reports
+AUTO PASS all27 stages through P28, including two actual linked guest calls
+returning42 with separate caller/callee TOCs and complete cleanup.
+User explicitly asks to leave workflow completion monitoring to them. Push
+and provide the workflow link; do not poll/wait for Actions completion.
+
+Build41 appends patch0024-ios-production-executable-segments.patch and P29
+as the28th ordered diagnostic. Existing P2-P28 bridge code is preserved.
+The existing ppu_load_exec segment loop is extracted byte-for-byte into
+ppu_load_exec_segments, called by the normal executable loader and a bounded
+iOS diagnostic wrapper. The normal loader retains its setup, SHA context,
+error handler, section processing, HLE/module/process initialization and
+thread launch. The wrapper uses a private ppu_module, not the global main
+module, and permits exactly two LOAD segments at0x10000/0x20000,64KiB each,
+flags5/6 and at most256 file bytes. It rejects occupied pages and malformed
+metadata before allocation. RAII removes its pages, segment cache and
+segment/index metadata on production failure or exception.
+
+P29 first reserves only the first page so the real second fixed allocation
+fails after the first has been copied/registered, verifying rollback. It then
+parses a synthetic ELF containing ADDI r3,0,42 and BLR plus an OPD/data payload
+and exercises the shared production segment loader twice. Checks include
+fixed addresses and module index/metadata, exact code/data pages and aliases,
+zero BSS, production hash9ab8513a9fbce423407412a3ec4176485a187e94,
+malformed and occupied input rejection without mutation, production static
+code preparation, actual bounded PPU worker execution (two guest instructions
+plus production HLE RETURN,3 dispatches), restored caller CIA/LR/TOC/SP,
+unchanged stack/HLE pages and aliases, immutable dispatch handlers, read-only
+HLE flags, balanced worker counters and deallocation. Deadline2seconds,
+dispatch budget16. Segment permissions are still those of the production
+mapping/registration stage; final executable page protection happens later
+in the complete loader and is not performed by this wrapper.
+
+Validation: sequential patch application succeeds after0019-0023; extracted
+production loop is byte-for-byte identical. A temporary C++20 host harness
+compiles that actual shared loop and wrapper with mocked VM/fixed objects/SHA
+dependencies. It verifies fixed allocation/copy/zero BSS, metadata and exact
+production hash-input bytes, executable registration, three repeat cycles,
+occupied/malformed/state rejection, first/second allocation failures, five
+injected exception positions and preservation of unrelated allocation state.
+Address/undefined behavior sanitizers PASS (host leak scanning disabled for
+ptrace restrictions). Earlier production linkage/exception tests and opcode
+fixture tests also PASS. Independent Python SHA1 checks the golden digest.
+These are host integration checks, not full iOS compilation or P29 execution.
+
+Bundle41; App.mm28 ordered stages; P29 bridge symbol exported. User will
+report Actions completion, then install ARMSX3_iOS16_INSTALL_THIS_IPA, run
+all28 diagnostics and send the new startup log. P29 device behavior remains
+unverified. This exercises the real executable segment-loader component,
+not a complete call to ppu_load_exec: global main-module setup, process
+admission, firmware/LV2/RSX/game boot remain untested. No commercial game has
+booted. Next integrate executable module/linkage/process preparation within
+appropriate bounds before attempting firmware or a game.
+
