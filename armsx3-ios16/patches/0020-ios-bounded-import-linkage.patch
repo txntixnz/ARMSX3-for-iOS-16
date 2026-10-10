@@ -1,0 +1,41 @@
+--- a/rpcs3/Emu/Cell/PPUModule.cpp
++++ b/rpcs3/Emu/Cell/PPUModule.cpp
+@@ -1102,6 +1102,38 @@
+ 	return result;
+ }
+ 
++
++#if defined(__APPLE__) && TARGET_OS_IPHONE
++// Bounded diagnostic import record; use local linkage so no core export state
++// or static module pointers outlive this probe.
++extern "C" int armsx3_ios_ppu_link_probe_imports(const ppu_module<lv2_obj>* info, u32 start)
++{
++	if (!info || !Emu.IsStopped() || info->segs.size() != 2 ||
++		!g_fxo->is_init<ppu_function_manager>()) return -1;
++	const auto& manager = g_fxo->get<ppu_function_manager>();
++	if (!manager.addr || start != info->segs[1].addr + 64 || info->segs[1].size != 256) return -2;
++	const auto& lib = info->get_ref<const ppu_prx_module_info>(start);
++	if (lib.size != sizeof(ppu_prx_module_info) || lib.num_func != 2 || lib.num_var || lib.num_tlsvar ||
++		lib.attributes || lib.name.addr() != start + 64 || lib.nids.addr() != start + 96 || lib.addrs.addr() != start + 112 ||
++		std::memcmp(info->get_ptr<char>(lib.name.addr()), "iOSProbe", 9) ||
++		info->get_ref<u32>(lib.nids, 0) != 0x49524e31 || info->get_ref<u32>(lib.nids, 1) != 0x49524e32 ||
++		info->get_ref<u32>(lib.addrs, 0) != info->segs[0].addr || info->get_ref<u32>(lib.addrs, 1) != info->segs[0].addr) return -3;
++	ppu_linkage_info link;
++	auto& known = link.modules["iOSProbe"].functions[0x49524e31];
++	known.export_addr = manager.func_addr(1);
++	std::vector<ppu_reloc> relocs;
++	auto [imports, uses] = ppu_load_imports(*info, relocs, &link, start, start + sizeof(ppu_prx_module_info));
++	auto& unknown = link.modules.at("iOSProbe").functions.at(0x49524e32);
++	const u32 first = lib.addrs.addr(), second = first + 4;
++	if (imports.size() != 2 || imports.at(first) != &known || imports.at(second) != &unknown ||
++		known.imports.size() != 1 || !known.imports.contains(first) || unknown.imports.size() != 1 || !unknown.imports.contains(second) ||
++		uses.size() != 2 || uses.at(0x49524e31) != info->segs[0].addr || uses.at(0x49524e32) != info->segs[0].addr ||
++		!relocs.empty() || info->get_ref<u32>(lib.addrs, 0) != manager.func_addr(1) ||
++		info->get_ref<u32>(lib.addrs, 1) != manager.addr) return -4;
++	return 0;
++}
++#endif
++
+ // For _sys_prx_register_module
+ void ppu_manual_load_imports_exports(u32 imports_start, u32 imports_size, u32 exports_start, u32 exports_size, std::basic_string<char>& loaded_flags)
+ {

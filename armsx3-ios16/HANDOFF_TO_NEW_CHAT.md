@@ -1008,3 +1008,45 @@ integration pending. Prior ELF stack fixture/analyser behavior unchanged.
 Production table body byte-preservation, catalog/exports/whitespace PASS.
 Next: module linkage/process initialization and full executable loading.
 Still no full ppu_load_exec, firmware, system syscall/gameboot/RSX.
+
+## 2026-10-10 — P24 device PASS; build36 / P25 bounded import linkage
+ARMSX3-startup(20261010-153014).log, pid96501 confirms all23 stages PASS.
+Production HLE table has3877 descriptors/handlers on iOS (host table model
+used3887; no hardcoded count assumption in device probe). Actual ELF call
+returns through production table and cleans all caches/VM/thread state.
+
+P25 clones P24. Synthetic ELF now includes192 file bytes/256 memory bytes
+in its data segment: OPD, a44-byte ppu_prx_module_info import record, NUL
+terminated iOSProbe name, two FNIDs and two address slots; remaining64 bytes
+BSS. Known NID0x49524e31 locally maps to HLE RETURN index1; unknown
+0x49524e32 deliberately unmapped. Patch0020 wrapper checks exactly bounded
+record shape/addresses/name/NIDs/stubs, builds local ppu_linkage_info, invokes
+actual ppu_load_imports, verifies two imports, linkage sets, use addresses,
+no relocations, known target and unresolved INVALID table descriptor. No
+static module/global export linkage initialized or retained. This tests
+production import parsing/linking with synthetic records; does not resolve
+real game/library imports or call arbitrary HLE functions.
+
+17 guest instructions include prior stack/result logic plus LWZ r11 from
+import slot(r10), LWZ r12 from resolved OPD, MTLR r12 and BLR. Expected18
+bounded dispatch steps including actual HLE RETURN. Checks r11/r12 targets,
+restored caller CIA/TOC/LR/SP, full64KiB guest bytes including exactly linked
+import slot changes, guest output35 and stack writes. Complete HLE table
+page/cache/alias and cleanup checks inherited. Analyzer/preparation/range
+bounds68 bytes, opcodes72 including zero padding. Data fixture and new
+import-slot guards verified. Fixed private CPU admission remains in use.
+
+CFBundleVersion36,24 automatic stages. Exact bridge and private wrapper
+compile against pinned real headers. Actual ELF reader tests new fixture,
+five malformed cases/oversized bounds PASS. Actual core analyser host runs
+new17-instruction fixture: entry0x10100,size68,one block,TOC0x10400, complete
+coverage and cancellation/empty guards PASS. Actual production import
+function and exact wrapper run on host-backed real ppu_module and vm ptr
+layout; known/unknown resolution, use/import sets, bad start/count guards
+PASS. Host external services mocked: fxo manager/state, function vector,
+logging/formatting, unsupported ref patching and contended mutex paths
+throw. Actual uncontended mutex path used. No guest instruction handlers or
+iOS mappings executed on host; device integration pending. Patch0020 dry
+run after0019 PASS; catalog/exports/selected whitespace PASS.
+Next: actual static module export setup, system process initialization and
+full executable loader. Firmware/gameboot/RSX still untested.
