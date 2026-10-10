@@ -4129,5 +4129,111 @@ extern "C" __attribute__((visibility("default"))) int armsx3_core_test_elf_expor
     catch (const std::exception& error) { ARMSX3StartupLog(error.what()); if (initialized) vm::close(); return -1; }
 }
 
-
-
+extern "C" int armsx3_ios_ppu_register_probe_exports(const ppu_module<lv2_obj>*, u32);
+extern "C" __attribute__((visibility("default"))) int armsx3_core_test_elf_export_registration()
+{
+    ARMSX3StartupLog("P27 BEFORE production PRX export registration and deferred import backpatch");
+    bool initialized = false;
+    try
+    {
+        if (!Emu.IsStopped()) throw std::runtime_error("P27 requires stopped emulator");
+        struct Configuration {
+            ppu_decoder_type decoder = g_cfg.core.ppu_decoder.get();
+            Configuration() { g_cfg.core.ppu_decoder.set(ppu_decoder_type::_static); }
+            ~Configuration() { g_cfg.core.ppu_decoder.set(decoder); }
+        } configuration;
+        if (!g_fxo->is_init() ||
+            (!g_fxo->is_init<ppu_interpreter_rt>() && !g_fxo->init<ppu_interpreter_rt>()))
+            throw std::runtime_error("P27 fixed objects/interpreter unavailable");
+        vm::init(); initialized = true;
+        if (!vm::reserve_map(vm::main, 0x10000, 0x30000))
+            throw std::runtime_error("P27 main memory block unavailable");
+        const u32 address = vm::alloc(0x10000, vm::main, 0x10000);
+        if (!address) throw std::runtime_error("P27 guest allocation failed");
+        const u32 codeAddress = address + 0x100, dataAddress = address + 0x400;
+        auto* guest = static_cast<u8*>(vm::base(address));
+        std::memset(guest, 0xa5, 0x10000);
+        std::memset(vm::base(dataAddress), 0, 256);
+        vm::write32(codeAddress, 0x4e800020); // BLR: a valid exported entry, not executed by P27.
+        vm::write32(dataAddress, codeAddress); vm::write32(dataAddress + 4, dataAddress);
+        auto* data = static_cast<u8*>(vm::base(dataAddress));
+        data[64] = 44; data[71] = 2;
+        vm::write32(dataAddress + 80, dataAddress + 128);
+        vm::write32(dataAddress + 84, dataAddress + 160);
+        vm::write32(dataAddress + 88, dataAddress + 176);
+        std::memcpy(data + 128, "iOSProbe", 9);
+        vm::write32(dataAddress + 160, 0x49524e31); vm::write32(dataAddress + 164, 0x49524e32);
+        vm::write32(dataAddress + 176, codeAddress); vm::write32(dataAddress + 180, codeAddress);
+        data[192] = 44; data[197] = 1; data[199] = 1;
+        vm::write32(dataAddress + 208, dataAddress + 128);
+        vm::write32(dataAddress + 212, dataAddress + 160);
+        vm::write32(dataAddress + 216, dataAddress + 236);
+        vm::write32(dataAddress + 236, dataAddress);
+        ppu_module<lv2_obj> module;
+        module.name = "iOS PRX registration probe";
+        module.addr_to_seg_index.emplace(codeAddress, 0);
+        module.addr_to_seg_index.emplace(dataAddress, 1);
+        module.segs.push_back({codeAddress, 4, 1, 5, 4, vm::base(codeAddress)});
+        module.segs.push_back({dataAddress, 256, 1, 6, 256, vm::base(dataAddress)});
+        const std::vector<u8> before(guest, guest + 0x10000);
+        if (!g_fxo->is_init<ppu_function_manager>() && !g_fxo->init<ppu_function_manager>())
+            throw std::runtime_error("P27 function manager initialization failed");
+        auto& manager = g_fxo->get<ppu_function_manager>();
+        if (manager.addr) throw std::runtime_error("P27 requires unused function manager address");
+        struct TableCleanup {
+            ppu_function_manager& manager;
+            void release() {
+                if (!manager.addr) return;
+                const u32 address = manager.addr; manager.addr = 0;
+                utils::memory_decommit(vm::g_exec_addr + vm::g_exec_addr_seg_offset + (address >> 1), 0x8000);
+            }
+            ~TableCleanup() { release(); }
+        } tableCleanup{manager};
+        if (armsx3_ios_ppu_prepare_hle_table() != 0)
+            throw std::runtime_error("P27 production HLE table preparation failed");
+        const u32 tableAddress = manager.addr;
+        if (tableAddress < address + 0x10000 || tableAddress >= address + 0x30000 || tableAddress % 0x10000 ||
+            !vm::check_addr(tableAddress, vm::page_readable | vm::page_executable, 0x10000))
+            throw std::runtime_error("P27 HLE table allocation or flags mismatch");
+        const auto* table = static_cast<const u8*>(vm::base(tableAddress));
+        const std::vector<u8> tableBefore(table, table + 0x10000);
+        const auto* cache = reinterpret_cast<const ppu_intrp_func*>(vm::g_exec_addr + u64(tableAddress) * 2);
+        std::vector<ppu_intrp_func_t> handlers;
+        for (u32 i = 0; i < 0x10000 / 4; ++i) handlers.push_back(cache[i].fn);
+        const auto created = cpu_thread::g_threads_created.load(), deleted = cpu_thread::g_threads_deleted.load();
+        const u64 live = armsx3_ios_live_cpu_threads();
+        for (unsigned repeat = 0; repeat < 2; ++repeat) {
+            const int result = armsx3_ios_ppu_register_probe_exports(&module, dataAddress + 192);
+            if (result != 0) {
+                char error[160];
+                std::snprintf(error, sizeof(error), "P27 production export registration failed (wrapper result %d, iteration %u)", result, repeat + 1);
+                throw std::runtime_error(error);
+            }
+            if (std::memcmp(guest, before.data(), before.size()) ||
+                std::memcmp(vm::get_super_ptr(address), before.data(), before.size()))
+                throw std::runtime_error("P27 import restoration, guest guard or alias mismatch");
+        }
+        if (armsx3_ios_ppu_register_probe_exports(&module, dataAddress + 188) != -1)
+            throw std::runtime_error("P27 export registration accepted invalid record start");
+        if (std::memcmp(table, tableBefore.data(), tableBefore.size()) ||
+            std::memcmp(vm::get_super_ptr(tableAddress), tableBefore.data(), tableBefore.size()))
+            throw std::runtime_error("P27 registration mutated HLE descriptors/aliases");
+        for (u32 i = 0; i < handlers.size(); ++i)
+            if (cache[i].fn != handlers[i]) throw std::runtime_error("P27 registration mutated HLE dispatch");
+        for (u32 offset = 0; offset < 0x10000; offset += 0x1000)
+            if (vm::check_addr(tableAddress + offset, vm::page_writable))
+                throw std::runtime_error("P27 HLE descriptor page became writable");
+        if (armsx3_ios_live_cpu_threads() != live || cpu_thread::g_threads_created.load() != created ||
+            cpu_thread::g_threads_deleted.load() != deleted)
+            throw std::runtime_error("P27 registration changed CPU thread counters");
+        tableCleanup.release();
+        if (vm::dealloc(tableAddress, vm::main) != 0x10000 || vm::check_addr(tableAddress))
+            throw std::runtime_error("P27 HLE table deallocation failed");
+        if (vm::dealloc(address, vm::main) != 0x10000 || vm::check_addr(address))
+            throw std::runtime_error("P27 guest deallocation failed");
+        vm::close(); initialized = false;
+        ARMSX3StartupLog("P27 PASS: production export registration, deferred known import backpatch, unresolved INVALID import, library unload and repeated cleanup; guest-to-guest calls/full executable loader/firmware/game boot remain untested");
+        return 0;
+    }
+    catch (const std::exception& error) { ARMSX3StartupLog(error.what()); if (initialized) vm::close(); return -1; }
+}

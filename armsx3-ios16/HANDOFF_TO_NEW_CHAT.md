@@ -1109,3 +1109,44 @@ Host validation does not establish iOS/device success. Install build38 after
 Actions succeeds, run all25 tests and inspect newest PID. P26 device success,
 complete executable loader, firmware/LV2/RSX/game boot remain untested.
 
+## 2026-10-10 — P26 device PASS; build39 / P27 registration and backpatch
+User supplied ARMSX3-startup(20261010-164400).log. Latest PID96972 reports
+AUTO PASS all25 stages through P26, including production PRX export observation,
+memory/table checks and cleanup. The accidental @Create image tag is a browser
+issue; user does not want image generation for this task.
+
+Build39 appends patch0022-ios-bounded-export-registration.patch and P27 as
+the26th ordered stage. Existing P2-P26 implementation remains intact. P27
+constructs a bounded in-memory code/OPD/import/export fixture, builds the
+production HLE table, then runs actual ppu_load_imports and ppu_load_exports.
+Both imports first resolve to the INVALID descriptor. Registering known
+FNID0x49524e31 backpatches its import slot to the guest OPD; unknown FNID
+0x49524e32 stays INVALID. Function linkage is owned by a local container;
+the actual production library registry is exercised for registration/unload.
+
+The wrapper refuses preexisting iOSProbe module/library-lock entries, requires
+stopped emulator and exact record bounds/metadata, uses production unload to
+release its library lock, restores both original import slots and removes
+only its own library-lock entry. RAII restores slots/registry on exceptions.
+A default ppu_linkage_info fixed object can be retained after initialization,
+but no probe function/module/library entry may survive the wrapper. P27 runs
+the wrapper twice, checks whole64KiB guest memory and its alias, full HLE page
+and its alias, dispatch handlers, read-only flags and unchanged CPU counters.
+It rejects a bad record start and releases allocations/table cache on exit.
+
+Validation: patch0022 applies cleanly after0019/0020/0021 on pinned upstream.
+A temporary C++20 host harness compiled unchanged production export/import
+scanners, PRX/linkage structures and production ppu_register_library_lock
+with mocked VM/fixed-object/HLE/logging/lock dependencies. Tests passed for
+known backpatch/unknown INVALID, three repeated cycles, malformed/null/stopped
+inputs, preservation of preexisting and unrelated registry state, and80
+one-shot read exception positions with rollback. Address/undefined behavior
+sanitizers passed (host leak scanning disabled due to ptrace restrictions).
+This is bounded host integration validation, not full iOS core compilation.
+
+Info.plist bundle39; App.mm26 stages, P27 symbol exported by CoreBridge.
+Install ARMSX3_iOS16_INSTALL_THIS_IPA once build39 Actions succeeds, run all26
+tests and inspect newest PID. P27 device behavior remains unverified. P27
+does NOT execute a guest-to-guest call or use a complete executable loader;
+those are next. Firmware/LV2/RSX/game boot are still untested.
+
