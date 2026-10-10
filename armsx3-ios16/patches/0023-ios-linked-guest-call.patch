@@ -1,0 +1,99 @@
+--- a/rpcs3/Emu/Cell/PPUModule.cpp
++++ b/rpcs3/Emu/Cell/PPUModule.cpp
+@@ -1253,6 +1253,96 @@
+ }
+ #endif
+ 
++#if defined(__APPLE__) && TARGET_OS_IPHONE
++// Keep actual export linkage alive while a bounded guest caller executes.
++// Function links are local; the production library lock is owned and removed.
++extern "C" int armsx3_ios_ppu_register_probe_exports_and_call(const ppu_module<lv2_obj>* info, u32 start, int (*execute)(void*, u32, u32), void* user)
++{
++	if (!info || !execute || !Emu.IsStopped() || info->segs.size() != 2 ||
++		start != info->segs[1].addr + 192 || info->segs[1].size != 256 ||
++		!g_fxo->is_init<ppu_function_manager>()) return -1;
++	const auto& manager = g_fxo->get<ppu_function_manager>();
++	if (!manager.addr || armsx3_ios_ppu_observe_probe_exports(info, start) != 0) return -2;
++	const u32 data = info->segs[1].addr, first = data + 176, second = first + 4;
++	const auto& lib = info->get_ref<const ppu_prx_module_info>(data + 64);
++	if (lib.size != sizeof(ppu_prx_module_info) || lib.num_func != 2 || lib.num_var || lib.num_tlsvar ||
++		lib.attributes || lib.name.addr() != data + 128 || lib.nids.addr() != data + 160 || lib.addrs.addr() != first ||
++		info->get_ref<u32>(lib.nids, 1) != 0x49524e32 ||
++		info->get_ref<u32>(first) != info->segs[0].addr || info->get_ref<u32>(second) != info->segs[0].addr) return -3;
++	if (!g_fxo->is_init<ppu_linkage_info>() && !g_fxo->init<ppu_linkage_info>()) return -4;
++	auto& global = g_fxo->get<ppu_linkage_info>();
++	{
++		std::lock_guard lock(global.mutex);
++		if (global.modules.contains("iOSProbe")) return -5;
++	}
++	{
++		std::lock_guard lock(global.lib_lock_mutex);
++		if (global.lib_lock.contains("iOSProbe")) return -5;
++	}
++	struct Cleanup
++	{
++		const ppu_module<lv2_obj>& info;
++		ppu_linkage_info& global;
++		u32 first, second, original;
++		bool active = true;
++		void release()
++		{
++			if (!active) return;
++			info.get_ref<u32>(first) = original;
++			info.get_ref<u32>(second) = original;
++			std::lock_guard lock(global.lib_lock_mutex);
++			global.lib_lock.erase("iOSProbe");
++			active = false;
++		}
++		~Cleanup() { release(); }
++	} cleanup{*info, global, first, second, info->segs[0].addr};
++	ppu_linkage_info local;
++	std::vector<ppu_reloc> relocs;
++	auto [imports, uses] = ppu_load_imports(*info, relocs, &local, data + 64, data + 108);
++	auto& known = local.modules.at("iOSProbe").functions.at(0x49524e31);
++	auto& unknown = local.modules.at("iOSProbe").functions.at(0x49524e32);
++	if (imports.size() != 2 || imports.at(first) != &known || imports.at(second) != &unknown ||
++		uses.size() != 2 || uses.at(0x49524e31) != info->segs[0].addr || uses.at(0x49524e32) != info->segs[0].addr ||
++		!relocs.empty() || known.export_addr || unknown.export_addr ||
++		known.imports.size() != 1 || !known.imports.contains(first) ||
++		unknown.imports.size() != 1 || !unknown.imports.contains(second) ||
++		info->get_ref<u32>(first) != manager.addr || info->get_ref<u32>(second) != manager.addr) return -6;
++	std::basic_string<char> flags;
++	const auto special = ppu_load_exports(*info, &local, start, start + sizeof(ppu_prx_module_info), false, nullptr, &flags);
++	if (!special.empty() || flags.size() != 1 || !flags[0] || local.modules.size() != 1 ||
++		local.modules.at("iOSProbe").functions.size() != 2 || !local.modules.at("iOSProbe").variables.empty() ||
++		known.export_addr != data || unknown.export_addr || known.static_func || known.static_var ||
++		!known.frefss.empty() || !unknown.frefss.empty() ||
++		info->get_ref<u32>(first) != data || info->get_ref<u32>(second) != manager.addr) return -7;
++	{
++		std::lock_guard lock(global.lib_lock_mutex);
++		const auto it = global.lib_lock.find("iOSProbe");
++		if (it == global.lib_lock.end() || !it->second.load()) return -8;
++	}
++	// The callback runs after backpatch, before unload or import restoration.
++	if (execute(user, data, manager.addr) != 0) return -12;
++	if (info->get_ref<u32>(first) != data || info->get_ref<u32>(second) != manager.addr) return -13;
++	// Reuse the production unload path to release the library lock.
++	const auto unloaded = ppu_load_exports(*info, &local, start, start + sizeof(ppu_prx_module_info), false, nullptr, &flags);
++	if (!unloaded.empty()) return -9;
++	{
++		std::lock_guard lock(global.lib_lock_mutex);
++		const auto it = global.lib_lock.find("iOSProbe");
++		if (it == global.lib_lock.end() || it->second.load()) return -9;
++	}
++	{
++		std::lock_guard lock(global.mutex);
++		if (global.modules.contains("iOSProbe")) return -10;
++	}
++	cleanup.release();
++	{
++		std::lock_guard lock(global.lib_lock_mutex);
++		if (global.lib_lock.contains("iOSProbe")) return -11;
++	}
++	return 0;
++}
++#endif
++
+ // For _sys_prx_register_module
+ void ppu_manual_load_imports_exports(u32 imports_start, u32 imports_size, u32 exports_start, u32 exports_size, std::basic_string<char>& loaded_flags)
+ {

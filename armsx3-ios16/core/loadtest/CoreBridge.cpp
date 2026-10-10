@@ -4237,3 +4237,225 @@ extern "C" __attribute__((visibility("default"))) int armsx3_core_test_elf_expor
     }
     catch (const std::exception& error) { ARMSX3StartupLog(error.what()); if (initialized) vm::close(); return -1; }
 }
+
+extern "C" int armsx3_ios_ppu_register_probe_exports_and_call(const ppu_module<lv2_obj>*, u32, int (*)(void*, u32, u32), void*);
+extern "C" __attribute__((visibility("default"))) int armsx3_core_test_linked_guest_call()
+{
+    ARMSX3StartupLog("P28 BEFORE linked guest-to-guest call and return");
+    bool initialized = false;
+    try
+    {
+        if (!Emu.IsStopped()) throw std::runtime_error("P28 requires stopped emulator");
+        struct Configuration
+        {
+            bool debugPPU = g_cfg.core.ppu_debug.get();
+            bool ppu = g_cfg.core.ppu_prof.get(), spu = g_cfg.core.spu_prof.get(), debug = g_cfg.core.spu_debug.get();
+            thread_scheduler_mode scheduler = g_cfg.core.thread_scheduler.get();
+            ppu_decoder_type decoder = g_cfg.core.ppu_decoder.get();
+            Configuration() { g_cfg.core.ppu_debug.set(false); g_cfg.core.ppu_prof.set(false); g_cfg.core.spu_prof.set(false);
+                g_cfg.core.spu_debug.set(false); g_cfg.core.thread_scheduler.set(thread_scheduler_mode::os);
+                g_cfg.core.ppu_decoder.set(ppu_decoder_type::_static); }
+            ~Configuration() { g_cfg.core.ppu_debug.set(debugPPU); g_cfg.core.ppu_prof.set(ppu); g_cfg.core.spu_prof.set(spu);
+                g_cfg.core.spu_debug.set(debug); g_cfg.core.thread_scheduler.set(scheduler);
+                g_cfg.core.ppu_decoder.set(decoder); }
+        } configuration;
+        if (!g_fxo->is_init() ||
+            (!g_fxo->is_init<ppu_interpreter_rt>() && !g_fxo->init<ppu_interpreter_rt>()))
+            throw std::runtime_error("P28 fixed objects/interpreter unavailable");
+        vm::init(); initialized = true;
+        if (!vm::reserve_map(vm::main, 0x10000, 0x30000))
+            throw std::runtime_error("P28 main memory block unavailable");
+        const u32 address = vm::alloc(0x10000, vm::main, 0x10000);
+        if (!address) throw std::runtime_error("P28 guest allocation failed");
+        const u32 codeAddress = address + 0x100, dataAddress = address + 0x400;
+        auto* guest = static_cast<u8*>(vm::base(address));
+        std::memset(guest, 0xa5, 0x10000);
+        std::memset(vm::base(dataAddress), 0, 256);
+        using namespace ppu_instructions;
+        using namespace ppu_instructions::implicts;
+        const auto dform = [](u32 op, u32 reg, u32 base, u32 imm) {
+            return (op << 26) | (reg << 21) | (base << 16) | (imm & 0xffff);
+        };
+        std::array<u32, 27> opcodes; opcodes.fill(0x60000000); // padding NOPs
+        const std::array<u32, 17> caller{MFLR(0), STDU(1, 1, -128), STD(0, 1, 16), STD(2, 1, 24),
+            ADDI(3, 0, 35), dform(32, 11, 10, 0), dform(32, 12, 11, 0), dform(32, 2, 11, 4),
+            MTCTR(12), BCTRL(), LD(2, 1, 24), dform(24, 2, 9, 0), STD(3, 6, 0),
+            LD(0, 1, 16), ADDI(1, 1, 128), MTLR(0), BLR()};
+        for (u32 i = 0; i < caller.size(); ++i) opcodes[i] = caller[i];
+        opcodes[24] = ADDI(3, 3, 7); opcodes[25] = dform(24, 2, 8, 0); opcodes[26] = BLR();
+        for (u32 i = 0; i < opcodes.size(); ++i) vm::write32(codeAddress + i * 4, opcodes[i]);
+        vm::write32(dataAddress, codeAddress + 96); vm::write32(dataAddress + 4, dataAddress);
+        auto* data = static_cast<u8*>(vm::base(dataAddress));
+        data[64] = 44; data[71] = 2;
+        vm::write32(dataAddress + 80, dataAddress + 128);
+        vm::write32(dataAddress + 84, dataAddress + 160);
+        vm::write32(dataAddress + 88, dataAddress + 176);
+        std::memcpy(data + 128, "iOSProbe", 9);
+        vm::write32(dataAddress + 160, 0x49524e31); vm::write32(dataAddress + 164, 0x49524e32);
+        vm::write32(dataAddress + 176, codeAddress); vm::write32(dataAddress + 180, codeAddress);
+        data[192] = 44; data[197] = 1; data[199] = 1;
+        vm::write32(dataAddress + 208, dataAddress + 128);
+        vm::write32(dataAddress + 212, dataAddress + 160);
+        vm::write32(dataAddress + 216, dataAddress + 236);
+        vm::write32(dataAddress + 236, dataAddress);
+        ppu_module<lv2_obj> module;
+        module.name = "iOS linked guest call probe";
+        module.addr_to_seg_index.emplace(codeAddress, 0);
+        module.addr_to_seg_index.emplace(dataAddress, 1);
+        module.segs.push_back({codeAddress, u32(sizeof(opcodes)), 1, 5, u32(sizeof(opcodes)), vm::base(codeAddress)});
+        module.segs.push_back({dataAddress, 256, 1, 6, 256, vm::base(dataAddress)});
+        // Declare the exact synthetic caller/callee blocks, then use the normal
+        // production static-module decoder. Complete ELF loading is still pending.
+        ppu_function callerFunction{};
+        callerFunction.addr = codeAddress; callerFunction.toc = dataAddress + 32; callerFunction.size = 68;
+        callerFunction.blocks.emplace(codeAddress, 68);
+        ppu_function calleeFunction{};
+        calleeFunction.addr = codeAddress + 96; calleeFunction.toc = dataAddress; calleeFunction.size = 12;
+        calleeFunction.blocks.emplace(codeAddress + 96, 12);
+        module.funcs.push_back(std::move(callerFunction)); module.funcs.push_back(std::move(calleeFunction));
+        struct SegmentCacheCleanup {
+            u8* pointer; bool active = false;
+            void release() { if (active) { utils::memory_decommit(pointer, 0x8000); active = false; } }
+            ~SegmentCacheCleanup() { release(); }
+        } segmentCleanup{vm::g_exec_addr + vm::g_exec_addr_seg_offset + (address >> 1)};
+        segmentCleanup.active = true;
+        ppu_register_range(codeAddress, sizeof(opcodes));
+        auto& interpreter = g_fxo->get<ppu_interpreter_rt>();
+        const auto* codeCache = reinterpret_cast<const ppu_intrp_func*>(vm::g_exec_addr + u64(codeAddress) * 2);
+        const auto fallback = codeCache[0].fn;
+        if (armsx3_ios_ppu_prepare_module(&module) != 0)
+            throw std::runtime_error("P28 static caller/callee module preparation failed");
+        for (u32 i = 0; i < opcodes.size(); ++i) {
+            const auto expected = i < 17 || i >= 24 ? interpreter.decode(opcodes[i]) : fallback;
+            if (codeCache[i].fn != expected || ((i < 17 || i >= 24) && codeCache[i].fn == fallback))
+                throw std::runtime_error("P28 caller/callee instruction decoding mismatch");
+        }
+        const auto* pageCache = reinterpret_cast<const ppu_intrp_func*>(vm::g_exec_addr + u64(address) * 2);
+        std::vector<ppu_intrp_func_t> codeHandlers;
+        for (u32 i = 0; i < 0x10000 / 4; ++i) codeHandlers.push_back(pageCache[i].fn);
+        const std::vector<u8> before(guest, guest + 0x10000);
+        if (!g_fxo->is_init<ppu_function_manager>() && !g_fxo->init<ppu_function_manager>())
+            throw std::runtime_error("P28 function manager initialization failed");
+        auto& manager = g_fxo->get<ppu_function_manager>();
+        if (manager.addr) throw std::runtime_error("P28 requires unused function manager address");
+        struct TableCleanup {
+            ppu_function_manager& manager;
+            void release() {
+                if (!manager.addr) return;
+                const u32 address = manager.addr; manager.addr = 0;
+                utils::memory_decommit(vm::g_exec_addr + vm::g_exec_addr_seg_offset + (address >> 1), 0x8000);
+            }
+            ~TableCleanup() { release(); }
+        } tableCleanup{manager};
+        if (armsx3_ios_ppu_prepare_hle_table() != 0)
+            throw std::runtime_error("P28 production HLE table preparation failed");
+        const u32 tableAddress = manager.addr;
+        if (tableAddress < address + 0x10000 || tableAddress >= address + 0x30000 || tableAddress % 0x10000 ||
+            !vm::check_addr(tableAddress, vm::page_readable | vm::page_executable, 0x10000))
+            throw std::runtime_error("P28 HLE table allocation or flags mismatch");
+        const auto* table = static_cast<const u8*>(vm::base(tableAddress));
+        const std::vector<u8> tableBefore(table, table + 0x10000);
+        const auto* cache = reinterpret_cast<const ppu_intrp_func*>(vm::g_exec_addr + u64(tableAddress) * 2);
+        std::vector<ppu_intrp_func_t> handlers;
+        for (u32 i = 0; i < 0x10000 / 4; ++i) handlers.push_back(cache[i].fn);
+        const auto created = cpu_thread::g_threads_created.load(), deleted = cpu_thread::g_threads_deleted.load();
+        const u64 live = armsx3_ios_live_cpu_threads();
+        const u32 initialStack = address + 0x8000, frameAddress = initialStack - 128;
+        struct Program {
+            u32 begin, end, returnAddress, dataAddress, initialStack;
+            int result = -99; bool tls = false; std::atomic<bool> completed{false};
+        } program{codeAddress, codeAddress + u32(sizeof(opcodes)), manager.func_addr(1, true), dataAddress, initialStack};
+        const auto executeLinked = +[](void* user, u32 descriptor, u32 invalidDescriptor) -> int {
+            auto& program = *static_cast<Program*>(user);
+            if (descriptor != program.dataAddress || vm::read32(descriptor) != program.begin + 96 ||
+                vm::read32(program.dataAddress + 176) != descriptor ||
+                vm::read32(program.dataAddress + 180) != invalidDescriptor)
+                throw std::runtime_error("P28 callback did not receive active backpatched guest descriptor");
+            program.result = -99; program.tls = false; program.completed.store(false, std::memory_order_release);
+            std::unique_ptr<named_thread<ppu_thread>> worker;
+            {
+                struct ConstructionID { u32 previous = id_manager::g_id;
+                    ConstructionID() { id_manager::g_id = ppu_thread::id_base; }
+                    ~ConstructionID() { id_manager::g_id = previous; } } construction_id;
+                const ppu_thread_params params{static_cast<vm::addr_t>(program.begin - 0x100 + 0x1000), 0x8000, 0, {}, 0, 0};
+                worker = std::make_unique<named_thread<ppu_thread>>(stx::launch_retainer{}, params, "iOS linked guest call probe", 1000);
+            }
+            struct StopWorker { named_thread<ppu_thread>& worker;
+                ~StopWorker() { worker.state += cpu_flag::exit; worker.state.notify_one();
+                    worker.cmd_notify.store(1); worker.cmd_notify.notify_one(); } } stop{*worker};
+            const ppu_intrp_func_t execute = +[](ppu_thread& context, ppu_opcode_t, be_t<u32>*, ppu_intrp_func*) {
+                auto& program = *reinterpret_cast<Program*>(context.gpr[30]);
+                program.tls = get_current_cpu_thread() == &context && thread_ctrl::get_current() != nullptr;
+                program.result = armsx3_ios_ppu_call_bounded(&context, program.begin, program.end,
+                    program.dataAddress + 32, program.returnAddress, 64);
+                context.state += cpu_flag::exit; program.completed.store(true, std::memory_order_release);
+            };
+            worker->cmd_list({{ppu_cmd::ptr_call, 0}, std::bit_cast<u64>(execute)});
+            const u32 address = program.begin - 0x100;
+            worker->cia = address + 0x900; worker->lr = address + 0x904;
+            worker->gpr[1] = program.initialStack; worker->gpr[2] = 0x13579;
+            worker->gpr[6] = program.dataAddress + 32; worker->gpr[8] = 0; worker->gpr[9] = 0;
+            worker->gpr[10] = program.dataAddress + 176;
+            worker->gpr[30] = u64(reinterpret_cast<uintptr_t>(&program));
+            worker->state -= cpu_flag::stop + cpu_flag::exit + cpu_flag::suspend + cpu_flag::memory + cpu_flag::wait;
+            ARMSX3StartupLog("P28 BEFORE guest import fetch, BCTRL to exported callee and BLR back to caller");
+            *worker = thread_state::created;
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+            while (!program.completed.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline)
+                std::this_thread::yield();
+            if (!program.completed.load(std::memory_order_acquire))
+                throw std::runtime_error("P28 linked guest execution deadline exceeded");
+            (*worker)();
+            if (!program.tls || program.result != 21 || worker->gpr[3] != 42 ||
+                worker->gpr[8] != program.dataAddress || worker->gpr[9] != program.dataAddress + 32 ||
+                worker->gpr[11] != descriptor || worker->gpr[12] != program.begin + 96 ||
+                worker->gpr[2] != 0x13579 || worker->gpr[1] != program.initialStack ||
+                worker->cia != address + 0x900 || worker->lr != address + 0x904 || worker->state & cpu_flag::ret)
+                throw std::runtime_error("P28 linked guest call result, TOC, stack or caller context mismatch");
+            return 0;
+        };
+        std::vector<u8> expectedGuest = before;
+        const auto expect64 = [&](u32 guestAddress, u64 value) {
+            const be_t<u64> word = value;
+            std::memcpy(expectedGuest.data() + guestAddress - address, &word, sizeof(word));
+        };
+        expect64(dataAddress + 32, 42); expect64(frameAddress, initialStack);
+        expect64(frameAddress + 16, program.returnAddress); expect64(frameAddress + 24, dataAddress + 32);
+        for (unsigned repeat = 0; repeat < 2; ++repeat) {
+            const int result = armsx3_ios_ppu_register_probe_exports_and_call(&module, dataAddress + 192, executeLinked, &program);
+            if (result != 0) {
+                char error[160];
+                std::snprintf(error, sizeof(error), "P28 production export registration failed (wrapper result %d, iteration %u)", result, repeat + 1);
+                throw std::runtime_error(error);
+            }
+            if (std::memcmp(guest, expectedGuest.data(), expectedGuest.size()) ||
+                std::memcmp(vm::get_super_ptr(address), expectedGuest.data(), expectedGuest.size()))
+                throw std::runtime_error("P28 import restoration, guest guard or alias mismatch");
+        }
+        if (armsx3_ios_ppu_register_probe_exports_and_call(&module, dataAddress + 188, executeLinked, &program) != -1)
+            throw std::runtime_error("P28 export registration accepted invalid record start");
+        if (std::memcmp(table, tableBefore.data(), tableBefore.size()) ||
+            std::memcmp(vm::get_super_ptr(tableAddress), tableBefore.data(), tableBefore.size()))
+            throw std::runtime_error("P28 registration mutated HLE descriptors/aliases");
+        for (u32 i = 0; i < handlers.size(); ++i)
+            if (cache[i].fn != handlers[i]) throw std::runtime_error("P28 registration mutated HLE dispatch");
+        for (u32 offset = 0; offset < 0x10000; offset += 0x1000)
+            if (vm::check_addr(tableAddress + offset, vm::page_writable))
+                throw std::runtime_error("P28 HLE descriptor page became writable");
+        for (u32 i = 0; i < codeHandlers.size(); ++i)
+            if (pageCache[i].fn != codeHandlers[i]) throw std::runtime_error("P28 guest execution mutated decoded code cache");
+        if (armsx3_ios_live_cpu_threads() != live || cpu_thread::g_threads_created.load() != created + 2 ||
+            cpu_thread::g_threads_deleted.load() != deleted + 2)
+            throw std::runtime_error("P28 registration changed CPU thread counters");
+        tableCleanup.release();
+        if (vm::dealloc(tableAddress, vm::main) != 0x10000 || vm::check_addr(tableAddress))
+            throw std::runtime_error("P28 HLE table deallocation failed");
+        segmentCleanup.release();
+        if (vm::dealloc(address, vm::main) != 0x10000 || vm::check_addr(address))
+            throw std::runtime_error("P28 guest deallocation failed");
+        vm::close(); initialized = false;
+        ARMSX3StartupLog("P28 PASS: actual linked guest-to-guest BCTRL/BLR call, callee result42, separate caller/callee TOCs, stack/LR/HLE return, repeated registration/unload and cleanup; full executable loader/firmware/game boot remain untested");
+        return 0;
+    }
+    catch (const std::exception& error) { ARMSX3StartupLog(error.what()); if (initialized) vm::close(); return -1; }
+}

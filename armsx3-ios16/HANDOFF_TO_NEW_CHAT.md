@@ -1150,3 +1150,50 @@ tests and inspect newest PID. P27 device behavior remains unverified. P27
 does NOT execute a guest-to-guest call or use a complete executable loader;
 those are next. Firmware/LV2/RSX/game boot are still untested.
 
+## 2026-10-10 — P27 device PASS; build40 / P28 linked guest call
+User provided ARMSX3-startup(20261010-170646).log. Latest PID97130 reports
+AUTO PASS all26 stages through P27, including production export registration,
+known import backpatch, unresolved INVALID import and repeated unload/cleanup.
+The @Create image tag remains accidental browser behavior; do not generate images.
+
+Build40 appends patch0023-ios-linked-guest-call.patch and P28 as the27th
+ordered diagnostic. P2-P27 code and patches are preserved. A separate bounded
+registration wrapper keeps local production import/export linkage and the
+production library lock alive while a callback executes the guest test, then
+unloads/restores the imports/removes its own lock. Callback rejection or
+exception follows the same RAII rollback path; preexisting probe entries
+are rejected and unrelated global registry state remains untouched.
+
+P28 constructs an in-memory synthetic code/data fixture. The caller at0x10100
+and callee at0x10160 have explicitly declared function blocks (68/12 bytes),
+prepared by normal production static-module decoding; this stage does not
+use a complete ELF loader/analyser for this new fixture. The caller reads the
+actual backpatched import slot, fetches the callee entry/TOC from its OPD,
+uses MTCTR/BCTRL, receives42 (35+7), restores caller TOC and stack/LR, stores
+the result and returns through the actual production HLE RETURN handler.
+Caller/callee TOCs are deliberately distinct. Execution uses the established
+bounded fast_call helper,64-dispatch budget and2-second worker deadline.
+
+Checks:20 guest instructions plus1 HLE return dispatch; observed caller/callee
+TOCs; external caller CIA/LR/TOC/SP restored; exact64KiB guest memory/alias
+including result and frame writes; immutable code/HLE dispatch snapshots;
+full read-only HLE page/alias; invalid record-start rejection; two execution
+cycles with balanced worker counters and cleanup of allocations/cache/registry.
+
+Validation: patch0023 applies after0019-0022 on pinned source. C++20 host
+harness compiles unchanged production import/export/library-lock routines and
+the new callback wrapper with mocked VM/fixed-object/HLE/logging/locks. Active
+linkage at callback entry, repeated cleanup, callback rejection/exception,
+100 injected read failures and earlier regression checks PASS with address/
+undefined behavior sanitizers (leak scanning disabled for host ptrace).
+Actual upstream opcode generators compiled with a minimal opcode-field shim;
+expected key encodings verified. An independent small PPC fixture model
+confirms42,20 instructions, caller TOC/SP/LR and exact memory writes. Neither
+host test constitutes actual RPCS3 PPU execution or full iOS compilation.
+
+Bundle40; App.mm27 ordered tests; P28 bridge symbol exported. Install
+ARMSX3_iOS16_INSTALL_THIS_IPA after Actions succeeds, run all27 tests and
+inspect newest PID. P28 device execution remains unverified. Next is actual
+executable-loader/module/process integration; firmware/LV2/RSX/game boot
+remain untested, and no commercial PS3 game has booted in this diagnostic app.
+
