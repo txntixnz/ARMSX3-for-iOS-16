@@ -8543,8 +8543,17 @@ extern "C" __attribute__((visibility("default"))) int armsx3_core_test_scheduler
                         throw std::runtime_error("P38 requires an empty scheduler before admission");
                     const auto originalPriority = worker->prio.load();
                     const u64 originalTag = lv2_obj::g_priority_order_tag.load();
+                    const u64 originalStartTime = worker->start_time;
+                    char scopeLog[180];
+                    std::snprintf(scopeLog, sizeof(scopeLog), "P38 scheduler scope: worker=0x%x priority=%lld start=%llu slots=%u",
+                        worker->id, static_cast<long long>(originalPriority.prio),
+                        static_cast<unsigned long long>(originalStartTime), static_cast<unsigned>(g_cfg.core.ppu_threads + 0u));
+                    ARMSX3StartupLog(scopeLog);
                     const int result = armsx3_ios_ppu_probe_scheduler_queue_and_call(worker, performSyscalls, &program);
+                    std::snprintf(scopeLog, sizeof(scopeLog), "P38 scheduler scope returned %d", result);
+                    ARMSX3StartupLog(scopeLog);
                     if (worker->prio.load().all != originalPriority.all || lv2_obj::g_priority_order_tag.load() != originalTag ||
+                        worker->start_time != originalStartTime ||
                         lv2_obj::get_running_ppu(0) || worker->next_ppu ||
                         lv2_obj::ppu_state(worker, false, true).first != PPU_THREAD_STATUS_STOP)
                         throw std::runtime_error("P38 diagnostic scheduler removal/priority/order counter restoration failed");
@@ -8595,6 +8604,7 @@ extern "C" __attribute__((visibility("default"))) int armsx3_core_test_scheduler
                 char error[220];
                 std::snprintf(error, sizeof(error), "P38 TLS-linked execution mismatch (wrapper result %d, worker TLS %d, entry ABI %d, TLS memory %d, syscalls %d)",
                     program.result, program.tls, program.abi, program.tlsMemory, program.syscalls);
+                ARMSX3StartupLog(error);
                 throw std::runtime_error(error);
             }
             return 0;

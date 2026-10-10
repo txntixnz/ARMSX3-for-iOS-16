@@ -1960,3 +1960,68 @@ all37 diagnostics and share .txt. This is bounded single-worker admission,
 not scheduler start or multiworker context switching. Scheduler start,
 multiple workers/context switching, full TLS HLE, firmware, RSX and actual
 game boot remain untested.
+
+## 2026-10-11 — build52 P38 rejection/abort; build53 timestamp/unwind fix
+
+User Archive(5).zip contains ARMSX3-startup-20261010-231627-519-732.txt
+and ARMSX3CoreLoadTest-2026-10-11-011558.ips. Log identifies build52 and
+previous unfinished P38/PID722; P2-P37 all PASS again. P38 validates ELF,
+PRX parameters and starts the retained worker, then aborts before any of its
+deliberate syscall errors. Crash is SIGABRT/EXC_CRASH on user-initiated worker
+queue, __cxa_throw -> failed_throw -> terminate -> report_fatal_error, from
+armsx3_core_test_scheduler_queue's executeLinked callback through
+armsx3_ios_ppu_link_probe_image_and_call. Actual P38 queue path did not pass.
+
+Pinned production PPUThread.cpp constructor explicitly initializes
+start_time(get_guest_system_time()) at line3175. The P38 wrapper incorrectly
+required !context->start_time, so a correctly constructed worker is rejected
+with -4 before admission. Prior host PPU mock wrongly defaulted start_time
+to0; its mismatch caused the missed regression. This is a diagnostic guard
+bug, not evidence that production scheduler admission itself is broken.
+The rejection makes the outer callback throw its execution-mismatch error.
+PPUModule.cpp lacked the source exception override used for other diagnostic
+callback owners, consistent with failed_throw crossing this frame. The error
+text was not logged before throwing, so the device log only shows fatal
+termination. Actual iOS unwind fix still needs device verification.
+
+Build53 fixes P38 rather than adding P39;37 diagnostics P2-P38 remain.
+New0034-ios-scheduler-timestamp-and-linkage-unwind.patch follows0033.
+The scope captures and requires preservation of the existing start_time,
+accepting production nonzero timestamps, and restores it alongside original
+priority/order tag and queue removal on all exits. All other stopped/single-
+worker/isolation/count/history checks remain. iOS-only PPUModule.cpp now
+gets APPEND COMPILE_OPTIONS -fexceptions and SKIP_PRECOMPILE_HEADERS ON,
+so executable linkage callbacks can unwind their actual import/library-lock
+cleanup and reach CoreBridge's error handler. Prior lv2/TLS exception
+overrides remain. Production scheduler/services/constructor are unchanged.
+P38 CoreBridge logs worker ID/priority/start timestamp/hardware slots before
+scope entry and the wrapper return afterward, validates timestamp preservation
+and logs the full post-worker mismatch before throwing. Log export unchanged.
+
+Regression harness now models the actual constructor's nonzero timestamp;
+the original P38 guard reproducibly returns -4 for nonzero values, while
+the revised guard admits the worker and passes the actual CoreBridge syscall
+callback through unchanged full production awake/awake_unlocked/schedule_all/
+unqueue/count/ppu_state/get_running_ppu bodies. Zero,1,0x12345678 and large
+64-bit timestamps are accepted and preserved. Mutation of the timestamp is
+rejected at end-state and restored; negative/exception paths also restore it.
+Single/two hardware slots and both join states, all prior queue/count/state/
+normal-stat guards and P35-P37 policies still pass. ASAN/UBSAN,C++20,Wall/
+Wextra/Werror with -fno-exceptions then-fexceptions. Atomic/mutex/VM/CPU
+primitives and bounded guest execution remain host shims. Production ELF
+PRX parameter/export/import wrapper tests using the same flag ordering pass
+callback failures and150 injected exception positions, preserving imports,
+library locks, relocs and unrelated state. Per-source CMake override/PCH
+exclusion verified;0034 applies to staged lv2.cpp and CMake after all earlier
+relevant patches. No local iOS/Xcode SDK: build53 and corrected P38 remain
+pending Actions/phone confirmation.
+
+Baseline main b0e414f7b830f63178ead61ed7e1dde30103d795,
+tree fbfc9bd1febc4aef575b0c46d546df48e8dfbcf4. P2-P37 CoreBridge prefix
+561088 bytes stays byte-identical, Git blob170bcd05ffee3260045362c32dc7376838fae925.
+App order/count/symbols unchanged, Info build53, new patch and handoff update.
+Do not monitor Actions after pushing. User reports completion/failure, then
+installs ARMSX3_iOS16_INSTALL_THIS_IPA and repeats all37 diagnostics. Request
+new .txt (plus .ips if another crash). P38 queue admission, scheduler start,
+multiworker context switching, full TLS HLE, firmware, RSX and game boot are
+still not device-verified.

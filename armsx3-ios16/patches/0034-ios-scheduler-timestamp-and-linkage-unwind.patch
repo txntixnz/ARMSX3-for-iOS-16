@@ -1,0 +1,52 @@
+--- a/rpcs3/Emu/Cell/lv2/lv2.cpp
++++ b/rpcs3/Emu/Cell/lv2/lv2.cpp
+@@ -2367,12 +2367,14 @@
+         context->stack_size != 0x8000u || context->entry_func.addr != 0x10000u ||
+         g_cfg.core.ppu_threads + 0u < 1u) return -1;
+     if (s_ios_ppu_syscall_probe) return -2;
+-    const auto isolated = [context]() {
++    // The production constructor seeds start_time from the guest clock.
++    const u64 startTime = context->start_time;
++    const auto isolated = [context, startTime]() {
+         return !g_pending && !g_scheduler_ready && g_waiting.empty() && g_to_sleep.empty() &&
+             g_to_awake.empty() && !g_postpone_notify_barrier && !s_yield_frequency &&
+             std::all_of(std::begin(g_to_notify), std::end(g_to_notify), [](const void* p) { return !p; }) &&
+             !context->next_ppu && !context->res_notify && !context->ack_suspend &&
+-            !context->hw_sleep_time && !context->start_time && !context->cancel_sleep &&
++            !context->hw_sleep_time && context->start_time == startTime && !context->cancel_sleep &&
+             cpu_flag::suspend - context->state;
+     };
+     ppu_thread::ppu_prio_t previous{};
+@@ -2384,13 +2386,13 @@
+         previous = context->prio.load(); tag = g_priority_order_tag.load();
+     }
+     struct Restore {
+-        ppu_thread* context; ppu_thread::ppu_prio_t previous; u64 tag;
++        ppu_thread* context; ppu_thread::ppu_prio_t previous; u64 tag; u64 startTime;
+         ~Restore() {
+             std::lock_guard lock(g_mutex);
+             lv2_obj::unqueue(g_ppu, context, &ppu_thread::next_ppu);
+-            context->prio = previous; g_priority_order_tag = tag;
++            context->prio = previous; g_priority_order_tag = tag; context->start_time = startTime;
+         }
+-    } restore{context, previous, tag};
++    } restore{context, previous, tag, startTime};
+     // Public awake() follows the unchanged enqueue path, without making the
+     // normal scheduler ready or resuming another emulation worker.
+     if (!awake(context)) return -6;
+--- a/rpcs3/Emu/CMakeLists.txt
++++ b/rpcs3/Emu/CMakeLists.txt
+@@ -124,6 +124,13 @@
+     # Restore scoped syscall counters if a diagnostic callback unwinds.
+     set_property(SOURCE Cell/lv2/lv2.cpp APPEND PROPERTY COMPILE_OPTIONS -fexceptions)
+     set_source_files_properties(Cell/lv2/lv2.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
++endif()
++
++if(ARMSX3_IOS)
++    # Executable linkage diagnostics invoke CoreBridge callbacks which can
++    # throw. Unwind descriptor/import restoration and report the failure.
++    set_property(SOURCE Cell/PPUModule.cpp APPEND PROPERTY COMPILE_OPTIONS -fexceptions)
++    set_source_files_properties(Cell/PPUModule.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+ endif()
+ 
+ # Crypto
