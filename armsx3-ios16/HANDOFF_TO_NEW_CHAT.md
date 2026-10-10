@@ -930,3 +930,35 @@ CFBundleVersion33, still21 automatic stages. Exact corrected bridge compile
 PASS. Host shared ownership teardown harness reproduces retained-reference
 failure and verifies reset gives sole VM ownership; this is a ownership
 model, not actual iOS VM integration. Device retest pending.
+
+## 2026-10-10 — P22 device PASS; build34 / P23 protected ELF code
+ARMSX3-startup(20261010-142551).log, pid96230 confirms all21 stages PASS,
+including P22 fixed ELF mapping, full page BSS/padding/aliases, rollback and
+block reference release/VM close. Build33 crash fix confirmed on device.
+
+P23 armsx3_core_test_elf_protected_code clones the successful P22 separate
+fixed mappings; code is now page-aligned0x10000, data/OPD0x30400. Actual
+core ELF reader loads two PowerPC instructions: addi r3,0,42; stw r3,0(r6).
+Core-owned static decoder, production ppu_register_range and per-instruction
+registration, actual bounded exec_task on private real named PPU worker.
+Before execution invokes vm::page_protect like loader:4KiB aligned request
+clears page_writable; actual64KiB backing expands the affected range. Tests
+all16 guest page flags RO/readable/executable, data separatelyRW, unmapped
+gap protection rejected, RW restoration and reapplication of RO. Never
+attempts deliberate code write/fault or writes unmapped pages on device.
+
+Guest bounded2 dispatch steps store42 to data+32; requires correct worker
+TLS, r3/CIA, creation/deletion/live counters, every byte of both backing
+pages and privileged aliases (only store output changes), RO code flags,
+RW data and absent gap pages. Execution cache data remains separate from
+read-only guest code. Explicit segment cache decommit, guest deallocation
+while code remainsRO, area.reset before vmclose. Configuration scoped,
+static decoder/os scheduler/profiling off. CPU admission remains private,
+not actual LV2 process startup. No native RX/JIT pages added.
+
+CFBundleVersion34,22 automatic stages. Exact P23 bridge compiles GNU C++23
+against pinned headers. Actual ELF reader host test validates aligned code,
+separate data and two-instruction payload, OPD/layout and four invalid
+mapping bounds. Catalog/exports/whitespace PASS. Host cannot validate iOS
+memory protection or actual PPU handler execution; device test pending.
+Still no full ppu_load_exec, firmware, imports/syscalls, game boot or RSX.

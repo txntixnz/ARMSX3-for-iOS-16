@@ -2994,3 +2994,200 @@ extern "C" __attribute__((visibility("default"))) int armsx3_core_test_elf_fixed
         ARMSX3StartupLog(error.what()); if (initialized) vm::close(); return -1;
     }
 }
+// Exercise the allocator used by ppu_load_exec with separate 64 KiB pages.
+extern "C" __attribute__((visibility("default"))) int armsx3_core_test_elf_protected_code()
+{
+    ARMSX3StartupLog("P23 BEFORE fixed-address ELF segment allocation");
+    bool initialized = false;
+    try {
+        if (!Emu.IsStopped()) throw std::runtime_error("P23 requires stopped emulator");
+        struct Configuration
+        {
+            bool debugPPU = g_cfg.core.ppu_debug.get();
+            bool ppu = g_cfg.core.ppu_prof.get(), spu = g_cfg.core.spu_prof.get(), debug = g_cfg.core.spu_debug.get();
+            thread_scheduler_mode scheduler = g_cfg.core.thread_scheduler.get();
+            ppu_decoder_type decoder = g_cfg.core.ppu_decoder.get();
+            Configuration() { g_cfg.core.ppu_debug.set(false); g_cfg.core.ppu_prof.set(false); g_cfg.core.spu_prof.set(false);
+                g_cfg.core.spu_debug.set(false); g_cfg.core.thread_scheduler.set(thread_scheduler_mode::os);
+                g_cfg.core.ppu_decoder.set(ppu_decoder_type::_static); }
+            ~Configuration() { g_cfg.core.ppu_debug.set(debugPPU); g_cfg.core.ppu_prof.set(ppu); g_cfg.core.spu_prof.set(spu);
+                g_cfg.core.spu_debug.set(debug); g_cfg.core.thread_scheduler.set(scheduler);
+                g_cfg.core.ppu_decoder.set(decoder); }
+        } configuration;
+        vm::init(); initialized = true;
+        auto area = vm::reserve_map(vm::main, 0x10000, 0x40000, vm::block_size_64k);
+        if (!area || area->addr != 0x10000 || (area->flags & 0xf00) != vm::block_size_64k)
+            throw std::runtime_error("P23 main allocation area mismatch");
+        constexpr u32 codeAddress = 0x10000, dataAddress = 0x30400;
+        ppu_exec_object::ehdr_t header{};
+        header.e_magic = "\177ELF"_u32; header.e_class = 2; header.e_data = 2;
+        header.e_curver = 1; header.e_os_abi = elf_os::lv2; header.e_type = elf_type::exec;
+        header.e_machine = elf_machine::ppc64; header.e_version = 1;
+        header.e_entry = dataAddress; header.e_phoff = sizeof(header);
+        header.e_ehsize = sizeof(header); header.e_phentsize = sizeof(ppu_exec_object::phdr_t); header.e_phnum = 2;
+        std::array<ppu_exec_object::phdr_t, 2> segments{};
+        segments[0].p_type = 1; segments[0].p_flags = 5; segments[0].p_offset = 0x100;
+        segments[0].p_vaddr = codeAddress; segments[0].p_filesz = 8; segments[0].p_memsz = 64; segments[0].p_align = 16;
+        segments[1].p_type = 1; segments[1].p_flags = 6; segments[1].p_offset = 0x200;
+        segments[1].p_vaddr = dataAddress; segments[1].p_filesz = 8; segments[1].p_memsz = 128; segments[1].p_align = 16;
+        std::vector<u8> fixture(0x208, 0);
+        std::memcpy(fixture.data(), &header, sizeof(header));
+        std::memcpy(fixture.data() + sizeof(header), segments.data(), sizeof(segments));
+        const std::array<be_t<u32>, 2> instructions{0x3860002au, 0x90660000u};
+        const std::array<be_t<u32>, 2> descriptor{codeAddress, dataAddress};
+        std::memcpy(fixture.data() + 0x100, instructions.data(), 8);
+        std::memcpy(fixture.data() + 0x200, descriptor.data(), 8);
+        const std::string path = fs::get_cache_dir() + "ARMSX3-P23-diagnostic.elf";
+        struct RemoveFixture { std::string path; ~RemoveFixture() { fs::remove_file(path); } } remove{path};
+        { fs::file file(path, fs::rewrite);
+          if (!file || file.write(fixture.data(), fixture.size()) != fixture.size())
+              throw std::runtime_error("P23 fixture write failed"); }
+        const fs::file file(path, fs::read); const ppu_exec_object elf(file);
+        if (elf.get_error() != elf_error::ok || elf.progs.size() != 2)
+            throw std::runtime_error("P23 ELF parse failed");
+        const auto validSegment = [](const ppu_exec_object::prog_t& p) {
+            const u64 address = p.p_vaddr, size = p.p_memsz;
+            return p.p_type == 1 && address >= 0x10000 && address < 0x50000 && size &&
+                size <= 0x50000 - address && u64(p.p_filesz) <= size && p.bin.size() == p.p_filesz;
+        };
+        for (const auto& p : elf.progs) if (!validSegment(p))
+            throw std::runtime_error("P23 segment bounds invalid");
+        // Failure after the first allocation must release that allocation.
+        // The second segment deliberately collides with the first 64 KiB page.
+        if (!area->falloc(codeAddress, 64)) throw std::runtime_error("P23 initial fixed allocation failed");
+        if (area->falloc(codeAddress + 32, 128)) throw std::runtime_error("P23 overlapping allocation accepted");
+        if (area->dealloc(0x10000) != 0x10000 || vm::check_addr(0x10000))
+            throw std::runtime_error("P23 partial allocation rollback failed");
+        if (area->falloc(0x4fff0, 32) || area->falloc(0x8000, 64))
+            throw std::runtime_error("P23 allocation outside reserved area accepted");
+        ARMSX3StartupLog("P23 PASS: actual fixed allocator rejects overlap and area boundaries; partial allocation rollback");
+        for (const auto& p : elf.progs) {
+            // Same reserve/flag/falloc operations used by the production loader.
+            const u32 address = u32(p.p_vaddr), size = u32(p.p_memsz);
+            const auto targetArea = vm::reserve_map(vm::any, 0x10000, 0x10000000, vm::block_size_64k);
+            if (targetArea != area || !targetArea->falloc(address, size))
+                throw std::runtime_error("P23 loader-style fixed allocation failed");
+            const auto* before = static_cast<const u8*>(vm::base(address));
+            for (u32 i = 0; i < size; ++i) if (before[i])
+                throw std::runtime_error("P23 new segment was not zero-filled");
+            std::memcpy(vm::base(address), p.bin.data(), p.bin.size());
+        }
+        if (vm::check_addr(0x20000) || vm::check_addr(0x40000))
+            throw std::runtime_error("P23 unmapped segment gaps became allocated");
+        // Verify every byte of both backing pages, including alignment padding,
+        // untouched BSS and both guest aliases; do not write either gap page.
+        for (u32 page : {0x10000u, 0x30000u}) {
+            if (!vm::check_addr(page, vm::page_readable | vm::page_writable, 0x10000))
+                throw std::runtime_error("P23 mapped page permissions missing");
+            const auto* normal = static_cast<const u8*>(vm::base(page));
+            const auto* privileged = static_cast<const u8*>(vm::get_super_ptr(page));
+            const u32 offset = page == 0x10000 ? 0 : 0x400;
+            const u32 fileOffset = page == 0x10000 ? 0x100 : 0x200;
+            for (u32 i = 0; i < 0x10000; ++i) {
+                const u8 expected = i >= offset && i < offset + 8 ? fixture[fileOffset + i - offset] : 0;
+                if (normal[i] != expected || privileged[i] != expected)
+                    throw std::runtime_error("P23 segment payload/BSS/padding/alias mismatch");
+            }
+        }
+
+        if (vm::page_protect(0x20000, 0x10000, 0, 0, vm::page_writable))
+            throw std::runtime_error("P23 protection accepted unmapped gap");
+        if (!g_fxo->is_init<ppu_interpreter_rt>() && !g_fxo->init<ppu_interpreter_rt>())
+            throw std::runtime_error("P23 interpreter unavailable");
+        auto& interpreter = g_fxo->get<ppu_interpreter_rt>();
+        struct SegmentCacheCleanup {
+            u8* pointer; bool active = false;
+            void release() { if (active) { utils::memory_decommit(pointer, 0x8000); active = false; } }
+            ~SegmentCacheCleanup() { release(); }
+        } segmentCleanup{vm::g_exec_addr + vm::g_exec_addr_seg_offset + (codeAddress >> 1)};
+        segmentCleanup.active = true;
+        ppu_register_range(codeAddress, 8);
+        const auto* code = static_cast<const be_t<u32>*>(vm::base(codeAddress));
+        for (u32 i = 0; i < 2; ++i) ppu_register_function_at(codeAddress + i * 4, 4, interpreter.decode(code[i]));
+        // Same loader operation: clear guest write permission. 64 KiB backing
+        // pages expand the aligned 4 KiB request to the whole allocation.
+        ARMSX3StartupLog("P23 BEFORE core page protection of fixed executable segment");
+        if (!vm::page_protect(codeAddress, 0x1000, 0, 0, vm::page_writable) ||
+            !vm::check_addr(codeAddress, vm::page_readable | vm::page_executable, 0x10000))
+            throw std::runtime_error("P23 read-only executable protection failed");
+        for (u32 page = 0; page < 0x10000; page += 0x1000)
+            if (vm::check_addr(codeAddress + page, vm::page_writable))
+                throw std::runtime_error("P23 code page still marked writable");
+        if (!vm::check_addr(0x30000, vm::page_readable | vm::page_writable, 0x10000))
+            throw std::runtime_error("P23 data lost write permission");
+        // Exercise reversible permission transitions before returning to RO.
+        if (!vm::page_protect(codeAddress, 0x10000, vm::page_readable, vm::page_writable, 0) ||
+            !vm::check_addr(codeAddress, vm::page_writable, 0x10000) ||
+            !vm::page_protect(codeAddress, 0x10000, vm::page_writable, 0, vm::page_writable))
+            throw std::runtime_error("P23 permission restore/reapply failed");
+        struct Program { int result = -99; bool tls = false; std::atomic<bool> completed{false}; } program;
+        const auto created = cpu_thread::g_threads_created.load(), deleted = cpu_thread::g_threads_deleted.load();
+        const u64 live = armsx3_ios_live_cpu_threads();
+        {
+            std::unique_ptr<named_thread<ppu_thread>> worker;
+            {
+                struct ConstructionID { u32 previous = id_manager::g_id;
+                    ConstructionID() { id_manager::g_id = ppu_thread::id_base; }
+                    ~ConstructionID() { id_manager::g_id = previous; } } construction_id;
+                const ppu_thread_params params{static_cast<vm::addr_t>(0x31000), 0x8000, 0, {}, 0, 0};
+                worker = std::make_unique<named_thread<ppu_thread>>(stx::launch_retainer{}, params, "iOS protected ELF probe", 1000);
+            }
+            struct StopWorker { named_thread<ppu_thread>& worker;
+                ~StopWorker() { worker.state += cpu_flag::exit; worker.state.notify_one();
+                    worker.cmd_notify.store(1); worker.cmd_notify.notify_one(); } } stop{*worker};
+            const ppu_intrp_func_t execute = +[](ppu_thread& context, ppu_opcode_t, be_t<u32>*, ppu_intrp_func*) {
+                auto& program = *reinterpret_cast<Program*>(context.gpr[30]);
+                program.tls = get_current_cpu_thread() == &context && thread_ctrl::get_current() != nullptr;
+                program.result = armsx3_ios_ppu_exec_bounded(&context, 0x10000, 0x10008, 8);
+                context.state += cpu_flag::exit; program.completed.store(true, std::memory_order_release);
+            };
+            worker->cmd_list({{ppu_cmd::ptr_call, 0}, std::bit_cast<u64>(execute)});
+            worker->cia = codeAddress; worker->gpr[6] = dataAddress + 32;
+            worker->gpr[30] = u64(reinterpret_cast<uintptr_t>(&program));
+            worker->state -= cpu_flag::stop + cpu_flag::exit + cpu_flag::suspend + cpu_flag::memory + cpu_flag::wait;
+            ARMSX3StartupLog("P23 BEFORE normal PPU fetch from read-only code and store to separate data segment");
+            *worker = thread_state::created;
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+            while (!program.completed.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline)
+                std::this_thread::yield();
+            if (!program.completed.load(std::memory_order_acquire)) throw std::runtime_error("P23 execution deadline exceeded");
+            (*worker)();
+            if (!program.tls || program.result != 2 || worker->gpr[3] != 42 || worker->cia != codeAddress + 8)
+                throw std::runtime_error("P23 protected code execution result mismatch");
+        }
+        if (armsx3_ios_live_cpu_threads() != live || cpu_thread::g_threads_created.load() != created + 1 ||
+            cpu_thread::g_threads_deleted.load() != deleted + 1)
+            throw std::runtime_error("P23 worker counters unbalanced");
+        for (u32 page : {0x10000u, 0x30000u}) {
+            const auto* normal = static_cast<const u8*>(vm::base(page));
+            const auto* privileged = static_cast<const u8*>(vm::get_super_ptr(page));
+            const u32 offset = page == 0x10000 ? 0 : 0x400;
+            const u32 fileOffset = page == 0x10000 ? 0x100 : 0x200;
+            for (u32 i = 0; i < 0x10000; ++i) {
+                u8 expected = i >= offset && i < offset + 8 ? fixture[fileOffset + i - offset] : 0;
+                if (page == 0x30000 && i >= 0x420 && i < 0x424) expected = i == 0x423 ? 42 : 0;
+                if (normal[i] != expected || privileged[i] != expected)
+                    throw std::runtime_error("P23 protected code, data store or guard mismatch");
+            }
+        }
+        for (u32 page = 0; page < 0x10000; page += 0x1000)
+            if (vm::check_addr(codeAddress + page, vm::page_writable))
+                throw std::runtime_error("P23 execution changed code write permission");
+        if (!vm::check_addr(0x30000, vm::page_writable, 0x10000) ||
+            vm::check_addr(0x20000) || vm::check_addr(0x40000))
+            throw std::runtime_error("P23 execution changed data/gap permissions");
+        ARMSX3StartupLog("P23 PASS: read-only code fetch, two actual PPU instructions and writable data store; permissions/aliases/guards unchanged");
+        segmentCleanup.release();
+        if (area->dealloc(0x30000) != 0x10000 || area->dealloc(0x10000) != 0x10000 ||
+            vm::check_addr(0x10000) || vm::check_addr(0x30000))
+            throw std::runtime_error("P23 fixed segment cleanup failed");
+        // vm::close requires the VM table to own the only block reference.
+        ARMSX3StartupLog("P23 BEFORE releasing block reference and closing guest VM");
+        area.reset();
+        vm::close(); initialized = false;
+        ARMSX3StartupLog("P23 PASS: fixed ELF pages, core read-only protection/restore, normal PPU fetch and data store, aliases, guards and cleanup; full executable loader/firmware/game boot remain untested");
+        return 0;
+    } catch (const std::exception& error) {
+        ARMSX3StartupLog(error.what()); if (initialized) vm::close(); return -1;
+    }
+}
