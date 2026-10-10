@@ -1,0 +1,33 @@
+--- a/rpcs3/Emu/Cell/lv2/lv2.cpp
++++ b/rpcs3/Emu/Cell/lv2/lv2.cpp
+@@ -1689,8 +1689,8 @@
+ // production table, bindings and system-service handlers remain unchanged.
+ struct ios_ppu_syscall_probe { std::array<u32, 1024> counts{}; };
+ static thread_local ios_ppu_syscall_probe* s_ios_ppu_syscall_probe = nullptr;
+-extern "C" int armsx3_ios_ppu_probe_syscalls_and_call(ppu_thread* context,
+-    int (*execute)(ppu_thread*, void*), void* user)
++static int ppu_probe_syscalls_and_call(ppu_thread* context,
++    int (*execute)(ppu_thread*, void*), void* user, bool priority)
+ {
+ 	if (!context || !execute || !Emu.IsStopped() || cpu_thread::get_current() != context ||
+ 		g_cfg.core.ppu_decoder != ppu_decoder_type::_static || context->stack_addr != 0x30000u ||
+@@ -1702,8 +1702,18 @@
+ 	const int result = execute(context, user);
+ 	if (result < 0) return result;
+ 	for (u32 code = 0; code < probe.counts.size(); ++code)
+-		if (probe.counts[code] != (code == 46 ? 2u : (code == 49 || code == 6 ? 1u : 0u))) return -3;
++		if (probe.counts[code] != (code == 46 ? 2u : (code == 6 || code == (priority ? 48u : 49u) ? 1u : (priority && code == 47 ? 3u : 0u)))) return -3;
+ 	return result;
++}
++extern "C" int armsx3_ios_ppu_probe_syscalls_and_call(ppu_thread* context,
++    int (*execute)(ppu_thread*, void*), void* user)
++{
++    return ppu_probe_syscalls_and_call(context, execute, user, false);
++}
++extern "C" int armsx3_ios_ppu_probe_priority_syscalls_and_call(ppu_thread* context,
++    int (*execute)(ppu_thread*, void*), void* user)
++{
++    return ppu_probe_syscalls_and_call(context, execute, user, true);
+ }
+ #endif
+ 

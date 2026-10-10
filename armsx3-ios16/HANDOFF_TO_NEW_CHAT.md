@@ -1724,3 +1724,74 @@ failure or the new device log. On success install build49 and run all34 tests.
 Full process admission, full sys_initialize_tls mutex/HLE initialization,
 firmware, scheduling/synchronization services, RSX and game boot remain
 untested. P35 validates only the two real worker-query services and errors.
+
+## 2026-10-11 build49 device PASS; build50 P36 priority services
+
+User supplied ARMSX3-startup-20261010-220736-453-258.txt, PID258, build49,
+5272 lines. All34 diagnostics P2-P35 and final AUTO PASS completed. P35
+confirms actual loaded SC dispatch, real stack and joinable/detached queries,
+signed EFAULT/unsigned ENOSYS, history/CIA continuation, TLS result42 and
+repeated exact image/stack/aliases/cache/worker/TLS/link cleanup. .txt export
+remains readable. Build49 HEAD1ff48ff4d835853189a5ddc7cf1cb80fb6407963,
+tree88aa10c3910f3253ad126f5badb5bb9a902ffa04.
+
+Build50 adds P36 armsx3_core_test_priority_syscalls,35 tests P2-P36. The same
+production five-header ELF/process/arguments/TLS/linkage path now calls
+sys_ppu_thread_get_priority via actual loaded guest SC48. Caller copies the
+real queued worker ID r7 into r3 before BCTRL; callback supplies r4=DATA+40
+as the guest output pointer. Callee10060 sets r11=48, SC at10064 queries self
+through the unmodified production handler's scheduler mutex reader lock,
+atomic priority read and wait/check_state transition. Returned priority must
+match ELF-derived/constructor priority1100. DATA+44 stays0; DATA+48 holds
+success0. Caller SC46 still queries joinability, then production TLS read
+returns42. Both joinable and detached workers repeat the whole sequence.
+Code108/DATA352/layout unchanged,27 guest instructions+HLE RETURN28.
+New golden ELF SHA1 is86d1d7ea9c980461ea025add7dfb43bb77f3de41.
+
+Before guest fast_call, decoded loaded SC invokes real syscall47 with self ID
+and requests-513,3072,current1100. Both invalid values are rejected in either
+privilege mode and must return sign-extended CELL_EINVAL; setting the current
+priority must succeed. These invoke actual binding/test_stopped/wait handling
+but never change priority or admit the worker into the global scheduler.
+Each validates CIA+4, exact history/function restoration, unchanged priority
+and full DATA/aliases. Existing null-join EFAULT and unused6 ENOSYS retained.
+Total history6 (null1 + set3 + loaded get/join2), excluding unused-service.
+Entry ABI still validates queued argv r4 before these calls; final r4 is the
+priority output pointer and r7 remains actual worker ID.
+
+Patch0031-ios-worker-priority-syscalls.patch adds a second export to the P35
+statistics scope, armsx3_ios_ppu_probe_priority_syscalls_and_call. Shared
+private runner validates old stopped/current/static/stack/entry boundaries,
+uses the same thread-local RAII counter destination and requires P36 counts
+46=2,47=3,48=1,6=1,all others0. The old P35 export still selects exactly its
+original counts46=2,49=1,6=1. Production SC interpreter/dispatcher/table/
+bindings/services and normal global counter path are unchanged by0031.
+Existing0030 iOS lv2.cpp -fexceptions/PCH skip retained for exception cleanup.
+
+Host validation:0031 applies after0030 to pinned lv2.cpp. Actual production
+set/get priority handlers, complete BIND_FUNC templates/GPR casts, SC and
+patched dispatcher pass ASAN/UBSAN with -fno-exceptions then-fexceptions.
+Host scheduler mutex/atomic/check_state/IDM primitives are shims: tests verify
+handler selection, signed argument/error ABI, invalid boundaries in both
+privilege modes, no-change self success without set_priority invocation,
+BE self-query output, history/arguments/CIA/current_function restoration and
+read-lock/check_state route. P35 and P36 counter policies, nested/cross-policy
+mismatch, negative/exception callbacks and repeated scope/global-statistics
+restoration all pass. Actual C++ P36 ELF constructor/opcodes and production
+process/TLS loader sanitizer checks validate five headers, hash, malformed/
+default/priority cases, exact metadata publication and allocation/exception
+rollback. Independent PPC model confirms actual SC48 self ID+r4 pointer,
+SC46 join query, both join states, priority1100,27+1 dispatches, TLS result42
+and exact full-memory/frame/arguments/TLS/TOC/SP/LR preservation. Actual P36
+ELF TLS bytes pass production TLS bootstrap/allocator/free sanitizer tests,
+including25 injected access exceptions. Real CPUThread is_stopped/test_stopped
+and check_state paths were inspected against pinned upstream. No local iOS
+SDK: actual scheduler lock/VM/thread-state behavior is left to device P36.
+
+Old P2-P35 bridge prefix unchanged,474122 bytes/Git blob
+e892214cd96c50042d269303663e3179c6b552eb.35 ordered app/bridge exports,
+build50 plist and resultsCopyButton ARC repair retained. Build50 Actions and
+device P36 remain unverified. Do not monitor Actions after push; user reports
+completion/failure. On success install IPA and run all35 diagnostics.
+Actual scheduler admission/priority changes, full TLS mutex initialization,
+firmware, RSX and game boot remain untested.
