@@ -1252,3 +1252,64 @@ admission, firmware/LV2/RSX/game boot remain untested. No commercial game has
 booted. Next integrate executable module/linkage/process preparation within
 appropriate bounds before attempting firmware or a game.
 
+## 2026-10-10 — P29 device PASS; build42 / P30 loaded ELF PRX linkage
+User provided ARMSX3-startup(20261010-180030).log. Latest PID97507 reports
+AUTO PASS all28 stages through P29. The logged vm::falloc failure for the
+second segment is intentional, followed by P29 rollback PASS. Both successful
+production segment loads and guest execution cycles also passed. User still
+handles Actions completion monitoring; do not poll/wait for workflow status.
+
+Build42 appends patch0025-ios-executable-prx-linkage.patch and P30 as the29th
+ordered diagnostic. Existing P2-P29 bridge code and patches are preserved.
+The normal ppu_load_exec LOOS+2/PRX parameter body is extracted byte-for-byte
+into ppu_load_exec_prx_parameters, called by the normal loader and the bounded
+diagnostic. Its structure parsing, magic check, exports-before-imports order,
+NID stub metadata selection and relocation sorting remain unchanged.
+
+P30 parses a synthetic ELF with three program headers: code LOAD at0x10000
+(108 bytes/64KiB), data LOAD at0x20000 (296 bytes/64KiB), and40-byte PRX
+control metadata at0x20100, also present in the data LOAD bytes. ELF entry
+0x20008 points to the caller OPD (entry0x10000/TOC0x20020); the exported
+callee OPD at0x20000 points to0x10060/TOC0x20000. The shared production
+segment loop maps/copies/registers the two LOADs and hashes all three headers
+as normal; the control header does not create a third allocation. Golden
+production hash:5e7882989484d8489b011b0fa5f748df34be50fc.
+
+The bounded parameter wrapper validates exact records/ranges/name/NIDs/OPDs,
+requires empty relocation/stub metadata and owns a private linkage object
+plus the production iOSProbe library lock. Normal executable metadata loads
+the export first and then resolves one import to that guest descriptor while
+the unresolved import uses the real INVALID HLE descriptor. A callback runs
+the same verified caller/callee instructions from the production-loaded ELF
+pages. Twenty guest instructions plus HLE RETURN give21 dispatches/result42,
+separate TOCs and restored outer context. The wrapper uses production unload,
+restores import words and removes only its library lock, including on callback
+failure/throw. Bad magic is passed to the actual production parameter handler
+and rejected before linking. Two repeated link/call/unload cycles are checked
+against exact code/data/BSS/stack/HLE pages and aliases, dispatch snapshots,
+HLE protection, balanced workers and deallocation. Budget64/deadline2seconds.
+The caller/callee function blocks are explicitly declared, then passed to the
+normal static decoder; this new stage does not run whole-executable analysis.
+
+Validation: patch0025 applies after0019-0024; extracted parameter body remains
+byte-for-byte identical. C++20 host harnesses compile actual production
+segment/parameter/export/import/library-lock/NID-selection code with mocked
+VM/fixed objects/logging/SHA/NID generation. Three-program loading, metadata
+versus allocations, copied bytes/zero BSS/hash inputs, repeated loads,
+second-allocation rollback and malformed control rejection PASS. Parameter
+linking tests confirm active guest descriptor/INVALID import at callback,
+bad magic, malformed/preexisting state rejection, callback rejection/throw/
+slot mutation and150 injected read-exception rollback paths, preserving
+unrelated global state. Address/undefined behavior sanitizers PASS (host leak
+scanning disabled due to ptrace restrictions). Actual upstream opcode helpers
+plus the independent relocated three-page PPC fixture model confirm42,
+separate TOCs,20 guest instructions, caller entry OPD and exact frame/result
+writes. These host checks are not full iOS compilation or device execution.
+
+Bundle42; App.mm29 ordered stages; P30 bridge symbol exported. After Actions
+succeeds install ARMSX3_iOS16_INSTALL_THIS_IPA, run all29 tests and send latest
+log. P30 device behavior remains unverified. This integrates real executable
+segment loading and PRX parameter linking using private module/linkage state;
+global main-module/process setup, firmware/LV2/RSX/game boot are still untested.
+No commercial PS3 game has booted in this diagnostic app.
+

@@ -1,0 +1,914 @@
+--- a/rpcs3/Emu/Cell/PPUModule.cpp
++++ b/rpcs3/Emu/Cell/PPUModule.cpp
+@@ -2533,384 +2533,9 @@
+ #endif
+ 
+ 
+-bool ppu_load_exec(const ppu_exec_object& elf, bool virtual_load, const std::string& elf_path, utils::serial* ar)
+-{
+-	if (elf != elf_error::ok)
+-	{
+-		return false;
+-	}
+-
+-	// Check if it is a standalone executable first
+-	for (const auto& prog : elf.progs)
+-	{
+-		if (prog.p_type == 0x1u /* LOAD */ && prog.p_memsz)
+-		{
+-			using addr_range = utils::address_range32;
+-
+-			const addr_range r = addr_range::start_length(static_cast<u32>(prog.p_vaddr), static_cast<u32>(prog.p_memsz));
+-
+-			if ((prog.p_vaddr | prog.p_memsz) > u32{umax} || !r.valid() || !r.inside(addr_range::start_length(0x00000000, 0x30000000)))
+-			{
+-				return false;
+-			}
+-		}
+-	}
+-
+-	// Process information
+-	u32 sdk_version = SYS_PROCESS_PARAM_SDK_VERSION_UNKNOWN;
+-	s32 primary_prio = 1001;
+-	u32 primary_stacksize = SYS_PROCESS_PARAM_STACK_SIZE_MAX;
+-	u32 malloc_pagesize = SYS_PROCESS_PARAM_MALLOC_PAGE_SIZE_1M;
+-	u32 ppc_seg = 0;
+-
+-	// Something that is exclusive for very old SDKs
+-	// Another 256MB for PPU private area, but allocated at the front instead of after vm::main
+-	bool has_private_ppu_executable_area = false;
+-
+-	// Fetch information needed for allocating memory segmnents
+-	for (auto& prog : elf.progs)
+-	{
+-		switch (prog.p_type)
+-		{
+-		case 0x1: // LOAD
+-		{
+-			if (prog.p_filesz)
+-			{
+-				if ((prog.p_flags & 0x7) == prog.p_flags)
+-				{
+-					// PPU Private area location
+-					if (prog.p_vaddr < 0x10000000)
+-					{
+-						// Is the first area
+-						has_private_ppu_executable_area = true;
+-					}
+-				}
+-			}
+-
+-			break;
+-		}
+-		case 0x60000001: // LOOS+1
+-		{
+-			if (prog.p_filesz)
+-			{
+-				struct process_param_t
+-				{
+-					be_t<u32> size;
+-					be_t<u32> magic;
+-					be_t<u32> version;
+-					be_t<u32> sdk_version;
+-					be_t<s32> primary_prio;
+-					be_t<u32> primary_stacksize;
+-					be_t<u32> malloc_pagesize;
+-					be_t<u32> ppc_seg;
+-					//be_t<u32> crash_dump_param_addr;
+-				};
+-
+-				process_param_t info{};
+-				std::memcpy(&info, prog.bin.data(), sizeof(process_param_t));
+-
+-				if (info.size < sizeof(process_param_t))
+-				{
+-					ppu_loader.warning("Bad process_param size! [0x%x : 0x%x]", info.size, sizeof(process_param_t));
+-				}
+-
+-				if (info.magic != SYS_PROCESS_PARAM_MAGIC)
+-				{
+-					ppu_loader.error("Bad process_param magic! [0x%x]", info.magic);
+-				}
+-				else
+-				{
+-					sdk_version = info.sdk_version;
+-
+-					if (s32 prio = info.primary_prio; prio < 3072
+-						&& (prio >= (g_ps3_process_info.debug_or_root() ? 0 : -512)))
+-					{
+-						primary_prio = prio;
+-					}
+-
+-					primary_stacksize = info.primary_stacksize;
+-					malloc_pagesize = info.malloc_pagesize;
+-					ppc_seg = info.ppc_seg;
+-
+-					ppu_loader.notice("*** sdk version: 0x%x", info.sdk_version);
+-					ppu_loader.notice("*** primary prio: %d", info.primary_prio);
+-					ppu_loader.notice("*** primary stacksize: 0x%x", info.primary_stacksize);
+-					ppu_loader.notice("*** malloc pagesize: 0x%x", info.malloc_pagesize);
+-					ppu_loader.notice("*** ppc seg: 0x%x", info.ppc_seg);
+-					//ppu_loader.notice("*** crash dump param addr: 0x%x", info.crash_dump_param_addr);
+-				}
+-			}
+-			break;
+-		}
+-		default: break;
+-		}
+-	}
+-
+-	if (ppc_seg != 0x0 && !ar)
+-	{
+-		if (ppc_seg != 0x1)
+-		{
+-			ppu_loader.todo("Unknown ppc_seg flag value = 0x%x", ppc_seg);
+-		}
+-
+-		// Additional segment for fixed allocations
+-		if (!vm::map(0x30000000, 0x10000000, 0x200))
+-		{
+-			fmt::throw_exception("Failed to map ppc_seg's segment!");
+-		}
+-	}
+-
+-	if (has_private_ppu_executable_area)
+-	{
+-		if (!vm::reserve_map(vm::any, 0x10000, 0x0FFF0000, vm::block_size_64k))
+-		{
+-			ppu_loader.error("ppu_load_exec(): Failed to map PPU_PRIVATE (sdk_version=0x%x)", sdk_version);
+-			return false;
+-		}
+-	}
+-
+-	const bool is_vm_main_512 = sdk_version < 0x200000;
+-
+-	if (is_vm_main_512)
+-	{
+-		if (!vm::reserve_map(vm::main, has_private_ppu_executable_area ? 0x10000000 : 0x10000, 0x1FFF0000 + (has_private_ppu_executable_area ? 0x10000 : 0), vm::block_size_64k))
+-		{
+-			ppu_loader.error("ppu_load_exec(): Failed to map vm::main (sdk_version=0x%x)", sdk_version);
+-			return false;
+-		}
+-	}
+-	else
+-	{
+-		if (has_private_ppu_executable_area)
+-		{
+-			ppu_loader.error("ppu_load_exec(): Unexpected segments state, report to developers!");
+-		}
+-
+-		if (!vm::reserve_map(vm::main, has_private_ppu_executable_area ? 0x10000000 : 0x10000, 0x0FFF0000 + (has_private_ppu_executable_area ? 0x10000 : 0), vm::block_size_64k))
+-		{
+-			ppu_loader.error("ppu_load_exec(): Failed to map vm::main (sdk_version=0x%x)", sdk_version);
+-			return false;
+-		}
+-	}
+-
+-	init_ppu_functions(ar, false);
+-
+-	// Set for delayed initialization in ppu_initialize()
+-	auto& _main = g_fxo->get<main_ppu_module<lv2_obj>>();
+-
+-	// Access linkage information object
+-	auto& link = g_fxo->get<ppu_linkage_info>();
+-
+-	// TLS information
+-	u32 tls_vaddr = 0;
+-	u32 tls_fsize = 0;
+-	u32 tls_vsize = 0;
+-
+-	// Limit for analysis
+-	u32 end = 0;
+-
+-	// Executable hash
+-	sha1_context sha;
+-	sha1_starts(&sha);
+-
+-	struct on_fatal_error
+-	{
+-		ppu_module<lv2_obj>& _main;
+-		bool errored = true;
+-
+-		~on_fatal_error()
+-		{
+-			if (!errored)
+-			{
+-				return;
+-			}
+-
+-			// Revert previous allocations on an error
+-			for (const auto& seg : _main.segs)
+-			{
+-				vm::dealloc(seg.addr);
+-			}
+-		}
+-
+-	} error_handler{_main};
+-
+-	if (virtual_load)
+-	{
+-		// No need for cleanup
+-		error_handler.errored = false;
+-	}
+-
+-	const auto old_process_info = g_ps3_process_info;
+-
+-	u32 segs_size = 0;
+-
+-	if (!ppu_load_exec_segments(elf, virtual_load, ar, _main, has_private_ppu_executable_area, segs_size, sha))
+-		return false;
+-
+-	// Load section list, used by the analyser
+-	for (const auto& s : elf.shdrs)
+-	{
+-		ppu_loader.notice("** Section: sh_type=0x%x, addr=0x%llx, size=0x%llx, flags=0x%x", std::bit_cast<u32>(s.sh_type), s.sh_addr, s.sh_size, s._sh_flags);
+-
+-		if (s.sh_type != sec_type::sht_progbits) continue;
+-
+-		ppu_segment _sec;
+-		const u32 addr = _sec.addr = vm::cast(s.sh_addr);
+-		const u32 size = _sec.size = vm::cast(s.sh_size);
+-
+-		_sec.type = std::bit_cast<u32>(s.sh_type);
+-		_sec.flags = static_cast<u32>(s._sh_flags & 7);
+-		_sec.filesz = 0;
+-
+-		if (addr && size)
+-		{
+-			_main.secs.emplace_back(_sec);
+-
+-			if (_sec.flags & 0x4 && addr >= _main.segs[0].addr && addr + size <= _main.segs[0].addr + _main.segs[0].size)
+-			{
+-				end = std::max<u32>(end, addr + size);
+-			}
+-		}
+-	}
+-
+-	sha1_finish(&sha, _main.sha1);
+-
+-	// Format patch name
+-	std::string hash("PPU-0000000000000000000000000000000000000000");
+-	for (u32 i = 0; i < 20; i++)
+-	{
+-		constexpr auto pal = "0123456789abcdef";
+-		hash[4 + i * 2] = pal[_main.sha1[i] >> 4];
+-		hash[5 + i * 2] = pal[_main.sha1[i] & 15];
+-	}
+-
+-	Emu.SetExecutableHash(hash);
+-
+-	// Apply the patch
+-	std::vector<u32> applied;
+-	g_fxo->get<patch_engine>().apply(applied, !ar ? hash : std::string{}, [&](u32 addr, u32 size) { return _main.get_ptr<u8>(addr, size);  });
+-
+-	if (!ar && !Emu.GetTitleID().empty())
+-	{
+-		// Alternative patch
+-		g_fxo->get<patch_engine>().apply(applied, Emu.GetTitleID() + '-' + hash, [&](u32 addr, u32 size) { return _main.get_ptr<u8>(addr, size); });
+-	}
+-
+-	if (!applied.empty() || ar)
+-	{
+-		// Compare memory changes in memory after executable code sections end
+-		if (end >= _main.segs[0].addr && end < _main.segs[0].addr + _main.segs[0].size)
+-		{
+-			for (const auto& prog : elf.progs)
+-			{
+-				// Find the first segment
+-				if (prog.p_type == 0x1u /* LOAD */ && prog.p_memsz)
+-				{
+-					std::span<const uchar> elf_memory{prog.bin.begin(), prog.bin.size()};
+-					elf_memory = elf_memory.subspan(end - _main.segs[0].addr);
+-
+-					const auto tmp = std::span<uchar>{&_main.get_ref<u8>(end), elf_memory.size()};
+-					if (!std::equal(elf_memory.begin(), elf_memory.end(), tmp.begin(), tmp.end()))
+-					{
+-						// There are changes, disable analysis optimization
+-						ppu_loader.notice("Disabling analysis optimization due to memory changes from original file");
+-
+-						end = 0;
+-					}
+-
+-					break;
+-				}
+-			}
+-		}
+-	}
+-
+-	if (applied.empty())
+-	{
+-		ppu_loader.warning("PPU executable hash: %s", hash);
+-	}
+-	else
+-	{
+-		ppu_loader.success("PPU executable hash: %s (<- %u)", hash, applied.size());
+-	}
+-
+-	// Initialize HLE modules
+-	ppu_initialize_modules(&link, ar);
+-
+-	// Embedded SPU elf patching
+-	for (const auto& seg : _main.segs)
+-	{
+-		ppu_check_patch_spu_images(_main, seg);
+-	}
+-
+-	// Static HLE patching
+-	if (g_cfg.core.hook_functions && !virtual_load)
+-	{
+-		auto shle = ensure(g_fxo->init<statichle_handler>(0));
+-
+-		for (u32 i = _main.segs[0].addr; i < (_main.segs[0].addr + _main.segs[0].size); i += 4)
+-		{
+-			vm::cptr<u8> _ptr = vm::cast(i);
+-			shle->check_against_patterns(_ptr, (_main.segs[0].addr + _main.segs[0].size) - i, i);
+-		}
+-	}
+-
+-	// Read control flags (0 if doesn't exist)
+-	g_ps3_process_info.ctrl_flags1 = 0;
+-
+-	if (bool not_found = g_ps3_process_info.self_info.valid)
+-	{
+-		for (const auto& ctrl : g_ps3_process_info.self_info.supplemental_hdr)
+-		{
+-			if (ctrl.type == 1)
+-			{
+-				if (!std::exchange(not_found, false))
+-				{
+-					ppu_loader.error("More than one control flags header found! (flags1=0x%x)",
+-						ctrl.PS3_plaintext_capability_header.ctrl_flag1);
+-					break;
+-				}
+-
+-				g_ps3_process_info.ctrl_flags1 |= ctrl.PS3_plaintext_capability_header.ctrl_flag1;
+-			}
+-		}
+-
+-		ppu_loader.notice("SELF header information found: ctrl_flags1=0x%x, authid=0x%llx",
+-			g_ps3_process_info.ctrl_flags1, g_ps3_process_info.self_info.prog_id_hdr.program_authority_id);
+-	}
+-
+-	// Load other programs
+-	for (auto& prog : elf.progs)
+-	{
+-		switch (const u32 p_type = prog.p_type)
+-		{
+-		case 0x00000001: break; // LOAD (already loaded)
+-
+-		case 0x00000007: // TLS
+-		{
+-			ppu_loader.notice("TLS info segment found: tls-image=*0x%x, image-size=0x%x, tls-size=0x%x", prog.p_vaddr, prog.p_filesz, prog.p_memsz);
+-
+-			if ((prog.p_vaddr | prog.p_filesz | prog.p_memsz) > u32{umax})
+-			{
+-				ppu_loader.error("ppu_load_exec(): TLS segment is invalid!");
+-				return false;
+-			}
+-
+-			tls_vaddr = vm::cast(prog.p_vaddr);
+-			tls_fsize = ::narrow<u32>(prog.p_filesz);
+-			tls_vsize = ::narrow<u32>(prog.p_memsz);
+-			break;
+-		}
+-
+-		case 0x60000001: // LOOS+1
+-		{
+-			// Obtained
+-			break;
+-		}
+-
+-		case 0x60000002: // LOOS+2
+-		{
+-			if (prog.p_filesz)
+-			{
++static bool ppu_load_exec_prx_parameters(ppu_module<lv2_obj>& _main, ppu_linkage_info& link,
++    bool virtual_load, const ppu_exec_object::prog_t& prog)
++{
+ 				struct ppu_proc_prx_param_t
+ 				{
+ 					be_t<u32> size;
+@@ -2948,6 +2573,523 @@
+ 				select_from_nids_scenpdrm_addrs(_main.stub_addr_to_constant_state_of_registers, nid_to_use_addr);
+ 
+ 				std::stable_sort(_main.relocs.begin(), _main.relocs.end());
++	return true;
++}
++
++#if defined(__APPLE__) && TARGET_OS_IPHONE
++// Restrict the shared production segment loader to two private diagnostic pages.
++extern "C" int armsx3_ios_ppu_load_probe_image_segments(const ppu_exec_object* elf, ppu_module<lv2_obj>* info)
++{
++	if (!elf || !info || *elf != elf_error::ok || !Emu.IsStopped() ||
++		g_cfg.core.ppu_decoder != ppu_decoder_type::_static || !g_fxo->is_init() ||
++		!g_fxo->is_init<ppu_interpreter_rt>() || !info->segs.empty() ||
++		!info->addr_to_seg_index.empty() || elf->progs.size() != 3 || elf->header.e_entry != 0x20008) return -1;
++	for (u32 index = 0; index < 2; ++index)
++	{
++		const auto& prog = elf->progs[index];
++		const u32 address = 0x10000 + index * 0x10000;
++		if (prog.p_type != 1u || prog.p_vaddr != address || prog.p_memsz != 0x10000u ||
++			prog.p_flags != (index ? 6u : 5u) || !prog.p_filesz || prog.p_filesz > (index ? 296u : 108u) ||
++			prog.bin.size() != prog.p_filesz || vm::check_addr(address, vm::page_allocated, 1)) return -2;
++	}
++	const auto& control = elf->progs[2];
++	if (elf->progs[0].p_filesz != 108u || elf->progs[1].p_filesz != 296u ||
++		control.p_type != 0x60000002u || control.p_vaddr != 0x20100u || control.p_flags ||
++		control.p_filesz != 40u || control.p_memsz != 40u || control.bin.size() != 40u) return -2;
++	struct Rollback
++	{
++		ppu_module<lv2_obj>& info;
++		bool active = true;
++		~Rollback()
++		{
++			if (!active) return;
++			// Both pages were verified unallocated before this loader invocation.
++			for (u32 address : {0x10000u, 0x20000u})
++				if (vm::check_addr(address, vm::page_allocated, 1)) vm::dealloc(address);
++			utils::memory_decommit(vm::g_exec_addr + vm::g_exec_addr_seg_offset + (0x10000 >> 1), 0x8000);
++			info.segs.clear(); info.addr_to_seg_index.clear();
++		}
++	} rollback{*info};
++	sha1_context sha;
++	sha1_starts(&sha);
++	u32 size = 0;
++	if (!ppu_load_exec_segments(*elf, false, nullptr, *info, false, size, sha)) return -3;
++	if (size != 0x20000 || info->segs.size() != 2 || info->addr_to_seg_index.size() != 2) return -4;
++	sha1_finish(&sha, info->sha1);
++	rollback.active = false;
++	return 0;
++}
++#endif
++
++#if defined(__APPLE__) && TARGET_OS_IPHONE
++// Execute the normal ELF PRX-parameter path with private linkage and owned lock.
++extern "C" int armsx3_ios_ppu_link_probe_image_and_call(ppu_module<lv2_obj>* info,
++    const ppu_exec_object::prog_t* prog, int (*execute)(void*, u32, u32), void* user)
++{
++	if (!info || !prog || !execute || !Emu.IsStopped() || info->segs.size() != 2 ||
++		info->segs[0].addr != 0x10000u || info->segs[1].addr != 0x20000u ||
++		info->segs[0].size != 0x10000u || info->segs[1].size != 0x10000u ||
++		prog->p_type != 0x60000002u || prog->p_vaddr != 0x20100u || prog->p_filesz != 40u ||
++		!info->relocs.empty() || !info->stub_addr_to_constant_state_of_registers.empty() ||
++		!g_fxo->is_init<ppu_function_manager>()) return -1;
++	const auto& manager = g_fxo->get<ppu_function_manager>();
++	if (!manager.addr) return -2;
++	const u32 data = info->segs[1].addr, first = data + 176, second = first + 4;
++	const std::array<u32, 10> expected{40, 0, 0, 0, data + 192, data + 236, data + 64, data + 108, 0, 0};
++	for (u32 i = 0; i < expected.size(); ++i)
++		if (i != 1 && info->get_ref<u32>(data + 256 + i * 4) != expected[i]) return -3;
++	const auto& lib = info->get_ref<const ppu_prx_module_info>(data + 64);
++	const auto& exp = info->get_ref<const ppu_prx_module_info>(data + 192);
++	if (lib.size != sizeof(ppu_prx_module_info) || lib.num_func != 2 || lib.num_var || lib.num_tlsvar ||
++		lib.attributes || lib.name.addr() != data + 128 || lib.nids.addr() != data + 160 || lib.addrs.addr() != first ||
++		exp.size != sizeof(ppu_prx_module_info) || exp.attributes != PRX_EXPORT_LIBRARY_FLAG ||
++		exp.num_func != 1 || exp.num_var || exp.num_tlsvar || exp.name.addr() != data + 128 ||
++		exp.nids.addr() != data + 160 || exp.addrs.addr() != data + 236 ||
++		std::memcmp(info->get_ptr<const char>(data + 128), "iOSProbe", 9) ||
++		info->get_ref<u32>(data + 160) != 0x49524e31u || info->get_ref<u32>(data + 164) != 0x49524e32u ||
++		info->get_ref<u32>(data + 236) != data || info->get_ref<u32>(data) != 0x10060u ||
++		info->get_ref<u32>(data + 4) != data || info->get_ref<u32>(first) != 0x10000u ||
++		info->get_ref<u32>(second) != 0x10000u || info->get_ref<u32>(data + 8) != 0x10000u ||
++		info->get_ref<u32>(data + 12) != data + 32) return -3;
++	if (!g_fxo->is_init<ppu_linkage_info>() && !g_fxo->init<ppu_linkage_info>()) return -4;
++	auto& global = g_fxo->get<ppu_linkage_info>();
++	{
++		std::lock_guard lock(global.mutex);
++		if (global.modules.contains("iOSProbe")) return -5;
++	}
++	{
++		std::lock_guard lock(global.lib_lock_mutex);
++		if (global.lib_lock.contains("iOSProbe")) return -5;
++	}
++	struct Cleanup
++	{
++		ppu_module<lv2_obj>& info;
++		ppu_linkage_info& global;
++		u32 first, second;
++		bool active = true;
++		void release()
++		{
++			if (!active) return;
++			info.get_ref<u32>(first) = 0x10000u; info.get_ref<u32>(second) = 0x10000u;
++			info.relocs.clear(); info.stub_addr_to_constant_state_of_registers.clear();
++			std::lock_guard lock(global.lib_lock_mutex);
++			global.lib_lock.erase("iOSProbe");
++			active = false;
++		}
++		~Cleanup() { release(); }
++	} cleanup{*info, global, first, second};
++	ppu_linkage_info local;
++	if (!ppu_load_exec_prx_parameters(*info, local, false, *prog)) return -6;
++	const auto& module = local.modules.at("iOSProbe");
++	const auto& known = module.functions.at(0x49524e31);
++	const auto& unknown = module.functions.at(0x49524e32);
++	if (local.modules.size() != 1 || module.functions.size() != 2 || !module.variables.empty() ||
++		known.export_addr != data || unknown.export_addr || known.static_func || known.static_var ||
++		!known.frefss.empty() || !unknown.frefss.empty() || known.imports.size() != 1 ||
++		!known.imports.contains(first) || unknown.imports.size() != 1 || !unknown.imports.contains(second) ||
++		!info->relocs.empty() || !info->stub_addr_to_constant_state_of_registers.empty() ||
++		info->get_ref<u32>(first) != data || info->get_ref<u32>(second) != manager.addr) return -7;
++	{
++		std::lock_guard lock(global.lib_lock_mutex);
++		if (!global.lib_lock.at("iOSProbe").load()) return -8;
++	}
++	if (execute(user, data, manager.addr) != 0) return -12;
++	if (info->get_ref<u32>(first) != data || info->get_ref<u32>(second) != manager.addr) return -13;
++	// The executable path does not keep unload flags. This one owned library loaded.
++	std::basic_string<char> flags(1, char{1});
++	if (!ppu_load_exports(*info, &local, data + 192, data + 236, false, nullptr, &flags).empty()) return -9;
++	{
++		std::lock_guard lock(global.lib_lock_mutex);
++		if (global.lib_lock.at("iOSProbe").load()) return -9;
++	}
++	{
++		std::lock_guard lock(global.mutex);
++		if (global.modules.contains("iOSProbe")) return -10;
++	}
++	cleanup.release();
++	return 0;
++}
++#endif
++
++bool ppu_load_exec(const ppu_exec_object& elf, bool virtual_load, const std::string& elf_path, utils::serial* ar)
++{
++	if (elf != elf_error::ok)
++	{
++		return false;
++	}
++
++	// Check if it is a standalone executable first
++	for (const auto& prog : elf.progs)
++	{
++		if (prog.p_type == 0x1u /* LOAD */ && prog.p_memsz)
++		{
++			using addr_range = utils::address_range32;
++
++			const addr_range r = addr_range::start_length(static_cast<u32>(prog.p_vaddr), static_cast<u32>(prog.p_memsz));
++
++			if ((prog.p_vaddr | prog.p_memsz) > u32{umax} || !r.valid() || !r.inside(addr_range::start_length(0x00000000, 0x30000000)))
++			{
++				return false;
++			}
++		}
++	}
++
++	// Process information
++	u32 sdk_version = SYS_PROCESS_PARAM_SDK_VERSION_UNKNOWN;
++	s32 primary_prio = 1001;
++	u32 primary_stacksize = SYS_PROCESS_PARAM_STACK_SIZE_MAX;
++	u32 malloc_pagesize = SYS_PROCESS_PARAM_MALLOC_PAGE_SIZE_1M;
++	u32 ppc_seg = 0;
++
++	// Something that is exclusive for very old SDKs
++	// Another 256MB for PPU private area, but allocated at the front instead of after vm::main
++	bool has_private_ppu_executable_area = false;
++
++	// Fetch information needed for allocating memory segmnents
++	for (auto& prog : elf.progs)
++	{
++		switch (prog.p_type)
++		{
++		case 0x1: // LOAD
++		{
++			if (prog.p_filesz)
++			{
++				if ((prog.p_flags & 0x7) == prog.p_flags)
++				{
++					// PPU Private area location
++					if (prog.p_vaddr < 0x10000000)
++					{
++						// Is the first area
++						has_private_ppu_executable_area = true;
++					}
++				}
++			}
++
++			break;
++		}
++		case 0x60000001: // LOOS+1
++		{
++			if (prog.p_filesz)
++			{
++				struct process_param_t
++				{
++					be_t<u32> size;
++					be_t<u32> magic;
++					be_t<u32> version;
++					be_t<u32> sdk_version;
++					be_t<s32> primary_prio;
++					be_t<u32> primary_stacksize;
++					be_t<u32> malloc_pagesize;
++					be_t<u32> ppc_seg;
++					//be_t<u32> crash_dump_param_addr;
++				};
++
++				process_param_t info{};
++				std::memcpy(&info, prog.bin.data(), sizeof(process_param_t));
++
++				if (info.size < sizeof(process_param_t))
++				{
++					ppu_loader.warning("Bad process_param size! [0x%x : 0x%x]", info.size, sizeof(process_param_t));
++				}
++
++				if (info.magic != SYS_PROCESS_PARAM_MAGIC)
++				{
++					ppu_loader.error("Bad process_param magic! [0x%x]", info.magic);
++				}
++				else
++				{
++					sdk_version = info.sdk_version;
++
++					if (s32 prio = info.primary_prio; prio < 3072
++						&& (prio >= (g_ps3_process_info.debug_or_root() ? 0 : -512)))
++					{
++						primary_prio = prio;
++					}
++
++					primary_stacksize = info.primary_stacksize;
++					malloc_pagesize = info.malloc_pagesize;
++					ppc_seg = info.ppc_seg;
++
++					ppu_loader.notice("*** sdk version: 0x%x", info.sdk_version);
++					ppu_loader.notice("*** primary prio: %d", info.primary_prio);
++					ppu_loader.notice("*** primary stacksize: 0x%x", info.primary_stacksize);
++					ppu_loader.notice("*** malloc pagesize: 0x%x", info.malloc_pagesize);
++					ppu_loader.notice("*** ppc seg: 0x%x", info.ppc_seg);
++					//ppu_loader.notice("*** crash dump param addr: 0x%x", info.crash_dump_param_addr);
++				}
++			}
++			break;
++		}
++		default: break;
++		}
++	}
++
++	if (ppc_seg != 0x0 && !ar)
++	{
++		if (ppc_seg != 0x1)
++		{
++			ppu_loader.todo("Unknown ppc_seg flag value = 0x%x", ppc_seg);
++		}
++
++		// Additional segment for fixed allocations
++		if (!vm::map(0x30000000, 0x10000000, 0x200))
++		{
++			fmt::throw_exception("Failed to map ppc_seg's segment!");
++		}
++	}
++
++	if (has_private_ppu_executable_area)
++	{
++		if (!vm::reserve_map(vm::any, 0x10000, 0x0FFF0000, vm::block_size_64k))
++		{
++			ppu_loader.error("ppu_load_exec(): Failed to map PPU_PRIVATE (sdk_version=0x%x)", sdk_version);
++			return false;
++		}
++	}
++
++	const bool is_vm_main_512 = sdk_version < 0x200000;
++
++	if (is_vm_main_512)
++	{
++		if (!vm::reserve_map(vm::main, has_private_ppu_executable_area ? 0x10000000 : 0x10000, 0x1FFF0000 + (has_private_ppu_executable_area ? 0x10000 : 0), vm::block_size_64k))
++		{
++			ppu_loader.error("ppu_load_exec(): Failed to map vm::main (sdk_version=0x%x)", sdk_version);
++			return false;
++		}
++	}
++	else
++	{
++		if (has_private_ppu_executable_area)
++		{
++			ppu_loader.error("ppu_load_exec(): Unexpected segments state, report to developers!");
++		}
++
++		if (!vm::reserve_map(vm::main, has_private_ppu_executable_area ? 0x10000000 : 0x10000, 0x0FFF0000 + (has_private_ppu_executable_area ? 0x10000 : 0), vm::block_size_64k))
++		{
++			ppu_loader.error("ppu_load_exec(): Failed to map vm::main (sdk_version=0x%x)", sdk_version);
++			return false;
++		}
++	}
++
++	init_ppu_functions(ar, false);
++
++	// Set for delayed initialization in ppu_initialize()
++	auto& _main = g_fxo->get<main_ppu_module<lv2_obj>>();
++
++	// Access linkage information object
++	auto& link = g_fxo->get<ppu_linkage_info>();
++
++	// TLS information
++	u32 tls_vaddr = 0;
++	u32 tls_fsize = 0;
++	u32 tls_vsize = 0;
++
++	// Limit for analysis
++	u32 end = 0;
++
++	// Executable hash
++	sha1_context sha;
++	sha1_starts(&sha);
++
++	struct on_fatal_error
++	{
++		ppu_module<lv2_obj>& _main;
++		bool errored = true;
++
++		~on_fatal_error()
++		{
++			if (!errored)
++			{
++				return;
++			}
++
++			// Revert previous allocations on an error
++			for (const auto& seg : _main.segs)
++			{
++				vm::dealloc(seg.addr);
++			}
++		}
++
++	} error_handler{_main};
++
++	if (virtual_load)
++	{
++		// No need for cleanup
++		error_handler.errored = false;
++	}
++
++	const auto old_process_info = g_ps3_process_info;
++
++	u32 segs_size = 0;
++
++	if (!ppu_load_exec_segments(elf, virtual_load, ar, _main, has_private_ppu_executable_area, segs_size, sha))
++		return false;
++
++	// Load section list, used by the analyser
++	for (const auto& s : elf.shdrs)
++	{
++		ppu_loader.notice("** Section: sh_type=0x%x, addr=0x%llx, size=0x%llx, flags=0x%x", std::bit_cast<u32>(s.sh_type), s.sh_addr, s.sh_size, s._sh_flags);
++
++		if (s.sh_type != sec_type::sht_progbits) continue;
++
++		ppu_segment _sec;
++		const u32 addr = _sec.addr = vm::cast(s.sh_addr);
++		const u32 size = _sec.size = vm::cast(s.sh_size);
++
++		_sec.type = std::bit_cast<u32>(s.sh_type);
++		_sec.flags = static_cast<u32>(s._sh_flags & 7);
++		_sec.filesz = 0;
++
++		if (addr && size)
++		{
++			_main.secs.emplace_back(_sec);
++
++			if (_sec.flags & 0x4 && addr >= _main.segs[0].addr && addr + size <= _main.segs[0].addr + _main.segs[0].size)
++			{
++				end = std::max<u32>(end, addr + size);
++			}
++		}
++	}
++
++	sha1_finish(&sha, _main.sha1);
++
++	// Format patch name
++	std::string hash("PPU-0000000000000000000000000000000000000000");
++	for (u32 i = 0; i < 20; i++)
++	{
++		constexpr auto pal = "0123456789abcdef";
++		hash[4 + i * 2] = pal[_main.sha1[i] >> 4];
++		hash[5 + i * 2] = pal[_main.sha1[i] & 15];
++	}
++
++	Emu.SetExecutableHash(hash);
++
++	// Apply the patch
++	std::vector<u32> applied;
++	g_fxo->get<patch_engine>().apply(applied, !ar ? hash : std::string{}, [&](u32 addr, u32 size) { return _main.get_ptr<u8>(addr, size);  });
++
++	if (!ar && !Emu.GetTitleID().empty())
++	{
++		// Alternative patch
++		g_fxo->get<patch_engine>().apply(applied, Emu.GetTitleID() + '-' + hash, [&](u32 addr, u32 size) { return _main.get_ptr<u8>(addr, size); });
++	}
++
++	if (!applied.empty() || ar)
++	{
++		// Compare memory changes in memory after executable code sections end
++		if (end >= _main.segs[0].addr && end < _main.segs[0].addr + _main.segs[0].size)
++		{
++			for (const auto& prog : elf.progs)
++			{
++				// Find the first segment
++				if (prog.p_type == 0x1u /* LOAD */ && prog.p_memsz)
++				{
++					std::span<const uchar> elf_memory{prog.bin.begin(), prog.bin.size()};
++					elf_memory = elf_memory.subspan(end - _main.segs[0].addr);
++
++					const auto tmp = std::span<uchar>{&_main.get_ref<u8>(end), elf_memory.size()};
++					if (!std::equal(elf_memory.begin(), elf_memory.end(), tmp.begin(), tmp.end()))
++					{
++						// There are changes, disable analysis optimization
++						ppu_loader.notice("Disabling analysis optimization due to memory changes from original file");
++
++						end = 0;
++					}
++
++					break;
++				}
++			}
++		}
++	}
++
++	if (applied.empty())
++	{
++		ppu_loader.warning("PPU executable hash: %s", hash);
++	}
++	else
++	{
++		ppu_loader.success("PPU executable hash: %s (<- %u)", hash, applied.size());
++	}
++
++	// Initialize HLE modules
++	ppu_initialize_modules(&link, ar);
++
++	// Embedded SPU elf patching
++	for (const auto& seg : _main.segs)
++	{
++		ppu_check_patch_spu_images(_main, seg);
++	}
++
++	// Static HLE patching
++	if (g_cfg.core.hook_functions && !virtual_load)
++	{
++		auto shle = ensure(g_fxo->init<statichle_handler>(0));
++
++		for (u32 i = _main.segs[0].addr; i < (_main.segs[0].addr + _main.segs[0].size); i += 4)
++		{
++			vm::cptr<u8> _ptr = vm::cast(i);
++			shle->check_against_patterns(_ptr, (_main.segs[0].addr + _main.segs[0].size) - i, i);
++		}
++	}
++
++	// Read control flags (0 if doesn't exist)
++	g_ps3_process_info.ctrl_flags1 = 0;
++
++	if (bool not_found = g_ps3_process_info.self_info.valid)
++	{
++		for (const auto& ctrl : g_ps3_process_info.self_info.supplemental_hdr)
++		{
++			if (ctrl.type == 1)
++			{
++				if (!std::exchange(not_found, false))
++				{
++					ppu_loader.error("More than one control flags header found! (flags1=0x%x)",
++						ctrl.PS3_plaintext_capability_header.ctrl_flag1);
++					break;
++				}
++
++				g_ps3_process_info.ctrl_flags1 |= ctrl.PS3_plaintext_capability_header.ctrl_flag1;
++			}
++		}
++
++		ppu_loader.notice("SELF header information found: ctrl_flags1=0x%x, authid=0x%llx",
++			g_ps3_process_info.ctrl_flags1, g_ps3_process_info.self_info.prog_id_hdr.program_authority_id);
++	}
++
++	// Load other programs
++	for (auto& prog : elf.progs)
++	{
++		switch (const u32 p_type = prog.p_type)
++		{
++		case 0x00000001: break; // LOAD (already loaded)
++
++		case 0x00000007: // TLS
++		{
++			ppu_loader.notice("TLS info segment found: tls-image=*0x%x, image-size=0x%x, tls-size=0x%x", prog.p_vaddr, prog.p_filesz, prog.p_memsz);
++
++			if ((prog.p_vaddr | prog.p_filesz | prog.p_memsz) > u32{umax})
++			{
++				ppu_loader.error("ppu_load_exec(): TLS segment is invalid!");
++				return false;
++			}
++
++			tls_vaddr = vm::cast(prog.p_vaddr);
++			tls_fsize = ::narrow<u32>(prog.p_filesz);
++			tls_vsize = ::narrow<u32>(prog.p_memsz);
++			break;
++		}
++
++		case 0x60000001: // LOOS+1
++		{
++			// Obtained
++			break;
++		}
++
++		case 0x60000002: // LOOS+2
++		{
++			if (prog.p_filesz)
++			{
++				if (!ppu_load_exec_prx_parameters(_main, link, virtual_load, prog)) return false;
+ 			}
+ 			break;
+ 		}
