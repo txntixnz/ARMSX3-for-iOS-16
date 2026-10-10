@@ -1050,3 +1050,31 @@ iOS mappings executed on host; device integration pending. Patch0020 dry
 run after0019 PASS; catalog/exports/selected whitespace PASS.
 Next: actual static module export setup, system process initialization and
 full executable loader. Firmware/gameboot/RSX still untested.
+
+## 2026-10-10 — P25 device PASS; build37 / P26 guarded PRX export observation
+User provided ARMSX3-startup(20261010-160337).log. Last device PID96695
+reports AUTO PASS all 24 stages through P25: actual ELF import parser/linker
+handles known HLE RETURN and unresolved INVALID import, executes 17 real guest
+instructions/18 dispatch steps, checks full guest/HLE table, CPU counters,
+cleanup; zero latest-stage failures. The log is cumulative (~107k lines), so
+only the latest PID/run establishes the result. No complete PS3 executable,
+firmware, LV2 process, RSX or game boot has been tested.
+
+Build37 adds stage P26 (25 ordered stages): repeats the unchanged working P25
+end-to-end core diagnostic, then builds a44-byte PRX-export module descriptor
+inside the previously zero-filled 64-byte fixture BSS. Reuses existing
+NUL-terminated iOSProbe name and known FNID, adds a one-entry exported
+function OPD address table. The iOS-only patch0021 wrapper validates exact
+segment/record/address bounds and calls real static ppu_load_exports in
+for_observing_callbacks mode, checking one guest function descriptor is found
+and no global module linkage is registered. Also rejects an invalid export
+record start. This intentionally does NOT yet execute a guest-to-guest call,
+register exports globally, initialize a PS3 process or boot a real EBOOT.
+
+Changes: append 0021-ios-bounded-export-discovery.patch; CoreBridge.cpp adds
+armsx3_core_test_elf_export_discovery; App.mm adds P26; Info.plist bundle37.
+Existing P2-P25 paths remain unchanged. Action workflow applies all numbered
+patches lexicographically. Test on-device after the new installable IPA build,
+share startup log from the latest PID. Next: production export registration,
+import backpatch and guest-to-guest function call, followed by real executable
+loader and process setup. Build37/device behavior NOT yet verified.
