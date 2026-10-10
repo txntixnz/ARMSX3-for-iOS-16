@@ -780,3 +780,52 @@ six eager handlers and outside guards, re-registration and empty-range
 no-op PASS. Does not emulate actual lazy handler execution or iOS VM
 protection; device integration remains pending. Catalog/export/whitespace
 checks PASS. Next: P19 device result, fuller loader/admission preparation.
+
+
+## Build 30: real executable analysis and static module preparation
+
+Device startup(20261010-012744).log pid93842 confirms P19 lazy fallback
+and eager function registration each execute six loaded instructions,
+cache/memory/CPU cleanup PASS. Final AUTO PASS confirms all18 stages.
+
+P20 uses the trusted ELF fixture plus BLR and readable padding: seven
+instructions,32-byte code PT_LOAD,64-byte OPD/data PT_LOAD. Maps bounded
+segments as before, builds local ppu_module<lv2_obj> using actual segment
+metadata/pointers and address-to-segment map. Adds explicit8-byte OPD
+section. Calls actual module.analyse(0, OPD, code+28, empty patches/exports,
+2s deadline callback). Requires entry function discovery and bounds every
+returned function/basic block within28-byte executable region before
+preparation. No manufactured function list or bridge decoder loop.
+
+Patch0017 adds iOS-only armsx3_ios_ppu_prepare_module wrapper inside
+PPUThread.cpp. Requires stopped Emu, static decoder, initialized fixed
+object table/decoder and nonempty module. Initializes only core-owned
+ppu_toc_manager if absent, then calls normal ppu_initialize(module,false,0).
+Static path's false return means no native compilation needed, not failure.
+Core owned decoder/TOC manager retained until normal table reset; debug
+false means no diagnostic TOC entries persist. No global object sweep,
+LV2 admission, system threads, firmware or native JIT introduced.
+
+Production registration + module initialization must prepare all seven
+handlers. Actual exec_task on private real PPU worker executes arithmetic,
+store/reload/OR and BLR with LR=end; expects seven steps,35/0x123 results,
+unchanged TOC, full64KiB normal/privileged alias guards, outside cache
+unchanged, CPU counter balance, explicit32KiB segment-cache decommit and
+VM teardown. Full ppu_load_exec remains uncalled; mapping and CPU admission
+remain diagnostic. No firmware, external executable import or game boot.
+
+Automatic stage19, CFBundleVersion30. Patch applies after0016. Exact bridge
+compiles GNU C++23 against pinned headers (GNU mode needed for upstream
+u128 bit operations in analyser header; Apple CI uses Clang).
+Host harness compiles/runs actual PPUAnalyser.cpp analysis and helper
+functions with actual instruction-type decoder and module pointer logic;
+only logging/formatting/main-thread-ID boundaries are stubbed. Real analysis
+finds entry0x10100,size28,one block,TOC0x10400, covers seven instructions;
+empty-module rejection and cancellation callback PASS. No YAML validator
+included in harness, no analyser algorithm changes. Separate exact iOS
+wrapper harness with mocked objects/ppu_initialize verifies null/empty/
+running/decoder/table guards, no rejected side effects, one TOC init and
+static false-return semantics. Does not exercise full production module
+initialization or real PPU handlers on host; Apple CI/device pending.
+Catalog,exports,whitespace checks PASS. Next: P20 device report, fuller
+loader/process initialization and admission.

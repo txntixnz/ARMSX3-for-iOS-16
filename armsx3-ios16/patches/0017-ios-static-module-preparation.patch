@@ -1,0 +1,24 @@
+--- a/rpcs3/Emu/Cell/PPUThread.cpp
++++ b/rpcs3/Emu/Cell/PPUThread.cpp
+@@ -5373,6 +5373,21 @@
+ 
+ 	exec_worker();
+ }
++
++#if defined(__APPLE__) && TARGET_OS_IPHONE
++// Diagnostic bridge to the normal static module initialization path. No LV2
++// admission, global object sweep, firmware loading or thread launch here.
++extern "C" int armsx3_ios_ppu_prepare_module(const ppu_module<lv2_obj>* info)
++{
++	if (!info || info->segs.empty() || info->funcs.empty() || !Emu.IsStopped() ||
++		g_cfg.core.ppu_decoder != ppu_decoder_type::_static || !g_fxo->is_init() ||
++		!g_fxo->is_init<ppu_interpreter_rt>()) return -1;
++	if (!g_fxo->is_init<ppu_toc_manager>() && !g_fxo->init<ppu_toc_manager>()) return -2;
++	// The normal static path returns false to mean no native compilation needed.
++	ppu_initialize(*info, false, 0);
++	return 0;
++}
++#endif
+ 
+ extern void ppu_initialize()
+ {
