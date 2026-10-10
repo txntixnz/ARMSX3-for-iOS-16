@@ -1795,3 +1795,81 @@ device P36 remain unverified. Do not monitor Actions after push; user reports
 completion/failure. On success install IPA and run all35 diagnostics.
 Actual scheduler admission/priority changes, full TLS mutex initialization,
 firmware, RSX and game boot remain untested.
+
+## 2026-10-10 — build50 device PASS; build51 adds P37 priority mutation
+
+Latest uploaded device log ARMSX3-startup-20261010-222702-028-374.txt identifies
+build50/PID374, 5386 lines. All35 diagnostics P2-P36 PASS, ending AUTO PASS
+P36 and AUTO PASS all diagnostic stages. This confirms real worker self
+priority query through production LV2 locking/wait/check_state, invalid
+-513/3072 signed CELL_EINVAL and same-priority success on the A15 phone.
+The exported .txt was readable. Game boot remains untested.
+
+Baseline main before this change is6278a5c6dabe70b5f1ce2b282ccbe6dade65554b,
+tree1d14355ff41b5492e0e43eccd80f82b24b9db6f3. Build51 adds diagnostic P37,
+armsx3_core_test_priority_change, making36 tests P2-P37. It uses exactly the
+P36 ELF fixture: five program headers,27 words/108 code bytes,352 DATA bytes,
+golden SHA1 86d1d7ea9c980461ea025add7dfb43bb77f3de41. Same production ELF
+process/TLS/argument/linkage path, retained real worker and bounded guest.
+
+P37 retains invalid/null/unused/no-change service checks. Then decoded loaded
+SC47 changes the current real worker's priority1100 to1200 via unchanged
+production sys_ppu_thread_set_priority -> lv2_obj::set_priority -> awake ->
+awake_unlocked. The worker is absent from the scheduler's running queue:
+the actual production unqueue-miss branch updates its atomic priority/order
+and returns before admission. For1100->1200 it increments the global order
+tag and writes the negative complemented tag. Loaded guest callee SC48
+queries1200 into DATA+40, then caller SC46 reads joinability and TLS returns42.
+After the bounded call, SC47 restores1100, incrementing/writing the positive
+order tag, and SC48 queries1100 again. Both joinable and detached workers
+repeat. Each mutation checks actual priority/order/global tag, service return,
+history/CIA/function state; no DATA mutation occurs on the first set. Post-call
+SC operations preserve the guest's r3=42,r4,r11,CIA. Final expected DATA/stack/
+TLS/code/aliases stay exactly the P36 expected image.
+
+Patch0032-ios-worker-priority-change.patch keeps production services, SC,
+bindings, dispatcher, awake/awake_unlocked/schedule_all/notify_all untouched.
+The shared statistics runner selects P37 counts46=2,47=5,48=2,6=1,others0;
+P35/P36 policies stay unchanged. Nine BIND history events (unused6 bypasses
+history), ten SC invocations, still27 guest instructions+HLE RETURN28.
+New iOS-only export armsx3_ios_ppu_probe_priority_change_and_call delegates
+to a lv2_obj member so it can inspect private scheduler state. The method
+declaration is Apple-guarded in sys_sync.h; definition/export are iOS-guarded.
+It requires stopped emulator/current worker/static decoder/stack30000:8000/
+entry10000/priority1100 and rejects nesting or any active/pending scheduler,
+timeout/sleep/awake queues, notifications/barrier/yield frequency, reservation
+notification or worker queue link. It saves the entire atomic priority union
+and global order tag under g_mutex, rejects signed50-bit order overflow, runs
+the bounded callback, validates exactly two order transitions and restored
+priority1100 with empty scheduler state, and RAII restores the original union
+and tag on success, negative callback, count mismatch or exception. It never
+calls scheduler cleanup or adds/removes global workers. Existing0030 iOS
+lv2.cpp exception/PCH override remains needed.
+
+Host validation passes with g++ C++20 -Wall -Wextra -Werror, ASAN/UBSAN and
+-fno-exceptions then-fexceptions. Patch0032 applies after0030/0031 to pinned
+lv2.cpp/sys_sync.h. Harness compiles unchanged full set/get handlers, full
+BIND_FUNC/GPR casts/SC/dispatcher, actual inline set_priority and full awake,
+plus exact production default priority/unqueue branch. Scheduler admission/
+yield paths are excluded; atomic/mutex/VM/schedule_all are host shims. It
+checks change1200/query/restore1100, both signed order directions, ten counts/
+nine events, repeated joinable/detached scopes, unchanged normal stats,
+P35/P36 policies, all isolation/overflow/nesting guards, and rollback on
+negative/exception/count/final-state failures. The actual new CoreBridge
+performSyscalls callback is also compiled/executed for both join states;
+the bounded guest function is a shim there. Independent PPC decoding of the
+actual compiled ELF opcodes confirms the temporary1200 query, final1100
+memory restoration, TLS42,27+1 dispatches and exact full-memory/register/
+TOC/SP/LR preservation. Production process/TLS loader sanitizer harnesses
+check actual constructor/hash/metadata/malformed shapes/rollback. Actual
+P37 ELF TLS bytes pass production bootstrap/allocator/free and25 injected
+access exceptions. No local Xcode/iOS SDK: real P37 scheduler/VM transition
+still needs Actions and phone verification.
+
+P2-P36 CoreBridge prefix remains byte-identical515352 bytes, Git blob
+9f7a1d94c52905297144eb5ea4cc373ed18acbe7. App36 ordered unique symbols,
+Info build51, existing log export and resultsCopyButton ARC repair retained.
+Do not monitor Actions after pushing; user reports completion/failure.
+On success install ARMSX3_iOS16_INSTALL_THIS_IPA, run all36 diagnostics and
+share the new .txt. Scheduler admission/context switching, full TLS HLE,
+firmware, RSX and game boot remain untested.

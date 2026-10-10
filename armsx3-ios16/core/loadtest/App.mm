@@ -42,6 +42,7 @@ static constexpr DiagnosticStage stages[] = {
     {34, "Executable process parameters and worker", "armsx3_core_test_process_parameters"},
     {35, "Guest syscalls and worker services", "armsx3_core_test_guest_syscalls"},
     {36, "Guest priority query and validation", "armsx3_core_test_priority_syscalls"},
+    {37, "Guest priority change and restoration", "armsx3_core_test_priority_change"},
 };
 static constexpr NSUInteger stageCount = sizeof(stages) / sizeof(stages[0]);
 static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";

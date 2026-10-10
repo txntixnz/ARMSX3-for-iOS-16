@@ -1,0 +1,104 @@
+--- a/rpcs3/Emu/Cell/lv2/lv2.cpp
++++ b/rpcs3/Emu/Cell/lv2/lv2.cpp
+@@ -1690,7 +1690,7 @@
+ struct ios_ppu_syscall_probe { std::array<u32, 1024> counts{}; };
+ static thread_local ios_ppu_syscall_probe* s_ios_ppu_syscall_probe = nullptr;
+ static int ppu_probe_syscalls_and_call(ppu_thread* context,
+-    int (*execute)(ppu_thread*, void*), void* user, bool priority)
++    int (*execute)(ppu_thread*, void*), void* user, u32 policy)
+ {
+ 	if (!context || !execute || !Emu.IsStopped() || cpu_thread::get_current() != context ||
+ 		g_cfg.core.ppu_decoder != ppu_decoder_type::_static || context->stack_addr != 0x30000u ||
+@@ -1702,18 +1702,18 @@
+ 	const int result = execute(context, user);
+ 	if (result < 0) return result;
+ 	for (u32 code = 0; code < probe.counts.size(); ++code)
+-		if (probe.counts[code] != (code == 46 ? 2u : (code == 6 || code == (priority ? 48u : 49u) ? 1u : (priority && code == 47 ? 3u : 0u)))) return -3;
++		if (probe.counts[code] != (code == 46 ? 2u : (code == 6 ? 1u : (code == (policy ? 48u : 49u) ? (policy == 2 ? 2u : 1u) : (policy && code == 47 ? (policy == 2 ? 5u : 3u) : 0u))))) return -3;
+ 	return result;
+ }
+ extern "C" int armsx3_ios_ppu_probe_syscalls_and_call(ppu_thread* context,
+     int (*execute)(ppu_thread*, void*), void* user)
+ {
+-    return ppu_probe_syscalls_and_call(context, execute, user, false);
++    return ppu_probe_syscalls_and_call(context, execute, user, 0);
+ }
+ extern "C" int armsx3_ios_ppu_probe_priority_syscalls_and_call(ppu_thread* context,
+     int (*execute)(ppu_thread*, void*), void* user)
+ {
+-    return ppu_probe_syscalls_and_call(context, execute, user, true);
++    return ppu_probe_syscalls_and_call(context, execute, user, 1);
+ }
+ #endif
+ 
+@@ -2305,6 +2305,56 @@
+ 
+ 	return changed_queue;
+ }
++
++#if defined(__APPLE__) && TARGET_OS_IPHONE
++// This probe operates only on the current retained worker while the normal
++// scheduler is empty and stopped. Service handlers and awake() are unchanged.
++int lv2_obj::ios_probe_priority_change_and_call(ppu_thread* context,
++    int (*execute)(ppu_thread*, void*), void* user)
++{
++    if (!context || !execute || !Emu.IsStopped() || cpu_thread::get_current() != context ||
++        g_cfg.core.ppu_decoder != ppu_decoder_type::_static || context->stack_addr != 0x30000u ||
++        context->stack_size != 0x8000u || context->entry_func.addr != 0x10000u) return -1;
++    if (s_ios_ppu_syscall_probe) return -2;
++    const auto isolated = [context]() {
++        return !g_ppu && !g_pending && !g_scheduler_ready && g_waiting.empty() && g_to_sleep.empty() &&
++            g_to_awake.empty() && !g_postpone_notify_barrier && !s_yield_frequency &&
++            std::all_of(std::begin(g_to_notify), std::end(g_to_notify), [](const void* p) { return !p; }) &&
++            !context->next_ppu && !context->res_notify;
++    };
++    ppu_thread::ppu_prio_t previous{};
++    u64 tag = 0;
++    {
++        std::lock_guard lock(g_mutex);
++        if (!isolated() || context->prio.load().prio != 1100) return -4;
++        previous = context->prio.load();
++        tag = g_priority_order_tag.load();
++        // The production order field is a signed 50-bit value.
++        if (tag >= (u64{1} << 49) - 2) return -4;
++    }
++    struct Restore {
++        ppu_thread* context; ppu_thread::ppu_prio_t previous; u64 tag;
++        ~Restore() {
++            std::lock_guard lock(g_mutex);
++            context->prio = previous;
++            g_priority_order_tag = tag;
++        }
++    } restore{context, previous, tag};
++    const int result = ppu_probe_syscalls_and_call(context, execute, user, 2);
++    if (result < 0) return result;
++    {
++        std::lock_guard lock(g_mutex);
++        if (!isolated() || context->prio.load().prio != 1100 ||
++            context->prio.load().order != s64(tag + 2) || g_priority_order_tag.load() != tag + 2) return -5;
++    }
++    return result;
++}
++extern "C" int armsx3_ios_ppu_probe_priority_change_and_call(ppu_thread* context,
++    int (*execute)(ppu_thread*, void*), void* user)
++{
++    return lv2_obj::ios_probe_priority_change_and_call(context, execute, user);
++}
++#endif
+ 
+ void lv2_obj::cleanup()
+ {
+--- a/rpcs3/Emu/Cell/lv2/sys_sync.h
++++ b/rpcs3/Emu/Cell/lv2/sys_sync.h
+@@ -300,6 +300,11 @@
+ 
+ 	static void set_yield_frequency(u64 freq, u64 max_allowed_tsx);
+ 
++#if defined(__APPLE__)
++    // Defined only by the iOS diagnostic build; never enters the running queue.
++    static int ios_probe_priority_change_and_call(ppu_thread*, int (*)(ppu_thread*, void*), void*);
++#endif
++
+ 	static void cleanup();
+ 
+ 	template <typename T>
