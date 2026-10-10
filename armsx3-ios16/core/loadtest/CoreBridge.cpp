@@ -3793,4 +3793,335 @@ extern "C" __attribute__((visibility("default"))) int armsx3_core_test_elf_impor
     catch (const std::exception& error) { ARMSX3StartupLog(error.what()); if (initialized) vm::close(); return -1; }
 }
 
+extern "C" int armsx3_ios_ppu_observe_probe_exports(const ppu_module<lv2_obj>*, u32);
+extern "C" int armsx3_ios_ppu_link_probe_imports(const ppu_module<lv2_obj>*, u32);
+extern "C" __attribute__((visibility("default"))) int armsx3_core_test_elf_export_discovery()
+{
+    ARMSX3StartupLog("P26 BEFORE core ELF reader, segment mapping and PPU execution");
+    bool initialized = false;
+    try
+    {
+        if (!Emu.IsStopped()) throw std::runtime_error("P26 requires stopped emulator");
+        struct Configuration
+        {
+            bool debugPPU = g_cfg.core.ppu_debug.get();
+            bool ppu = g_cfg.core.ppu_prof.get(), spu = g_cfg.core.spu_prof.get(), debug = g_cfg.core.spu_debug.get();
+            thread_scheduler_mode scheduler = g_cfg.core.thread_scheduler.get();
+            ppu_decoder_type decoder = g_cfg.core.ppu_decoder.get();
+            Configuration() { g_cfg.core.ppu_debug.set(false); g_cfg.core.ppu_prof.set(false); g_cfg.core.spu_prof.set(false);
+                g_cfg.core.spu_debug.set(false); g_cfg.core.thread_scheduler.set(thread_scheduler_mode::os);
+                g_cfg.core.ppu_decoder.set(ppu_decoder_type::_static); }
+            ~Configuration() { g_cfg.core.ppu_debug.set(debugPPU); g_cfg.core.ppu_prof.set(ppu); g_cfg.core.spu_prof.set(spu);
+                g_cfg.core.spu_debug.set(debug); g_cfg.core.thread_scheduler.set(scheduler);
+                g_cfg.core.ppu_decoder.set(decoder); }
+        } configuration;
+        vm::init(); initialized = true;
+        if (!vm::reserve_map(vm::main, 0x10000, 0x30000))
+            throw std::runtime_error("P26 main memory block unavailable");
+        const u32 address = vm::alloc(0x10000, vm::main, 0x10000);
+        if (!address) throw std::runtime_error("P26 guest allocation failed");
+        const u32 codeAddress = address + 0x100, dataAddress = address + 0x400;
+        const auto dform = [](u32 op, u32 reg, u32 base, u32 imm) {
+            return (op << 26) | (reg << 21) | (base << 16) | (imm & 0xffff);
+        };
+        using namespace ppu_instructions;
+        using namespace ppu_instructions::implicts;
+        const std::array<u32, 18> opcodes{MFLR(0), STDU(1, 1, -128), STD(0, 1, 16), dform(24, 2, 9, 0),
+            dform(14, 3, 0, 42), dform(14, 4, 0, 0xfff9),
+            (31u << 26) | (5u << 21) | (3u << 16) | (4u << 11) | (266u << 1),
+            dform(36, 5, 6, 0), dform(32, 7, 6, 0), dform(24, 7, 8, 0x100),
+            LD(0, 1, 16), ADDI(1, 1, 128), MTLR(0), dform(32, 11, 10, 0), dform(32, 12, 11, 0), MTLR(12), BLR(), 0};
+        ppu_exec_object::ehdr_t header{};
+        header.e_magic = "\177ELF"_u32; header.e_class = 2; header.e_data = 2;
+        header.e_curver = 1; header.e_os_abi = elf_os::lv2; header.e_type = elf_type::exec;
+        header.e_machine = elf_machine::ppc64; header.e_version = 1;
+        header.e_entry = dataAddress; header.e_phoff = sizeof(header);
+        header.e_ehsize = sizeof(header); header.e_phentsize = sizeof(ppu_exec_object::phdr_t); header.e_phnum = 2;
+        std::array<ppu_exec_object::phdr_t, 2> segments{};
+        segments[0].p_type = 1; segments[0].p_flags = 5; segments[0].p_offset = 0x100;
+        segments[0].p_vaddr = codeAddress; segments[0].p_filesz = sizeof(opcodes);
+        segments[0].p_memsz = sizeof(opcodes); segments[0].p_align = 16;
+        segments[1].p_type = 1; segments[1].p_flags = 6; segments[1].p_offset = 0x200;
+        segments[1].p_vaddr = dataAddress; segments[1].p_filesz = 192;
+        segments[1].p_memsz = 256; segments[1].p_align = 16;
+        std::vector<u8> fixture(0x2c0, 0);
+        std::memcpy(fixture.data(), &header, sizeof(header));
+        std::memcpy(fixture.data() + sizeof(header), segments.data(), sizeof(segments));
+        for (u32 i = 0; i < opcodes.size(); ++i) {
+            const be_t<u32> word = opcodes[i]; std::memcpy(fixture.data() + 0x100 + i * 4, &word, 4);
+        }
+        const std::array<be_t<u32>, 2> descriptor{codeAddress, dataAddress};
+        std::memcpy(fixture.data() + 0x200, descriptor.data(), sizeof(descriptor));
+        // ppu_prx_module_info: 44 bytes, two function imports, no variables or refs.
+        fixture[0x240] = 44; fixture[0x247] = 2;
+        const auto writeWord = [&](u32 offset, u32 value) { const be_t<u32> word = value;
+            std::memcpy(fixture.data() + offset, &word, 4); };
+        writeWord(0x250, dataAddress + 128); writeWord(0x254, dataAddress + 160); writeWord(0x258, dataAddress + 176);
+        std::memcpy(fixture.data() + 0x280, "iOSProbe", 9);
+        writeWord(0x2a0, 0x49524e31); writeWord(0x2a4, 0x49524e32);
+        writeWord(0x2b0, codeAddress); writeWord(0x2b4, codeAddress);
+
+        // Reject malformed header/short payload with the actual core reader.
+        for (unsigned test = 0; test < 5; ++test) {
+            auto malformed = fixture;
+            if (test == 0) malformed[0] = 0;
+            if (test == 1) malformed[4] = 1;
+            if (test == 2) malformed[5] = 1;
+            if (test == 3) malformed[19] = 0x17;
+            if (test == 4) malformed.resize(0x204);
+            const auto stream = fs::make_stream(std::move(malformed));
+            ppu_exec_object rejected(stream);
+            const std::array<elf_error, 5> errors{elf_error::header_magic, elf_error::header_class,
+                elf_error::header_endianness, elf_error::header_machine, elf_error::stream_data};
+            if (rejected.get_error() != errors[test]) throw std::runtime_error("P26 malformed ELF was not rejected correctly");
+        }
+        ARMSX3StartupLog("P26 PASS: core ELF reader rejects bad magic/class/endian/machine and truncated data");
+        const auto validSegment = [&](const ppu_exec_object::prog_t& segment) {
+            const u64 base = segment.p_vaddr, length = segment.p_memsz, fileSize = segment.p_filesz;
+            return segment.p_type == 1u && base >= address && base < u64(address) + 0x10000 &&
+                length <= 0x10000 - (base - address) && fileSize <= length && fileSize == segment.bin.size();
+        };
+        // ELF parsing does not imply safe mapping; independently bound segment sizes.
+        auto oversized = fixture; auto huge = segments[1]; huge.p_memsz = ~u64{0};
+        std::memcpy(oversized.data() + sizeof(header) + sizeof(huge), &huge, sizeof(huge));
+        const auto oversizedStream = fs::make_stream(std::move(oversized));
+        ppu_exec_object badMapping(oversizedStream);
+        if (badMapping.get_error() != elf_error::ok || validSegment(badMapping.progs.at(1)))
+            throw std::runtime_error("P26 segment mapping bounds guard failed");
+        const std::string path = fs::get_cache_dir() + "ARMSX3-P26-diagnostic.elf";
+        struct RemoveFixture { std::string path; ~RemoveFixture() { fs::remove_file(path); } } remove{path};
+        {
+            fs::file file(path, fs::rewrite);
+            if (!file || file.write(fixture.data(), fixture.size()) != fixture.size())
+                throw std::runtime_error("P26 ELF file write failed");
+        }
+        const fs::file file(path, fs::read);
+        ppu_exec_object elf(file);
+        if (elf.get_error() != elf_error::ok || elf.progs.size() != 2 || elf.header.e_entry != dataAddress)
+            throw std::runtime_error("P26 on-disk ELF header or segment parse failed");
+        for (const auto& segment : elf.progs) if (!validSegment(segment))
+            throw std::runtime_error("P26 ELF segment outside diagnostic allocation");
+        auto* guest = static_cast<u8*>(vm::base(address)); std::memset(guest, 0xa5, 0x10000);
+        for (const auto& segment : elf.progs) {
+            auto* target = vm::base(u32(segment.p_vaddr));
+            std::memset(target, 0, u64(segment.p_memsz));
+            std::memcpy(target, segment.bin.data(), segment.bin.size());
+        }
+        const auto* opd = static_cast<const be_t<u32>*>(vm::base(u32(elf.header.e_entry)));
+        if (opd[0] != codeAddress || opd[1] != dataAddress)
+            throw std::runtime_error("P26 loaded entry descriptor mismatch");
+        for (u32 i = 192; i < 256; ++i) if (guest[0x400 + i] != 0)
+            throw std::runtime_error("P26 data segment BSS was not zero-filled");
+        // Use the core-owned decoder and the loader's real registration routines.
+        // Retain the fixed object until the core resets its object table on next boot.
+        if (!g_fxo->is_init()) throw std::runtime_error("P26 fixed object table unavailable");
+        if (!g_fxo->is_init<ppu_interpreter_rt>() && !g_fxo->init<ppu_interpreter_rt>())
+            throw std::runtime_error("P26 core interpreter initialization failed");
+        auto& interpreter = g_fxo->get<ppu_interpreter_rt>();
+        auto* cache = reinterpret_cast<ppu_intrp_func*>(vm::g_exec_addr + u64(codeAddress) * 2);
+        const auto* loadedCode = static_cast<const be_t<u32>*>(vm::base(codeAddress));
+        struct SegmentCacheCleanup {
+            u8* pointer; bool active = false;
+            void release() { if (active) { utils::memory_decommit(pointer, 0x8000); active = false; } }
+            ~SegmentCacheCleanup() { release(); }
+        } segmentCleanup{vm::g_exec_addr + vm::g_exec_addr_seg_offset + (address >> 1)};
+        ppu_module<lv2_obj> module;
+        module.name = "iOS analyzed ELF probe"; module.path = path;
+        for (const auto& segment : elf.progs) {
+            module.addr_to_seg_index.emplace(u32(segment.p_vaddr), u32(module.segs.size()));
+            module.segs.push_back({u32(segment.p_vaddr), u32(segment.p_memsz), u32(segment.p_type),
+                u32(segment.p_flags), u32(segment.p_filesz), vm::base(u32(segment.p_vaddr))});
+        }
+        // A descriptor section gives the analyser an explicit OPD boundary.
+        module.secs.push_back({dataAddress, 8, 1, 2, 8, vm::base(dataAddress)});
+        const auto analysisDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        ARMSX3StartupLog("P26 BEFORE actual executable analysis from loaded ELF segments and OPD");
+        if (!module.analyse(0, dataAddress, codeAddress + 68, {}, {}, [&] {
+                return std::chrono::steady_clock::now() >= analysisDeadline; }))
+            throw std::runtime_error("P26 core executable analysis failed or timed out");
+        if (module.funcs.empty()) throw std::runtime_error("P26 analysis found no functions");
+        bool entryFound = false;
+        for (const auto& function : module.funcs) {
+            if (function.addr == codeAddress) entryFound = true;
+            if (function.addr < codeAddress || function.addr >= codeAddress + 68 ||
+                function.addr % 4 || function.size > codeAddress + 68 - function.addr)
+                throw std::runtime_error("P26 analysed function outside loaded executable");
+            for (const auto& block : function.blocks)
+                if (block.first < codeAddress || block.first >= codeAddress + 68 || block.first % 4 ||
+                    block.second % 4 || block.second > codeAddress + 68 - block.first)
+                    throw std::runtime_error("P26 analysed block outside loaded executable");
+        }
+        if (!entryFound) throw std::runtime_error("P26 analyser missed entry function");
+        segmentCleanup.active = true;
+        ppu_register_range(codeAddress, 68);
+        if (!vm::check_addr(address, vm::page_executable, 0x10000))
+            throw std::runtime_error("P26 executable page flags missing");
+        const auto fallback = cache[0].fn;
+        const auto* allCache = reinterpret_cast<const ppu_intrp_func*>(vm::g_exec_addr + u64(address) * 2);
+        ARMSX3StartupLog("P26 BEFORE production static module initialization of analysed functions");
+        if (armsx3_ios_ppu_prepare_module(&module) != 0)
+            throw std::runtime_error("P26 static module preparation failed");
+        for (u32 i = 0; i < 17; ++i)
+            if (!cache[i].fn || cache[i].fn != interpreter.decode(loadedCode[i]) || cache[i].fn == fallback)
+                throw std::runtime_error("P26 module initialization did not decode analysed code");
+        char analysisMessage[160];
+        std::snprintf(analysisMessage, sizeof(analysisMessage), "P26 PASS: actual analyser found %zu functions; static module initialization decoded seventeen instructions", module.funcs.size());
+        ARMSX3StartupLog(analysisMessage);
+        if (!g_fxo->is_init<ppu_function_manager>() && !g_fxo->init<ppu_function_manager>())
+            throw std::runtime_error("P26 function manager initialization failed");
+        auto& manager = g_fxo->get<ppu_function_manager>();
+        if (manager.addr) throw std::runtime_error("P26 requires unused function manager address");
+
+        struct TableCleanup {
+            ppu_function_manager& manager;
+            void release() {
+                if (!manager.addr) return;
+                const u32 address = manager.addr; manager.addr = 0;
+                utils::memory_decommit(vm::g_exec_addr + vm::g_exec_addr_seg_offset + (address >> 1), 0x8000);
+            }
+            ~TableCleanup() { release(); }
+        } tableCleanup{manager};
+        ARMSX3StartupLog("P26 BEFORE production HLE descriptor table allocation, registration and read-only protection");
+        if (armsx3_ios_ppu_prepare_hle_table() != 0)
+            throw std::runtime_error("P26 production HLE table preparation failed");
+        const auto& hleFunctions = ppu_function_manager::get();
+        const u32 tableAddress = manager.addr, returnAddress = manager.func_addr(1, true);
+        if (tableAddress < address + 0x10000 || tableAddress >= address + 0x30000 || tableAddress % 0x10000 ||
+            hleFunctions.size() < 2 || hleFunctions.size() > 8192 || returnAddress != tableAddress + 12 ||
+            !vm::check_addr(tableAddress, vm::page_readable | vm::page_executable, 0x10000))
+            throw std::runtime_error("P26 HLE table allocation or flags mismatch");
+        for (u32 offset = 0; offset < 0x10000; offset += 0x1000)
+            if (vm::check_addr(tableAddress + offset, vm::page_writable))
+                throw std::runtime_error("P26 HLE table is writable");
+        const auto* descriptors = static_cast<const be_t<u32>*>(vm::base(tableAddress));
+        const auto* hleCache = reinterpret_cast<const ppu_intrp_func*>(vm::g_exec_addr + u64(tableAddress) * 2);
+        const auto hleFallback = hleCache[0].fn;
+        for (u32 i = 0; i < hleFunctions.size(); ++i) {
+            if (!hleFunctions[i] || descriptors[i * 2] != tableAddress + i * 8 + 4 || descriptors[i * 2 + 1] != 0 ||
+                hleCache[i * 2].fn != hleFallback || hleCache[i * 2 + 1].fn != hleFunctions[i] ||
+                manager.func_addr(i) != tableAddress + i * 8 || manager.func_addr(i, true) != tableAddress + i * 8 + 4)
+                throw std::runtime_error("P26 HLE descriptor or dispatch handler mismatch");
+        }
+        char tableMessage[160];
+        std::snprintf(tableMessage, sizeof(tableMessage), "P26 PASS: production HLE table prepared %zu descriptors and handlers with read-only guest pages", hleFunctions.size());
+        ARMSX3StartupLog(tableMessage);
+
+        ARMSX3StartupLog("P26 BEFORE actual loader import linking for known and unresolved function IDs");
+        if (armsx3_ios_ppu_link_probe_imports(&module, dataAddress + 64) != 0 ||
+            vm::read32(dataAddress + 176) != manager.func_addr(1) || vm::read32(dataAddress + 180) != tableAddress ||
+            vm::read32(vm::read32(dataAddress + 176)) != returnAddress)
+            throw std::runtime_error("P26 production import linkage failed");
+        ARMSX3StartupLog("P26 PASS: known import resolves to HLE RETURN descriptor; unresolved import resolves to INVALID descriptor");
+        const u32 initialStack = address + 0x8000, frameAddress = initialStack - 128;
+        struct Program { u32 begin, end, returnAddress; u64 toc; int result = -99; bool tls = false;
+            std::atomic<bool> completed{false}; } program{u32(opd[0]), codeAddress + 68, returnAddress, u64(opd[1])};
+        const auto created = cpu_thread::g_threads_created.load(), deleted = cpu_thread::g_threads_deleted.load();
+        const u64 live = armsx3_ios_live_cpu_threads();
+        {
+            std::unique_ptr<named_thread<ppu_thread>> worker;
+            {
+                struct ConstructionID { u32 previous = id_manager::g_id;
+                    ConstructionID() { id_manager::g_id = ppu_thread::id_base; }
+                    ~ConstructionID() { id_manager::g_id = previous; } } construction_id;
+                const ppu_thread_params params{static_cast<vm::addr_t>(address + 0x1000), 0x8000, 0, {}, 0, 0};
+                worker = std::make_unique<named_thread<ppu_thread>>(stx::launch_retainer{}, params, "iOS loaded ELF probe", 1000);
+            }
+            struct StopWorker { named_thread<ppu_thread>& worker;
+                ~StopWorker() { worker.state += cpu_flag::exit; worker.state.notify_one();
+                    worker.cmd_notify.store(1); worker.cmd_notify.notify_one(); } } stop{*worker};
+            const ppu_intrp_func_t execute = +[](ppu_thread& context, ppu_opcode_t, be_t<u32>*, ppu_intrp_func*) {
+                auto& program = *reinterpret_cast<Program*>(context.gpr[30]);
+                program.tls = get_current_cpu_thread() == &context && thread_ctrl::get_current() != nullptr;
+                program.result = armsx3_ios_ppu_call_bounded(&context, program.begin, program.end, program.toc, program.returnAddress, 64);
+                context.state += cpu_flag::exit; program.completed.store(true, std::memory_order_release);
+            };
+            worker->cmd_list({{ppu_cmd::ptr_call, 0}, std::bit_cast<u64>(execute)});
+            worker->cia = address + 0x900; worker->lr = address + 0x904;
+            worker->gpr[1] = initialStack; worker->gpr[2] = 0x13579; worker->gpr[6] = dataAddress + 32;
+            worker->gpr[10] = dataAddress + 176;
+            worker->gpr[30] = u64(reinterpret_cast<uintptr_t>(&program));
+            worker->state -= cpu_flag::stop + cpu_flag::exit + cpu_flag::suspend + cpu_flag::memory + cpu_flag::wait;
+            ARMSX3StartupLog("P26 BEFORE guest reads linked import descriptor and branches through production HLE return");
+            *worker = thread_state::created;
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+            while (!program.completed.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline)
+                std::this_thread::yield();
+            if (!program.completed.load(std::memory_order_acquire)) throw std::runtime_error("P26 loaded ELF execution deadline exceeded");
+            (*worker)();
+            if (!program.tls || program.result != 18 || worker->gpr[5] != 35 || worker->gpr[7] != 35 ||
+                worker->gpr[11] != manager.func_addr(1) || worker->gpr[12] != returnAddress || worker->gpr[8] != 0x123 || worker->gpr[9] != dataAddress || worker->gpr[2] != 0x13579 || worker->cia != address + 0x900 ||
+                worker->lr != address + 0x904 || worker->gpr[1] != initialStack || worker->state & cpu_flag::ret)
+                throw std::runtime_error("P26 loaded ELF execution result mismatch");
+        }
+        for (u32 i = 0; i < 0x10000; ++i) {
+            u8 expected = 0xa5;
+            if (i >= 0x100 && i < 0x100 + sizeof(opcodes)) expected = fixture[i];
+            if (i >= 0x400 && i < 0x500) expected = i < 0x4c0 ? fixture[0x200 + i - 0x400] : 0;
+            if (i >= 0x4b0 && i < 0x4b4) expected = u8(manager.func_addr(1) >> (24 - (i - 0x4b0) * 8));
+            if (i >= 0x4b4 && i < 0x4b8) expected = u8(tableAddress >> (24 - (i - 0x4b4) * 8));
+            if (i >= 0x420 && i < 0x424) expected = i == 0x423 ? 35 : 0;
+            const u32 frameOffset = frameAddress - address;
+            if (i >= frameOffset && i < frameOffset + 8) expected = u8(u64(initialStack) >> (56 - (i - frameOffset) * 8));
+            if (i >= frameOffset + 16 && i < frameOffset + 24) expected = u8(u64(returnAddress) >> (56 - (i - frameOffset - 16) * 8));
+            if (guest[i] != expected || static_cast<const u8*>(vm::get_super_ptr(address))[i] != expected)
+                throw std::runtime_error("P26 loaded segment, BSS, guest guard or alias mismatch");
+        }
+        if (armsx3_ios_live_cpu_threads() != live || cpu_thread::g_threads_created.load() != created + 1 ||
+            cpu_thread::g_threads_deleted.load() != deleted + 1)
+            throw std::runtime_error("P26 worker counters did not balance");
+        for (u32 i = 0; i < 17; ++i)
+            if (cache[i].fn != interpreter.decode(loadedCode[i]))
+                throw std::runtime_error("P26 executed cache did not contain core decoded handlers");
+        for (u32 i = 0; i < 0x10000 / 4; ++i)
+            if ((i < 0x100 / 4 || i >= 0x100 / 4 + 17) && allCache[i].fn != fallback)
+                throw std::runtime_error("P26 dispatch changed handler outside loaded code");
+
+        // Verify execution did not mutate the complete descriptor page or handlers.
+        const auto* tableBytes = static_cast<const u8*>(vm::base(tableAddress));
+        const auto* privilegedTable = static_cast<const u8*>(vm::get_super_ptr(tableAddress));
+        for (u32 i = 0; i < 0x10000; ++i) {
+            u8 expected = 0;
+            if (i < hleFunctions.size() * 8 && i % 8 < 4)
+                expected = u8((tableAddress + (i / 8) * 8 + 4) >> (24 - (i % 8) * 8));
+            if (tableBytes[i] != expected || privilegedTable[i] != expected)
+                throw std::runtime_error("P26 HLE table/alias changed during guest call");
+        }
+        for (u32 i = 0; i < 0x10000 / 4; ++i) {
+            const auto expected = i < hleFunctions.size() * 2 && i % 2 ? hleFunctions[i / 2] : hleFallback;
+            if (hleCache[i].fn != expected) throw std::runtime_error("P26 HLE dispatch table changed during guest call");
+        }
+        // An additional PRX export record occupies only the P25 fixture's
+        // already-allocated 64-byte BSS tail. Test real export discovery after
+        // completing all import/guest execution memory and alias assertions.
+        ARMSX3StartupLog("P26 BEFORE production PRX export observation");
+        u8* exportRecord = static_cast<u8*>(vm::base(dataAddress + 192));
+        std::memset(exportRecord, 0, 64);
+        exportRecord[0] = 44; // sizeof(ppu_prx_module_info)
+        exportRecord[5] = 1;  // PRX_EXPORT_LIBRARY_FLAG, BE u16
+        exportRecord[7] = 1;  // num_func = 1, BE u16
+        const auto writeExportWord = [&](u32 offset, u32 value) {
+            const be_t<u32> word = value;
+            std::memcpy(exportRecord + offset, &word, sizeof(word));
+        };
+        writeExportWord(16, dataAddress + 128); // existing NUL-terminated iOSProbe name
+        writeExportWord(20, dataAddress + 160); // known function NID
+        writeExportWord(24, dataAddress + 236); // export address table in BSS tail
+        writeExportWord(44, dataAddress);       // real OPD (entry + TOC)
+        if (armsx3_ios_ppu_observe_probe_exports(&module, dataAddress + 192) != 0 ||
+            armsx3_ios_ppu_observe_probe_exports(&module, dataAddress + 188) != -1)
+            throw std::runtime_error("P26 production export scanner did not discover bounded guest descriptor");
+        ARMSX3StartupLog("P26 PASS: production PRX export scan found guest entry descriptor and function NID; no global exports registered");
+        tableCleanup.release();
+        if (vm::dealloc(tableAddress, vm::main) != 0x10000 || vm::check_addr(tableAddress))
+            throw std::runtime_error("P26 HLE table deallocation failed");
+        segmentCleanup.release();
+        if (vm::dealloc(address, vm::main) != 0x10000 || vm::check_addr(address))
+            throw std::runtime_error("P26 guest deallocation failed");
+        vm::close(); initialized = false;
+        ARMSX3StartupLog("P26 PASS: production import/HLE call and bounded PRX export discovery; original guest execution, memory/table guards and cleanup passed; full executable loader/firmware/game boot remain untested");
+        return 0;
+    }
+    catch (const std::exception& error) { ARMSX3StartupLog(error.what()); if (initialized) vm::close(); return -1; }
+}
+
 
