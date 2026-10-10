@@ -1561,3 +1561,85 @@ Bundle47,32 stages P2-P33. After Actions succeeds install the IPA, run all32
 and send the .txt log. Full TLS HLE/process mutex initialization, complete
 process admission, firmware/LV2/RSX/game boot remain untested. No commercial
 PS3 game has booted.
+
+
+## Build48 / P34 executable process parameters and worker — 2026-10-10
+
+User supplied ARMSX3-startup-20261010-211906-075-99663.txt, build47 PID99663.
+All32 stages P2-P33 PASS. P33 confirms ELF PT_TLS parsing, overflow/malformed
+rejection before allocation, metadata through actual queued registers into
+production TLS bootstrap, linked guest TLS read/result42, slot reuse,
+arguments/stack/aliases and repeated pool cleanup. .txt export readable.
+No commercial game boot. User reports workflow completion; do not monitor.
+
+P34 extracts the real ppu_load_exec process parameter body (LOOS+1,
+0x60000001) into ppu_read_exec_process_parameters, used by the normal loader
+and diagnostic. It retains SDK assignment, debug/root-sensitive priority
+bounds/default fallback, stack/page/PPC fields, bad magic/default behavior
+and short declared-size warnings. An explicit bin.size() guard precedes the
+32-byte memcpy: truncated file data now returns false before reading beyond
+the buffer, and the normal loader returns false before memory mapping. No
+other production parameter semantics changed; g_ps3_process_info is read
+for priority permissions and never modified by this helper/probe.
+
+Patch0029 includes a bounded process reader and five-program segment wrapper.
+The reader accepts only the owned metadata at0x20140,32 file/memory bytes,
+flags0,type0x60000001 and stopped emulator. It calls the production body with
+normal defaults then requires declared size32, SDK0x00360001, priority1100,
+stack0x8000, malloc page0x10000 and PPC flags0 before publishing five output
+words. The segment wrapper retains the production LOAD/TLS/PRX path and
+preflights process bytes against the DATA program's bytes atoffset320.
+Malformed TLS/process metadata and inconsistent shared file bytes reject
+before allocating LOAD pages or publishing any output. Allocation/exception
+rollback and two-page metadata-only control handling remain in place.
+
+The fixture contains5 ELF64 headers (two LOAD, PRX, TLS, process), ending
+0x158 before code fileoffset0x200. DATA at0x300 now contains352 bytes:
+previous296 unchanged,24 padding zeros, then32 bytes process parameters at
+0x440/guest0x20140. Process version0x00330000, magic0x13bcc5f6. TLS at0x380
+still shares the9 iOSProbe-NUL bytes and PRX at0x400 shares the same control
+bytes. Golden production hash nowd6f45b20a4ee9f7568d8d3fead077b8545ff9d8d,
+including appended process-header type/flags and enlarged DATA bytes.
+
+P34 passes parsed priority1100 and stack0x8000 into the actual named PPU
+worker constructor, checks the resulting atomic priority and stack fields,
+and derives the prepared stack pointer from parsed stack size. Parsed malloc
+page size supplies the queued r12 entry register and is checked inside the
+actual worker. Parsed TLS metadata still supplies r8-r10 then production TLS
+bootstrap. Linked BCTRL/BLR and r13-relative byte load return42 as before,
+with exact full-code/data/stack/TLS/aliases/cache/HLE/cleanup assertions in
+two cycles. Process params are preserved in loaded DATA. No full process
+admission, TLS HLE process mutex creation or SDK-dependent main VM layout
+is invoked here.
+
+Device checks retain P33 overflow/TLS malformed cases and add bad process
+magic, declared size, SDK, invalid priority, stack/page/PPC flags and short
+file rejection with unchanged output sentinels. Bad magic/short/inconsistent
+process-file bytes also reject through the full segment wrapper before
+allocation. Old P2-P33 bridge prefix is byte-identical to build47 Git blob
+1a0d41a44b453c38c4e18a9677d9de761f64cfc0, length401933.
+
+Validation: patch0029 applies in order after0028; production body matches
+upstream apart from the explicit truncated-data guard. Actual P34 C++ fixture
+constructor/upstream opcode helpers compiled with pinned ELF64 layouts and
+mock endian types; independent inspection verifies all5 headers, code/header
+separation, both shared metadata byte ranges, process/PRX magic, identical
+first296 DATA bytes and golden SHA1. Actual production process helper and
+bounded wrappers pass ASAN/UBSAN for valid fields, both permission states
+and priority edges(-513/-512/-1/0/1100/3071/3072), default fallback/bad magic,
+short-declared-size warnings, all32 truncated byte counts,18 malformed reader
+inputs, inconsistent process/TLS data, unchanged outputs, occupied pages,
+repeat LOAD/BSS/hash/code registration, two allocation failure points and
+five injected exception rollback paths. Actual P34 ELF TLS bytes feed the
+production header reader/TLS bootstrap/allocator/free sanitizer harness,
+including25 exception injections and cleanup. Independent PPC model uses
+the actual P34 opcodes/enlarged DATA to verify TLS read/result42,20 guest
+instructions, exact expected frame/memory changes and preservation. Existing
+P33 header/segment regressions PASS.33 ordered exports, ARC property fix,
+parsed constructor/entry register flow and build48 plist audited. The real
+PPUThread constructor/priority field definitions were checked against pinned
+upstream. No local Xcode SDK; full iOS compilation/device P34 remain pending.
+
+Bundle48;33 stages P2-P34. After Actions succeeds install the IPA and run
+all33 tests, then send the .txt log. Full process/firmware/LV2/RSX/game boot
+remain untested; no commercial PS3 game has booted.

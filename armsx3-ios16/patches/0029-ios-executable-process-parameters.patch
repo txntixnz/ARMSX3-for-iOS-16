@@ -1,0 +1,234 @@
+--- a/rpcs3/Emu/Cell/PPUModule.cpp
++++ b/rpcs3/Emu/Cell/PPUModule.cpp
+@@ -2890,66 +2890,9 @@
+ }
+ #endif
+ 
+-bool ppu_load_exec(const ppu_exec_object& elf, bool virtual_load, const std::string& elf_path, utils::serial* ar)
+-{
+-	if (elf != elf_error::ok)
+-	{
+-		return false;
+-	}
+-
+-	// Check if it is a standalone executable first
+-	for (const auto& prog : elf.progs)
+-	{
+-		if (prog.p_type == 0x1u /* LOAD */ && prog.p_memsz)
+-		{
+-			using addr_range = utils::address_range32;
+-
+-			const addr_range r = addr_range::start_length(static_cast<u32>(prog.p_vaddr), static_cast<u32>(prog.p_memsz));
+-
+-			if ((prog.p_vaddr | prog.p_memsz) > u32{umax} || !r.valid() || !r.inside(addr_range::start_length(0x00000000, 0x30000000)))
+-			{
+-				return false;
+-			}
+-		}
+-	}
+-
+-	// Process information
+-	u32 sdk_version = SYS_PROCESS_PARAM_SDK_VERSION_UNKNOWN;
+-	s32 primary_prio = 1001;
+-	u32 primary_stacksize = SYS_PROCESS_PARAM_STACK_SIZE_MAX;
+-	u32 malloc_pagesize = SYS_PROCESS_PARAM_MALLOC_PAGE_SIZE_1M;
+-	u32 ppc_seg = 0;
+-
+-	// Something that is exclusive for very old SDKs
+-	// Another 256MB for PPU private area, but allocated at the front instead of after vm::main
+-	bool has_private_ppu_executable_area = false;
+-
+-	// Fetch information needed for allocating memory segmnents
+-	for (auto& prog : elf.progs)
+-	{
+-		switch (prog.p_type)
+-		{
+-		case 0x1: // LOAD
+-		{
+-			if (prog.p_filesz)
+-			{
+-				if ((prog.p_flags & 0x7) == prog.p_flags)
+-				{
+-					// PPU Private area location
+-					if (prog.p_vaddr < 0x10000000)
+-					{
+-						// Is the first area
+-						has_private_ppu_executable_area = true;
+-					}
+-				}
+-			}
+-
+-			break;
+-		}
+-		case 0x60000001: // LOOS+1
+-		{
+-			if (prog.p_filesz)
+-			{
++static bool ppu_read_exec_process_parameters(const ppu_exec_object::prog_t& prog,
++    u32& sdk_version, s32& primary_prio, u32& primary_stacksize, u32& malloc_pagesize, u32& ppc_seg)
++{
+ 				struct process_param_t
+ 				{
+ 					be_t<u32> size;
+@@ -2964,6 +2907,11 @@
+ 				};
+ 
+ 				process_param_t info{};
++				if (prog.bin.size() < sizeof(process_param_t))
++				{
++					ppu_loader.error("ppu_load_exec(): Truncated process parameters!");
++					return false;
++				}
+ 				std::memcpy(&info, prog.bin.data(), sizeof(process_param_t));
+ 
+ 				if (info.size < sizeof(process_param_t))
+@@ -2996,6 +2944,149 @@
+ 					ppu_loader.notice("*** ppc seg: 0x%x", info.ppc_seg);
+ 					//ppu_loader.notice("*** crash dump param addr: 0x%x", info.crash_dump_param_addr);
+ 				}
++	return true;
++}
++
++#if defined(__APPLE__) && TARGET_OS_IPHONE
++// Publish executable process metadata only after the bounded input succeeds.
++extern "C" int armsx3_ios_ppu_read_probe_process_parameters(const ppu_exec_object::prog_t* prog, u32* parameters)
++{
++	if (!prog || !parameters || !Emu.IsStopped() || prog->p_type != 0x60000001u ||
++		prog->p_vaddr != 0x20140u || prog->p_flags || prog->p_filesz != 32u ||
++		prog->p_memsz != 32u || prog->bin.size() != 32u) return -1;
++	u32 sdk = SYS_PROCESS_PARAM_SDK_VERSION_UNKNOWN, stack = SYS_PROCESS_PARAM_STACK_SIZE_MAX;
++	u32 page = SYS_PROCESS_PARAM_MALLOC_PAGE_SIZE_1M, ppc = 0;
++	s32 priority = 1001;
++	if (!ppu_read_exec_process_parameters(*prog, sdk, priority, stack, page, ppc)) return -2;
++	// The normal parser retains its default/warning behavior. This diagnostic
++	// accepts only its known private stack, page size and process configuration.
++	const auto* bytes = prog->bin.data();
++	if (bytes[0] || bytes[1] || bytes[2] || bytes[3] != 32 ||
++		sdk != 0x00360001u || priority != 1100 || stack != 0x8000u || page != 0x10000u || ppc) return -3;
++	const std::array<u32, 5> result{sdk, static_cast<u32>(priority), stack, page, ppc};
++	std::copy(result.begin(), result.end(), parameters);
++	return 0;
++}
++#endif
++
++#if defined(__APPLE__) && TARGET_OS_IPHONE
++// Restrict the shared production segment loader to two private diagnostic pages.
++extern "C" int armsx3_ios_ppu_load_probe_process_image_segments(const ppu_exec_object* elf, ppu_module<lv2_obj>* info,
++    u32* parameters)
++{
++	if (!elf || !info || !parameters || *elf != elf_error::ok || !Emu.IsStopped() ||
++		g_cfg.core.ppu_decoder != ppu_decoder_type::_static || !g_fxo->is_init() ||
++		!g_fxo->is_init<ppu_interpreter_rt>() || !info->segs.empty() ||
++		!info->addr_to_seg_index.empty() || elf->progs.size() != 5 || elf->header.e_entry != 0x20008) return -1;
++	for (u32 index = 0; index < 2; ++index)
++	{
++		const auto& prog = elf->progs[index];
++		const u32 address = 0x10000 + index * 0x10000;
++		if (prog.p_type != 1u || prog.p_vaddr != address || prog.p_memsz != 0x10000u ||
++			prog.p_flags != (index ? 6u : 5u) || !prog.p_filesz || prog.p_filesz > (index ? 352u : 108u) ||
++			prog.bin.size() != prog.p_filesz || vm::check_addr(address, vm::page_allocated, 1)) return -2;
++	}
++	const auto& control = elf->progs[2];
++	if (elf->progs[0].p_filesz != 108u || elf->progs[1].p_filesz != 352u ||
++		control.p_type != 0x60000002u || control.p_vaddr != 0x20100u || control.p_flags ||
++		control.p_filesz != 40u || control.p_memsz != 40u || control.bin.size() != 40u) return -2;
++	u32 address = 0, file = 0, memory = 0;
++	const auto& tls = elf->progs[3];
++	if (armsx3_ios_ppu_read_probe_tls_header(&tls, &address, &file, &memory) != 0 ||
++		tls.p_flags != 4u || tls.bin.size() != file ||
++		std::memcmp(tls.bin.data(), elf->progs[1].bin.data() + 128, file)) return -5;
++	std::array<u32, 5> process{};
++	const auto& proc = elf->progs[4];
++	if (armsx3_ios_ppu_read_probe_process_parameters(&proc, process.data()) != 0 ||
++		std::memcmp(proc.bin.data(), elf->progs[1].bin.data() + 320, proc.bin.size())) return -6;
++	struct Rollback
++	{
++		ppu_module<lv2_obj>& info;
++		bool active = true;
++		~Rollback()
++		{
++			if (!active) return;
++			// Both pages were verified unallocated before this loader invocation.
++			for (u32 address : {0x10000u, 0x20000u})
++				if (vm::check_addr(address, vm::page_allocated, 1)) vm::dealloc(address);
++			utils::memory_decommit(vm::g_exec_addr + vm::g_exec_addr_seg_offset + (0x10000 >> 1), 0x8000);
++			info.segs.clear(); info.addr_to_seg_index.clear();
++		}
++	} rollback{*info};
++	sha1_context sha;
++	sha1_starts(&sha);
++	u32 size = 0;
++	if (!ppu_load_exec_segments(*elf, false, nullptr, *info, false, size, sha)) return -3;
++	if (size != 0x20000 || info->segs.size() != 2 || info->addr_to_seg_index.size() != 2) return -4;
++	sha1_finish(&sha, info->sha1);
++	std::copy(process.begin(), process.end(), parameters);
++	parameters[5] = address; parameters[6] = file; parameters[7] = memory;
++	rollback.active = false;
++	return 0;
++}
++#endif
++
++bool ppu_load_exec(const ppu_exec_object& elf, bool virtual_load, const std::string& elf_path, utils::serial* ar)
++{
++	if (elf != elf_error::ok)
++	{
++		return false;
++	}
++
++	// Check if it is a standalone executable first
++	for (const auto& prog : elf.progs)
++	{
++		if (prog.p_type == 0x1u /* LOAD */ && prog.p_memsz)
++		{
++			using addr_range = utils::address_range32;
++
++			const addr_range r = addr_range::start_length(static_cast<u32>(prog.p_vaddr), static_cast<u32>(prog.p_memsz));
++
++			if ((prog.p_vaddr | prog.p_memsz) > u32{umax} || !r.valid() || !r.inside(addr_range::start_length(0x00000000, 0x30000000)))
++			{
++				return false;
++			}
++		}
++	}
++
++	// Process information
++	u32 sdk_version = SYS_PROCESS_PARAM_SDK_VERSION_UNKNOWN;
++	s32 primary_prio = 1001;
++	u32 primary_stacksize = SYS_PROCESS_PARAM_STACK_SIZE_MAX;
++	u32 malloc_pagesize = SYS_PROCESS_PARAM_MALLOC_PAGE_SIZE_1M;
++	u32 ppc_seg = 0;
++
++	// Something that is exclusive for very old SDKs
++	// Another 256MB for PPU private area, but allocated at the front instead of after vm::main
++	bool has_private_ppu_executable_area = false;
++
++	// Fetch information needed for allocating memory segmnents
++	for (auto& prog : elf.progs)
++	{
++		switch (prog.p_type)
++		{
++		case 0x1: // LOAD
++		{
++			if (prog.p_filesz)
++			{
++				if ((prog.p_flags & 0x7) == prog.p_flags)
++				{
++					// PPU Private area location
++					if (prog.p_vaddr < 0x10000000)
++					{
++						// Is the first area
++						has_private_ppu_executable_area = true;
++					}
++				}
++			}
++
++			break;
++		}
++		case 0x60000001: // LOOS+1
++		{
++			if (prog.p_filesz)
++			{
++				if (!ppu_read_exec_process_parameters(prog, sdk_version, primary_prio, primary_stacksize, malloc_pagesize, ppc_seg)) return false;
+ 			}
+ 			break;
+ 		}
