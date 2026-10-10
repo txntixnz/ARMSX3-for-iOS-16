@@ -1489,3 +1489,75 @@ Xcode SDK; Actions must validate the complete iOS compilation. User reports
 completion; do not monitor the new run. After success install the IPA, run
 all31 stages and send the .txt log. Firmware/process admission/game boot
 remain untested.
+
+
+## Build47 / P33 executable ELF TLS header — 2026-10-10
+
+User supplied ARMSX3-startup-20261010-204519-482-99182.txt, build46 PID99182.
+All31 diagnostics P2-P32 PASS. P32 confirms production TLS memory bootstrap,
+main-thread r13, copy/system/BSS zero fill, dirty slot clearing/free/reuse,
+guest TLS-relative byte load returning42, exact stack/arguments/aliases and
+two cleanup cycles. AUTO PASS completes; no game boot tested. Exported .txt
+is fully readable with the summary and complete current launch; Copy results
+was not separately confirmed. Accidental image-tool mentions remain browser
+bugs. User reports workflow completion; do not monitor Actions after push.
+
+P33 adds real PT_TLS metadata to the production-loaded executable fixture.
+Patch0028 extracts the original TLS case's notice, 32-bit overflow guard and
+address/file/memory assignment into ppu_read_exec_tls_header. The normal
+ppu_load_exec TLS case and diagnostic call that same body unchanged. This
+preserves the upstream normal loader semantics. The diagnostic reader uses
+local results before publishing outputs and rejects non-TLS/stopped-state/
+null/aliased output arguments plus all metadata outside the private tested
+image0x20080/file9/memory64. Its extra shape restrictions apply only to the
+probe, not the production loader.
+
+A new bounded four-program segment wrapper shares the production segment
+loop, verifying the two LOAD pages, existing PRX parameter header, and exact
+TLS header with flags4 and9 file bytes matching the LOAD image. It rejects
+malformed metadata or inconsistent TLS file bytes before allocating anything,
+retains prior allocation/exception rollback, and publishes TLS output values
+only after both LOAD segments and their hash succeed. PT_TLS remains metadata
+and creates no separate guest allocation. P30/P31/P32 wrappers remain intact.
+
+The fixture now has4 ELF64 program headers: two LOAD, PRX parameters and TLS.
+The larger header table ends0x120; code/data file offsets move from0x100/200
+to0x200/300 so those headers cannot overwrite code. PRX file offset becomes
+0x400, TLS file offset0x380 shares the9 iOSProbe-NUL image bytes from DATA.
+Guest addresses/code/loaded296-byte data remain unchanged. TLS metadata read
+from that parsed header flows into Program, actual set_args entry registers
+r8-r10, and then directly from those worker registers into the production TLS
+bootstrap. The existing linked guest LBZ r3,r13,-0x7000/ADDI -63 returns42;
+TOCs/arguments/LR/SP/frame/HLE return/decoded cache/aliases and pool cleanup
+checks remain. Golden SHA1 nowce2f301a034b0a56fe44a3dac22dd574993cf8c8,
+including PT_TLS type7/flags4 in the production loop's hash input.
+
+Device diagnostic first exercises three64-bit overflow fields and malformed
+sizes/address/type with sentinel outputs; four invalid TLS program variants
+must reject before LOAD allocation/output publication. It then parses/loads
+the valid four-header fixture and runs the prior two actual-worker TLS/linked
+call cycles. Old P2-P32 bridge prefix is byte-identical to build46 Git blob
+014cad81bf4b58d61a37a4208c0c330dc5786765, length371835.
+
+Validation: patch0028 applies after prior PPUModule patches and extracted
+header body matches upstream byte-for-byte. Host harness compiles the actual
+P33 C++ fixture constructor/opcodes with pinned ELF64 header layouts and
+mock endian primitives. Independent binary inspection confirms all4 headers,
+no header/code overlap, byte-identical loaded data, correct PRX magic,
+shared TLS/LOAD bytes and the golden production SHA1. Actual header helper
+and bounded segment wrapper pass ASAN/UBSAN for32-bit boundary values,
+overflow fields, malformed/non-mutating rejection, code/data/BSS/hash input,
+metadata publication, occupied pages, repeated loading, allocation failure
+and injected exception rollback. Actual ELF TLS bytes/parsed metadata feed
+production TLS bootstrap/alloc/free in a second sanitizer harness, retaining
+its25 injected failures and cleanup tests. Independent PPC model with actual
+P33 instruction helpers returns42 with20 guest instructions and exact
+memory/frame/register preservation. Existing P30 segment/parameter/link
+regressions, including150 injected read errors, pass.32 ordered App exports,
+ARC property names and build47 plist audited. No local Xcode SDK; full iOS
+compilation/device P33 verification remain pending.
+
+Bundle47,32 stages P2-P33. After Actions succeeds install the IPA, run all32
+and send the .txt log. Full TLS HLE/process mutex initialization, complete
+process admission, firmware/LV2/RSX/game boot remain untested. No commercial
+PS3 game has booted.

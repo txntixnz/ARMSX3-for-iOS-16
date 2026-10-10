@@ -1,0 +1,114 @@
+--- a/rpcs3/Emu/Cell/PPUModule.cpp
++++ b/rpcs3/Emu/Cell/PPUModule.cpp
+@@ -2804,6 +2804,92 @@
+ }
+ #endif
+ 
++static bool ppu_read_exec_tls_header(const ppu_exec_object::prog_t& prog,
++    u32& tls_vaddr, u32& tls_fsize, u32& tls_vsize)
++{
++			ppu_loader.notice("TLS info segment found: tls-image=*0x%x, image-size=0x%x, tls-size=0x%x", prog.p_vaddr, prog.p_filesz, prog.p_memsz);
++
++			if ((prog.p_vaddr | prog.p_filesz | prog.p_memsz) > u32{umax})
++			{
++				ppu_loader.error("ppu_load_exec(): TLS segment is invalid!");
++				return false;
++			}
++
++			tls_vaddr = vm::cast(prog.p_vaddr);
++			tls_fsize = ::narrow<u32>(prog.p_filesz);
++			tls_vsize = ::narrow<u32>(prog.p_memsz);
++	return true;
++}
++
++#if defined(__APPLE__) && TARGET_OS_IPHONE
++// Read real ELF TLS metadata without changing the caller's outputs on failure.
++extern "C" int armsx3_ios_ppu_read_probe_tls_header(const ppu_exec_object::prog_t* prog,
++    u32* image, u32* file_size, u32* memory_size)
++{
++	if (!prog || !image || !file_size || !memory_size || image == file_size ||
++		image == memory_size || file_size == memory_size || !Emu.IsStopped() || prog->p_type != 7u) return -1;
++	u32 address = 0, file = 0, memory = 0;
++	if (!ppu_read_exec_tls_header(*prog, address, file, memory)) return -2;
++	// The diagnostic owns only the previously tested image and TLS pool size.
++	if (address != 0x20080u || file != 9u || memory != 64u) return -3;
++	*image = address; *file_size = file; *memory_size = memory;
++	return 0;
++}
++#endif
++
++#if defined(__APPLE__) && TARGET_OS_IPHONE
++// Restrict the shared production segment loader to two private diagnostic pages.
++extern "C" int armsx3_ios_ppu_load_probe_tls_image_segments(const ppu_exec_object* elf, ppu_module<lv2_obj>* info,
++    u32* image, u32* file_size, u32* memory_size)
++{
++	if (!elf || !info || !image || !file_size || !memory_size || image == file_size ||
++		image == memory_size || file_size == memory_size || *elf != elf_error::ok || !Emu.IsStopped() ||
++		g_cfg.core.ppu_decoder != ppu_decoder_type::_static || !g_fxo->is_init() ||
++		!g_fxo->is_init<ppu_interpreter_rt>() || !info->segs.empty() ||
++		!info->addr_to_seg_index.empty() || elf->progs.size() != 4 || elf->header.e_entry != 0x20008) return -1;
++	for (u32 index = 0; index < 2; ++index)
++	{
++		const auto& prog = elf->progs[index];
++		const u32 address = 0x10000 + index * 0x10000;
++		if (prog.p_type != 1u || prog.p_vaddr != address || prog.p_memsz != 0x10000u ||
++			prog.p_flags != (index ? 6u : 5u) || !prog.p_filesz || prog.p_filesz > (index ? 296u : 108u) ||
++			prog.bin.size() != prog.p_filesz || vm::check_addr(address, vm::page_allocated, 1)) return -2;
++	}
++	const auto& control = elf->progs[2];
++	if (elf->progs[0].p_filesz != 108u || elf->progs[1].p_filesz != 296u ||
++		control.p_type != 0x60000002u || control.p_vaddr != 0x20100u || control.p_flags ||
++		control.p_filesz != 40u || control.p_memsz != 40u || control.bin.size() != 40u) return -2;
++	u32 address = 0, file = 0, memory = 0;
++	const auto& tls = elf->progs[3];
++	if (armsx3_ios_ppu_read_probe_tls_header(&tls, &address, &file, &memory) != 0 ||
++		tls.p_flags != 4u || tls.bin.size() != file ||
++		std::memcmp(tls.bin.data(), elf->progs[1].bin.data() + 128, file)) return -5;
++	struct Rollback
++	{
++		ppu_module<lv2_obj>& info;
++		bool active = true;
++		~Rollback()
++		{
++			if (!active) return;
++			// Both pages were verified unallocated before this loader invocation.
++			for (u32 address : {0x10000u, 0x20000u})
++				if (vm::check_addr(address, vm::page_allocated, 1)) vm::dealloc(address);
++			utils::memory_decommit(vm::g_exec_addr + vm::g_exec_addr_seg_offset + (0x10000 >> 1), 0x8000);
++			info.segs.clear(); info.addr_to_seg_index.clear();
++		}
++	} rollback{*info};
++	sha1_context sha;
++	sha1_starts(&sha);
++	u32 size = 0;
++	if (!ppu_load_exec_segments(*elf, false, nullptr, *info, false, size, sha)) return -3;
++	if (size != 0x20000 || info->segs.size() != 2 || info->addr_to_seg_index.size() != 2) return -4;
++	sha1_finish(&sha, info->sha1);
++	*image = address; *file_size = file; *memory_size = memory;
++	rollback.active = false;
++	return 0;
++}
++#endif
++
+ bool ppu_load_exec(const ppu_exec_object& elf, bool virtual_load, const std::string& elf_path, utils::serial* ar)
+ {
+ 	if (elf != elf_error::ok)
+@@ -3158,17 +3244,7 @@
+ 
+ 		case 0x00000007: // TLS
+ 		{
+-			ppu_loader.notice("TLS info segment found: tls-image=*0x%x, image-size=0x%x, tls-size=0x%x", prog.p_vaddr, prog.p_filesz, prog.p_memsz);
+-
+-			if ((prog.p_vaddr | prog.p_filesz | prog.p_memsz) > u32{umax})
+-			{
+-				ppu_loader.error("ppu_load_exec(): TLS segment is invalid!");
+-				return false;
+-			}
+-
+-			tls_vaddr = vm::cast(prog.p_vaddr);
+-			tls_fsize = ::narrow<u32>(prog.p_filesz);
+-			tls_vsize = ::narrow<u32>(prog.p_memsz);
++			if (!ppu_read_exec_tls_header(prog, tls_vaddr, tls_fsize, tls_vsize)) return false;
+ 			break;
+ 		}
+ 
