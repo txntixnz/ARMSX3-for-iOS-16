@@ -5271,3 +5271,364 @@ extern "C" __attribute__((visibility("default"))) int armsx3_core_test_executabl
     }
     catch (const std::exception& error) { ARMSX3StartupLog(error.what()); if (initialized) vm::close(); return -1; }
 }
+
+extern "C" int armsx3_ios_ppu_probe_tls_and_call(ppu_thread*, u32, u32, u32, int (*)(ppu_thread*, u32, void*), void*);
+extern "C" int armsx3_ios_ppu_prepare_probe_arguments(ppu_thread*, u32*, u32*);
+extern "C" int armsx3_ios_ppu_load_probe_image_segments(const ppu_exec_object*, ppu_module<lv2_obj>*);
+extern "C" int armsx3_ios_ppu_link_probe_image_and_call(ppu_module<lv2_obj>*, const ppu_exec_object::prog_t*, int (*)(void*, u32, u32), void*);
+extern "C" __attribute__((visibility("default"))) int armsx3_core_test_tls_bootstrap()
+{
+    ARMSX3StartupLog("P32 BEFORE production TLS memory bootstrap and linked guest TLS read");
+    bool initialized = false;
+    try
+    {
+        if (!Emu.IsStopped()) throw std::runtime_error("P32 requires stopped emulator");
+        struct Configuration
+        {
+            bool debugPPU = g_cfg.core.ppu_debug.get();
+            bool ppu = g_cfg.core.ppu_prof.get(), spu = g_cfg.core.spu_prof.get(), debug = g_cfg.core.spu_debug.get();
+            thread_scheduler_mode scheduler = g_cfg.core.thread_scheduler.get();
+            ppu_decoder_type decoder = g_cfg.core.ppu_decoder.get();
+            Configuration() { g_cfg.core.ppu_debug.set(false); g_cfg.core.ppu_prof.set(false); g_cfg.core.spu_prof.set(false);
+                g_cfg.core.spu_debug.set(false); g_cfg.core.thread_scheduler.set(thread_scheduler_mode::os);
+                g_cfg.core.ppu_decoder.set(ppu_decoder_type::_static); }
+            ~Configuration() { g_cfg.core.ppu_debug.set(debugPPU); g_cfg.core.ppu_prof.set(ppu); g_cfg.core.spu_prof.set(spu);
+                g_cfg.core.spu_debug.set(debug); g_cfg.core.thread_scheduler.set(scheduler);
+                g_cfg.core.ppu_decoder.set(decoder); }
+        } configuration;
+        if (!g_fxo->is_init() ||
+            (!g_fxo->is_init<ppu_interpreter_rt>() && !g_fxo->init<ppu_interpreter_rt>()))
+            throw std::runtime_error("P32 fixed objects/interpreter unavailable");
+        struct Arguments {
+            std::vector<std::string> argv = Emu.argv, envp = Emu.envp;
+            std::vector<u8> data = Emu.data;
+            ~Arguments() { Emu.argv = std::move(argv); Emu.envp = std::move(envp); Emu.data = std::move(data); }
+        } arguments;
+        Emu.argv = {"probe", "123456789012345", "1234567890123456"};
+        Emu.envp = {"LANG=C", ""};
+        Emu.data.resize(17);
+        for (u32 i = 0; i < Emu.data.size(); ++i) Emu.data[i] = u8(0xa0 + i);
+        vm::init(); initialized = true;
+        if (!vm::reserve_map(vm::main, 0x10000, 0x90000))
+            throw std::runtime_error("P32 main memory block unavailable");
+        const u32 address = 0x10000, codeAddress = address, dataAddress = 0x20000, stackAddress = 0x30000;
+        using namespace ppu_instructions;
+        using namespace ppu_instructions::implicts;
+        const auto dform = [](u32 op, u32 reg, u32 base, u32 imm) {
+            return (op << 26) | (reg << 21) | (base << 16) | (imm & 0xffff);
+        };
+        std::array<u32, 27> opcodes; opcodes.fill(0x60000000); // padding NOPs
+        const std::array<u32, 17> caller{MFLR(0), STDU(1, 1, -128), STD(0, 1, 16), STD(2, 1, 24),
+            ADDI(3, 0, 35), dform(32, 11, 10, 0), dform(32, 12, 11, 0), dform(32, 2, 11, 4),
+            MTCTR(12), BCTRL(), LD(2, 1, 24), dform(24, 2, 9, 0), STD(3, 6, 0),
+            LD(0, 1, 16), ADDI(1, 1, 128), MTLR(0), BLR()};
+        for (u32 i = 0; i < caller.size(); ++i) opcodes[i] = caller[i];
+        opcodes[24] = dform(34, 3, 13, -0x7000); opcodes[25] = ADDI(3, 3, -63); opcodes[26] = BLR();
+        ppu_exec_object::ehdr_t header{};
+        header.e_magic = "\177ELF"_u32; header.e_class = 2; header.e_data = 2;
+        header.e_curver = 1; header.e_os_abi = elf_os::lv2; header.e_type = elf_type::exec;
+        header.e_machine = elf_machine::ppc64; header.e_version = 1;
+        header.e_entry = dataAddress + 8; header.e_phoff = sizeof(header);
+        header.e_ehsize = sizeof(header); header.e_phentsize = sizeof(ppu_exec_object::phdr_t); header.e_phnum = 3;
+        std::array<ppu_exec_object::phdr_t, 3> segments{};
+        segments[0].p_type = 1; segments[0].p_flags = 5; segments[0].p_offset = 0x100;
+        segments[0].p_vaddr = codeAddress; segments[0].p_filesz = sizeof(opcodes);
+        segments[0].p_memsz = 0x10000; segments[0].p_align = 0x100;
+        segments[1].p_type = 1; segments[1].p_flags = 6; segments[1].p_offset = 0x200;
+        segments[1].p_vaddr = dataAddress; segments[1].p_filesz = 296;
+        segments[1].p_memsz = 0x10000; segments[1].p_align = 0x100;
+        segments[2].p_type = 0x60000002; segments[2].p_offset = 0x300;
+        segments[2].p_vaddr = dataAddress + 256; segments[2].p_filesz = 40;
+        segments[2].p_memsz = 40; segments[2].p_align = 4;
+        std::vector<u8> fixture(0x328, 0);
+        std::memcpy(fixture.data(), &header, sizeof(header));
+        std::memcpy(fixture.data() + sizeof(header), segments.data(), sizeof(segments));
+        const auto fileWord = [&](u32 offset, u32 value) { const be_t<u32> word = value;
+            std::memcpy(fixture.data() + offset, &word, 4); };
+        for (u32 i = 0; i < opcodes.size(); ++i) fileWord(0x100 + i * 4, opcodes[i]);
+        fileWord(0x200, codeAddress + 96); fileWord(0x204, dataAddress);
+        fileWord(0x208, codeAddress); fileWord(0x20c, dataAddress + 32);
+        fixture[0x240] = 44; fixture[0x247] = 2;
+        fileWord(0x250, dataAddress + 128); fileWord(0x254, dataAddress + 160); fileWord(0x258, dataAddress + 176);
+        std::memcpy(fixture.data() + 0x280, "iOSProbe", 9);
+        fileWord(0x2a0, 0x49524e31); fileWord(0x2a4, 0x49524e32);
+        fileWord(0x2b0, codeAddress); fileWord(0x2b4, codeAddress);
+        fixture[0x2c0] = 44; fixture[0x2c5] = 1; fixture[0x2c7] = 1;
+        fileWord(0x2d0, dataAddress + 128); fileWord(0x2d4, dataAddress + 160);
+        fileWord(0x2d8, dataAddress + 236); fileWord(0x2ec, dataAddress);
+        const std::array<u32, 10> control{40, 0x1b434cec, 0, 0, dataAddress + 192,
+            dataAddress + 236, dataAddress + 64, dataAddress + 108, 0, 0};
+        for (u32 i = 0; i < control.size(); ++i) fileWord(0x300 + i * 4, control[i]);
+        const auto stream = fs::make_stream(fixture);
+        ppu_exec_object elf(stream);
+        ppu_module<lv2_obj> module;
+        module.name = "iOS loaded ELF linkage probe";
+        if (elf.get_error() != elf_error::ok || elf.progs.size() != 3 ||
+            armsx3_ios_ppu_load_probe_image_segments(&elf, &module) != 0)
+            throw std::runtime_error("P32 production ELF segment loading failed");
+        const std::array<u8, 20> expectedHash{0x42, 0x57, 0x93, 0xd5, 0x02, 0xcd, 0x9f, 0x87, 0x3d, 0x85, 0x9a, 0xe7, 0x52, 0xc1, 0xdd, 0x2f, 0x99, 0xd0, 0x40, 0xc3};
+        if (std::memcmp(module.sha1, expectedHash.data(), expectedHash.size()))
+            throw std::runtime_error("P32 production ELF hash mismatch");
+        std::vector<u8> expectedCode(0x10000, 0), expectedData(0x10000, 0);
+        std::memcpy(expectedCode.data(), fixture.data() + 0x100, sizeof(opcodes));
+        std::memcpy(expectedData.data(), fixture.data() + 0x200, 296);
+        auto* guest = static_cast<u8*>(vm::base(codeAddress));
+        auto* data = static_cast<u8*>(vm::base(dataAddress));
+        if (std::memcmp(guest, expectedCode.data(), 0x10000) || std::memcmp(data, expectedData.data(), 0x10000) ||
+            module.segs.size() != 2 || module.addr_to_seg_index.at(codeAddress) != 0 ||
+            module.addr_to_seg_index.at(dataAddress) != 1)
+            throw std::runtime_error("P32 loaded ELF contents/BSS/metadata mismatch");
+        // Prepare exact fixture blocks from the production-loaded ELF segments.
+        // Global process initialization and main-thread admission remain pending.
+        ppu_function callerFunction{};
+        callerFunction.addr = codeAddress; callerFunction.toc = dataAddress + 32; callerFunction.size = 68;
+        callerFunction.blocks.emplace(codeAddress, 68);
+        ppu_function calleeFunction{};
+        calleeFunction.addr = codeAddress + 96; calleeFunction.toc = dataAddress; calleeFunction.size = 12;
+        calleeFunction.blocks.emplace(codeAddress + 96, 12);
+        module.funcs.push_back(std::move(callerFunction)); module.funcs.push_back(std::move(calleeFunction));
+        struct SegmentCacheCleanup {
+            u8* pointer; bool active = false;
+            void release() { if (active) { utils::memory_decommit(pointer, 0x8000); active = false; } }
+            ~SegmentCacheCleanup() { release(); }
+        } segmentCleanup{vm::g_exec_addr + vm::g_exec_addr_seg_offset + (address >> 1)};
+        segmentCleanup.active = true;
+        auto& interpreter = g_fxo->get<ppu_interpreter_rt>();
+        const auto* codeCache = reinterpret_cast<const ppu_intrp_func*>(vm::g_exec_addr + u64(codeAddress) * 2);
+        const auto fallback = codeCache[0].fn;
+        if (armsx3_ios_ppu_prepare_module(&module) != 0)
+            throw std::runtime_error("P32 static caller/callee module preparation failed");
+        for (u32 i = 0; i < opcodes.size(); ++i) {
+            const auto expected = i < 17 || i >= 24 ? interpreter.decode(opcodes[i]) : fallback;
+            if (codeCache[i].fn != expected || ((i < 17 || i >= 24) && codeCache[i].fn == fallback))
+                throw std::runtime_error("P32 caller/callee instruction decoding mismatch");
+        }
+        const auto* pageCache = reinterpret_cast<const ppu_intrp_func*>(vm::g_exec_addr + u64(address) * 2);
+        std::vector<ppu_intrp_func_t> codeHandlers;
+        for (u32 i = 0; i < 0x10000 / 4; ++i) codeHandlers.push_back(pageCache[i].fn);
+        if (vm::alloc(0x10000, vm::main, 0x10000) != stackAddress)
+            throw std::runtime_error("P32 worker stack allocation failed");
+        const auto* stack = static_cast<const u8*>(vm::base(stackAddress));
+        std::vector<u8> expectedStack(stack, stack + 0x10000);
+        if (!g_fxo->is_init<ppu_function_manager>() && !g_fxo->init<ppu_function_manager>())
+            throw std::runtime_error("P32 function manager initialization failed");
+        auto& manager = g_fxo->get<ppu_function_manager>();
+        if (manager.addr) throw std::runtime_error("P32 requires unused function manager address");
+        struct TableCleanup {
+            ppu_function_manager& manager;
+            void release() {
+                if (!manager.addr) return;
+                const u32 address = manager.addr; manager.addr = 0;
+                utils::memory_decommit(vm::g_exec_addr + vm::g_exec_addr_seg_offset + (address >> 1), 0x8000);
+            }
+            ~TableCleanup() { release(); }
+        } tableCleanup{manager};
+        if (armsx3_ios_ppu_prepare_hle_table() != 0)
+            throw std::runtime_error("P32 production HLE table preparation failed");
+        const u32 tableAddress = manager.addr;
+        if (tableAddress != 0x40000 ||
+            !vm::check_addr(tableAddress, vm::page_readable | vm::page_executable, 0x10000))
+            throw std::runtime_error("P32 HLE table allocation or flags mismatch");
+        const auto* table = static_cast<const u8*>(vm::base(tableAddress));
+        const std::vector<u8> tableBefore(table, table + 0x10000);
+        const auto* cache = reinterpret_cast<const ppu_intrp_func*>(vm::g_exec_addr + u64(tableAddress) * 2);
+        std::vector<ppu_intrp_func_t> handlers;
+        for (u32 i = 0; i < 0x10000 / 4; ++i) handlers.push_back(cache[i].fn);
+        const auto created = cpu_thread::g_threads_created.load(), deleted = cpu_thread::g_threads_deleted.load();
+        const u64 live = armsx3_ios_live_cpu_threads();
+        // Independent golden layout: 64 bytes of pointer storage, 96 bytes
+        // of aligned strings, and 32 bytes reserved for 17 exitspawn bytes.
+        const u32 argvAddress = stackAddress + 0x7f40, envpAddress = argvAddress + 32;
+        const u32 initialStack = stackAddress + 0x8000 - ppu_stack_start_offset - 192;
+        const u32 frameAddress = initialStack - 128;
+        struct Program {
+            u32 begin, end, returnAddress, dataAddress, initialStack, stackAddress, entryOPD, argvAddress, envpAddress;
+            u32 id = 0;
+            int result = -99; bool tls = false, abi = false, tlsMemory = false; std::atomic<bool> completed{false};
+        } program{vm::read32(u32(elf.header.e_entry)), codeAddress + u32(sizeof(opcodes)), manager.func_addr(1, true), dataAddress, initialStack, stackAddress, u32(elf.header.e_entry), argvAddress, envpAddress};
+        const auto executeLinked = +[](void* user, u32 descriptor, u32 invalidDescriptor) -> int {
+            auto& program = *static_cast<Program*>(user);
+            if (descriptor != program.dataAddress || vm::read32(descriptor) != program.begin + 96 ||
+                vm::read32(program.dataAddress + 176) != descriptor ||
+                vm::read32(program.dataAddress + 180) != invalidDescriptor)
+                throw std::runtime_error("P32 callback did not receive active backpatched guest descriptor");
+            program.result = -99; program.tls = false; program.abi = false; program.tlsMemory = false; program.completed.store(false, std::memory_order_release);
+            std::unique_ptr<named_thread<ppu_thread>> worker;
+            {
+                struct ConstructionID { u32 previous = id_manager::g_id;
+                    ConstructionID() { id_manager::g_id = ppu_thread::id_base; }
+                    ~ConstructionID() { id_manager::g_id = previous; } } construction_id;
+                const ppu_thread_params params{static_cast<vm::addr_t>(program.stackAddress), 0x8000, 0, vm::_ref<ppu_func_opd_t>(program.entryOPD), 0, 0};
+                worker = std::make_unique<named_thread<ppu_thread>>(stx::launch_retainer{}, params, "iOS linked guest call probe", 1000);
+            }
+            struct StopWorker { named_thread<ppu_thread>& worker;
+                ~StopWorker() { worker.state += cpu_flag::exit; worker.state.notify_one();
+                    worker.cmd_notify.store(1); worker.cmd_notify.notify_one(); } } stop{*worker};
+            if (worker->gpr[1] != program.stackAddress + 0x8000 - ppu_stack_start_offset ||
+                worker->entry_func.addr != program.begin || worker->entry_func.rtoc != program.dataAddress + 32)
+                throw std::runtime_error("P32 real worker constructor entry/stack mismatch");
+            u32 argv = 0xaaaaaaaa, envp = 0xbbbbbbbb;
+            const auto* stack = static_cast<const u8*>(vm::base(program.stackAddress));
+            const std::vector<u8> beforeArguments(stack, stack + 0x10000);
+            const auto firstArgument = Emu.argv[0];
+            Emu.argv[0] = std::string(129, 'x');
+            const int rejected = armsx3_ios_ppu_prepare_probe_arguments(worker.get(), &argv, &envp);
+            Emu.argv[0] = firstArgument;
+            if (rejected != -2 || argv != 0xaaaaaaaa || envp != 0xbbbbbbbb ||
+                worker->gpr[1] != program.stackAddress + 0x8000 - ppu_stack_start_offset ||
+                std::memcmp(stack, beforeArguments.data(), 0x10000))
+                throw std::runtime_error("P32 oversized arguments were not rejected without mutation");
+            if (armsx3_ios_ppu_prepare_probe_arguments(worker.get(), &argv, &envp) != 0 ||
+                argv != program.argvAddress || envp != program.envpAddress || worker->gpr[1] != program.initialStack)
+                throw std::runtime_error("P32 production executable argument packing failed");
+            const std::vector<u8> packedArguments(stack, stack + 0x10000);
+            u32 secondArgv = 0xaaaaaaaa, secondEnvp = 0xbbbbbbbb;
+            if (armsx3_ios_ppu_prepare_probe_arguments(worker.get(), &secondArgv, &secondEnvp) != -1 ||
+                secondArgv != 0xaaaaaaaa || secondEnvp != 0xbbbbbbbb ||
+                worker->gpr[1] != program.initialStack || std::memcmp(stack, packedArguments.data(), 0x10000))
+                throw std::runtime_error("P32 already prepared worker was not rejected without mutation");
+            program.id = worker->id;
+            const ppu_intrp_func_t execute = +[](ppu_thread& context, ppu_opcode_t, be_t<u32>*, ppu_intrp_func*) {
+                auto& program = *reinterpret_cast<Program*>(context.gpr[30]);
+                program.tls = get_current_cpu_thread() == &context && thread_ctrl::get_current() != nullptr;
+                program.abi = context.gpr[3] == 3 && context.gpr[4] == program.argvAddress &&
+                    context.gpr[5] == program.envpAddress && context.gpr[6] == 2 && context.gpr[7] == program.id &&
+                    context.gpr[8] == program.dataAddress + 128 && context.gpr[9] == 9 && context.gpr[10] == 64 &&
+                    context.gpr[11] == program.entryOPD && context.gpr[12] == 0x10000 && context.gpr[13] == 0 &&
+                    context.gpr[1] == program.initialStack && context.entry_func.addr == program.begin &&
+                    context.entry_func.rtoc == program.dataAddress + 32;
+                if (!program.abi) {
+                    program.result = -98; context.state += cpu_flag::exit;
+                    program.completed.store(true, std::memory_order_release); return;
+                }
+                const auto callWithTLS = +[](ppu_thread* worker, u32 pool, void* user) -> int {
+                    auto& program = *static_cast<Program*>(user);
+                    std::vector<u8> expected(0x40000, 0);
+                    for (u32 i = 0; i < 3; ++i)
+                        std::memcpy(expected.data() + 0x60 + i * 0x70, "iOSProbe", 9);
+                    if (pool != 0x50000 || worker->gpr[13] != pool + 0x7060 ||
+                        std::memcmp(vm::base(pool), expected.data(), expected.size()) ||
+                        std::memcmp(vm::get_super_ptr(pool), expected.data(), expected.size()))
+                        throw std::runtime_error("P32 TLS image/system area/BSS/slot reuse mismatch");
+                    // The callee reads byte 'i' through r13-0x7000 and adds -63
+                    // to return42. This uses the production-initialized TLS.
+                    worker->gpr[6] = program.dataAddress + 32;
+                    worker->gpr[10] = program.dataAddress + 176;
+                    const int result = armsx3_ios_ppu_call_bounded(worker, program.begin, program.end,
+                        program.dataAddress + 32, program.returnAddress, 64);
+                    if (worker->gpr[13] != pool + 0x7060 ||
+                        std::memcmp(vm::base(pool), expected.data(), expected.size()) ||
+                        std::memcmp(vm::get_super_ptr(pool), expected.data(), expected.size()))
+                        throw std::runtime_error("P32 linked guest execution changed TLS image/BSS/aliases");
+                    program.tlsMemory = true;
+                    return result;
+                };
+                // Invalid TLS image sizes must be rejected before allocation.
+                if (armsx3_ios_ppu_probe_tls_and_call(&context, program.dataAddress + 128, 10, 64, callWithTLS, &program) != -1 ||
+                    context.gpr[13] || vm::check_addr(0x50000)) {
+                    program.result = -97; context.state += cpu_flag::exit;
+                    program.completed.store(true, std::memory_order_release); return;
+                }
+                program.result = armsx3_ios_ppu_probe_tls_and_call(&context,
+                    program.dataAddress + 128, 9, 64, callWithTLS, &program);
+                if (context.gpr[13] || vm::check_addr(0x50000)) program.result = -96;
+                context.state += cpu_flag::exit; program.completed.store(true, std::memory_order_release);
+            };
+            worker->cmd_list({
+                {ppu_cmd::set_args, 8}, u64{Emu.argv.size()}, u64{argv}, u64{envp}, u64{Emu.envp.size()},
+                u64{worker->id}, u64{program.dataAddress + 128}, u64{9}, u64{64},
+                {ppu_cmd::set_gpr, 11}, u64{program.entryOPD},
+                {ppu_cmd::set_gpr, 12}, u64{0x10000},
+                {ppu_cmd::ptr_call, 0}, std::bit_cast<u64>(execute)});
+            const u32 address = program.begin;
+            worker->cia = address + 0x900; worker->lr = address + 0x904;
+            worker->gpr[2] = 0x13579;
+            worker->gpr[30] = u64(reinterpret_cast<uintptr_t>(&program));
+            worker->state -= cpu_flag::stop + cpu_flag::exit + cpu_flag::suspend + cpu_flag::memory + cpu_flag::wait;
+            ARMSX3StartupLog("P32 BEFORE production TLS pool/copy/zero/slot reuse and guest r13-relative read");
+            *worker = thread_state::created;
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+            while (!program.completed.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline)
+                std::this_thread::yield();
+            if (!program.completed.load(std::memory_order_acquire))
+                throw std::runtime_error("P32 linked guest execution deadline exceeded");
+            (*worker)();
+            if (!program.tls || !program.abi || !program.tlsMemory || program.result != 21 || worker->gpr[3] != 42 ||
+                worker->gpr[8] != program.dataAddress + 128 || worker->gpr[9] != program.dataAddress + 32 ||
+                worker->gpr[11] != descriptor || worker->gpr[12] != program.begin + 96 ||
+                worker->gpr[2] != 0x13579 || worker->gpr[1] != program.initialStack ||
+                worker->gpr[13] || worker->cia != address + 0x900 || worker->lr != address + 0x904 || worker->state & cpu_flag::ret)
+            {
+                char error[180];
+                std::snprintf(error, sizeof(error), "P32 TLS-linked execution mismatch (wrapper result %d, worker TLS %d, entry ABI %d, TLS memory %d)",
+                    program.result, program.tls, program.abi, program.tlsMemory);
+                throw std::runtime_error(error);
+            }
+            return 0;
+        };
+        const auto expect64 = [](std::vector<u8>& bytes, u32 offset, u64 value) {
+            const be_t<u64> word = value; std::memcpy(bytes.data() + offset, &word, sizeof(word));
+        };
+        // Build expected bytes independently of the production packer.
+        const std::array<u64, 8> pointers{stackAddress + 0x7f80, stackAddress + 0x7f90,
+            stackAddress + 0x7fa0, 0, stackAddress + 0x7fc0, stackAddress + 0x7fd0, 0, 0};
+        for (u32 i = 0; i < pointers.size(); ++i) expect64(expectedStack, 0x7f40 + i * 8, pointers[i]);
+        std::memcpy(expectedStack.data() + 0x7f80, "probe", 6);
+        std::memcpy(expectedStack.data() + 0x7f90, "123456789012345", 16);
+        std::memcpy(expectedStack.data() + 0x7fa0, "1234567890123456", 17);
+        std::memcpy(expectedStack.data() + 0x7fc0, "LANG=C", 7);
+        expectedStack[0x7fd0] = 0;
+        for (u32 i = 0; i < 17; ++i) expectedStack[0x7fef + i] = u8(0xa0 + i);
+        // The production parameter handler itself rejects bad magic before linking.
+        vm::write32(dataAddress + 260, 0);
+        if (armsx3_ios_ppu_link_probe_image_and_call(&module, &elf.progs[2], executeLinked, &program) != -6)
+            throw std::runtime_error("P32 production PRX parameter handler accepted bad magic");
+        vm::write32(dataAddress + 260, control[1]);
+        if (std::memcmp(data, expectedData.data(), 0x10000))
+            throw std::runtime_error("P32 rejected PRX parameters mutated guest image");
+        ARMSX3StartupLog("P32 PASS: executable PRX parameter handler rejects bad magic before linking");
+        expect64(expectedData, 32, 42); expect64(expectedStack, frameAddress - stackAddress, initialStack);
+        expect64(expectedStack, frameAddress - stackAddress + 16, program.returnAddress);
+        expect64(expectedStack, frameAddress - stackAddress + 24, dataAddress + 32);
+        for (unsigned repeat = 0; repeat < 2; ++repeat) {
+            const int result = armsx3_ios_ppu_link_probe_image_and_call(&module, &elf.progs[2], executeLinked, &program);
+            if (result != 0) {
+                char error[160];
+                std::snprintf(error, sizeof(error), "P32 executable PRX parameter linkage failed (wrapper result %d, iteration %u)", result, repeat + 1);
+                throw std::runtime_error(error);
+            }
+            for (u32 address = 0x50000; address < 0x90000; address += 0x1000)
+                if (vm::check_addr(address)) throw std::runtime_error("P32 TLS pool remains mapped after worker cleanup");
+            for (const auto& region : std::array<std::pair<u32, const std::vector<u8>*>, 3>{
+                std::pair{codeAddress, &expectedCode}, std::pair{dataAddress, &expectedData}, std::pair{stackAddress, &expectedStack}})
+                if (std::memcmp(vm::base(region.first), region.second->data(), 0x10000) ||
+                    std::memcmp(vm::get_super_ptr(region.first), region.second->data(), 0x10000))
+                    throw std::runtime_error("P32 loaded ELF/code/BSS/stack/import restoration or alias mismatch");
+        }
+        if (std::memcmp(table, tableBefore.data(), tableBefore.size()) ||
+            std::memcmp(vm::get_super_ptr(tableAddress), tableBefore.data(), tableBefore.size()))
+            throw std::runtime_error("P32 registration mutated HLE descriptors/aliases");
+        for (u32 i = 0; i < handlers.size(); ++i)
+            if (cache[i].fn != handlers[i]) throw std::runtime_error("P32 registration mutated HLE dispatch");
+        for (u32 offset = 0; offset < 0x10000; offset += 0x1000)
+            if (vm::check_addr(tableAddress + offset, vm::page_writable))
+                throw std::runtime_error("P32 HLE descriptor page became writable");
+        for (u32 i = 0; i < codeHandlers.size(); ++i)
+            if (pageCache[i].fn != codeHandlers[i]) throw std::runtime_error("P32 guest execution mutated decoded code cache");
+        if (armsx3_ios_live_cpu_threads() != live || cpu_thread::g_threads_created.load() != created + 2 ||
+            cpu_thread::g_threads_deleted.load() != deleted + 2)
+            throw std::runtime_error("P32 registration changed CPU thread counters");
+        tableCleanup.release();
+        if (vm::dealloc(tableAddress, vm::main) != 0x10000 || vm::check_addr(tableAddress))
+            throw std::runtime_error("P32 HLE table deallocation failed");
+        segmentCleanup.release();
+        for (u32 allocated : {stackAddress, dataAddress, codeAddress})
+            if (vm::dealloc(allocated, vm::main) != 0x10000 || vm::check_addr(allocated))
+                throw std::runtime_error("P32 guest deallocation failed");
+        module.segs.clear(); module.addr_to_seg_index.clear();
+        vm::close(); initialized = false;
+        ARMSX3StartupLog("P32 PASS: shared production TLS memory bootstrap, main-thread r13, copied image/zero BSS/system areas, dirty slot clearing/free/reuse, actual guest TLS byte load/result42, exact arguments/stack/aliases and repeated pool cleanup; full process mutex/TLS HLE initialization/firmware/game boot remain untested");
+        return 0;
+    }
+    catch (const std::exception& error) { ARMSX3StartupLog(error.what()); if (initialized) vm::close(); return -1; }
+}

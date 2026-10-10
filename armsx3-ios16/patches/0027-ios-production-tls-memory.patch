@@ -1,0 +1,123 @@
+--- a/rpcs3/Emu/Cell/Modules/sys_ppu_thread_.cpp
++++ b/rpcs3/Emu/Cell/Modules/sys_ppu_thread_.cpp
+@@ -5,6 +5,11 @@
+ #include "Emu/Cell/lv2/sys_lwmutex.h"
+ #include "Emu/Cell/lv2/sys_mutex.h"
+ #include "sysPrxForUser.h"
++#include "Emu/Memory/vm_locking.h"
++
++#if defined(__APPLE__)
++#include <TargetConditionals.h>
++#endif
+ 
+ LOG_CHANNEL(sysPrxForUser);
+ 
+@@ -42,6 +47,7 @@
+ 		addr = vm::alloc(s_tls_size, vm::main);
+ 	}
+ 
++	ensure(addr); // Fail before writing through a null fallback allocation.
+ 	std::memset(vm::base(addr), 0, 0x30); // Clear system area (TODO)
+ 	std::memcpy(vm::base(addr + 0x30), vm::base(s_tls_addr), s_tls_file); // Copy TLS image
+ 	std::memset(vm::base(addr + 0x30 + s_tls_file), 0, s_tls_zero); // Clear the rest
+@@ -67,24 +73,93 @@
+ 	}
+ }
+ 
+-void sys_initialize_tls(ppu_thread& ppu, u64 main_thread_id, u32 tls_seg_addr, u32 tls_seg_size, u32 tls_mem_size)
+-{
+-	sysPrxForUser.notice("sys_initialize_tls(thread_id=0x%llx, addr=*0x%x, size=0x%x, mem_size=0x%x)", main_thread_id, tls_seg_addr, tls_seg_size, tls_mem_size);
+-
+-	// Uninitialized TLS expected.
+-	if (ppu.gpr[13] != 0) return;
+-
++static void ppu_initialize_tls_memory(ppu_thread& ppu, u32 tls_seg_addr, u32 tls_seg_size, u32 tls_mem_size)
++{
+ 	// Initialize TLS memory
+ 	s_tls_addr = tls_seg_addr;
+ 	s_tls_file = tls_seg_size;
+ 	s_tls_zero = tls_mem_size - tls_seg_size;
+ 	s_tls_size = tls_mem_size + 0x30; // 0x30 is system area size
+ 	s_tls_area = vm::alloc(0x40000, vm::main) + 0x30;
++	ensure(s_tls_area != 0x30u); // Fail before using a null pool allocation.
+ 	s_tls_max  = (0x40000 - 0x30) / s_tls_size;
+ 	s_tls_map  = std::make_unique<atomic_t<bool>[]>(s_tls_max);
+ 
+ 	// Allocate TLS for main thread
+ 	ppu.gpr[13] = ppu_alloc_tls() + 0x7000 + 0x30;
++
++}
++
++#if defined(__APPLE__) && TARGET_OS_IPHONE
++// Exercise the normal TLS memory bootstrap with an owned pool and the probe's
++// actual worker. Full sys_initialize_tls process mutex creation is a later step.
++extern "C" int armsx3_ios_ppu_probe_tls_and_call(ppu_thread* ppu, u32 image, u32 file_size, u32 memory_size,
++    int (*execute)(ppu_thread*, u32, void*), void* user)
++{
++	if (!ppu || !execute || !Emu.IsStopped() || get_current_cpu_thread() != ppu || ppu->gpr[13] ||
++		ppu->stack_addr != 0x30000u || ppu->stack_size != 0x8000u ||
++		image != 0x20080u || file_size != 9u || memory_size != 64u) return -1;
++	if (s_tls_addr || s_tls_file || s_tls_zero || s_tls_size || s_tls_area || s_tls_max || s_tls_map) return -2;
++	if (!vm::check_addr(image, vm::page_readable, file_size) ||
++		std::memcmp(vm::base(image), "iOSProbe", 9)) return -3;
++	for (u32 address = 0x50000; address < 0x90000; address += 0x1000)
++		if (vm::check_addr(address)) return -3;
++	struct Cleanup
++	{
++		ppu_thread& ppu;
++		bool active = true;
++		bool release()
++		{
++			if (!active) return true;
++			const u32 pool = s_tls_area >= 0x50030u && s_tls_area < 0x90000u ? s_tls_area - 0x30 : 0;
++			// Guest execution can reacquire the passive VM lock. Use the normal
++			// wait/unlock transition before the allocation writer lock on free.
++			vm::temporary_unlock(ppu);
++			ppu.gpr[13] = 0;
++			s_tls_map.reset();
++			s_tls_addr = s_tls_file = s_tls_zero = s_tls_size = s_tls_area = s_tls_max = 0;
++			active = false;
++			return !pool || (vm::dealloc(pool, vm::main) == 0x40000u && !vm::check_addr(pool));
++		}
++		~Cleanup() { release(); }
++	} cleanup{*ppu};
++	try
++	{
++		vm::temporary_unlock(*ppu);
++		ppu_initialize_tls_memory(*ppu, image, file_size, memory_size);
++		const u32 pool = s_tls_area - 0x30;
++		if (pool != 0x50000u || s_tls_addr != image || s_tls_file != file_size ||
++			s_tls_zero != 55u || s_tls_size != 0x70u || s_tls_max != (0x40000u - 0x30) / 0x70u ||
++			ppu->gpr[13] != pool + 0x7060u || !s_tls_map[0]) return -4;
++		// Dirty two unused slots so their system areas and zero-fill regions
++		// must be cleared by the real allocator rather than merely start zero.
++		std::memset(vm::base(s_tls_area + s_tls_size), 0xcc, s_tls_size * 2);
++		const u32 second = ppu_alloc_tls(), third = ppu_alloc_tls();
++		if (second != s_tls_area + s_tls_size || third != second + s_tls_size ||
++			!s_tls_map[1] || !s_tls_map[2]) return -4;
++		ppu_free_tls(second);
++		if (s_tls_map[1] || ppu_alloc_tls() != second || !s_tls_map[1]) return -4;
++		ppu_free_tls(second); ppu_free_tls(third);
++		if (s_tls_map[1] || s_tls_map[2]) return -4;
++		const int result = execute(ppu, pool, user);
++		if (ppu->gpr[13] != pool + 0x7060u || !s_tls_map[0]) return -5;
++		ppu_free_tls(s_tls_area);
++		if (s_tls_map[0]) return -5;
++		if (!cleanup.release()) return -7;
++		return result;
++	}
++	catch (...) { return -6; }
++}
++#endif
++
++void sys_initialize_tls(ppu_thread& ppu, u64 main_thread_id, u32 tls_seg_addr, u32 tls_seg_size, u32 tls_mem_size)
++{
++	sysPrxForUser.notice("sys_initialize_tls(thread_id=0x%llx, addr=*0x%x, size=0x%x, mem_size=0x%x)", main_thread_id, tls_seg_addr, tls_seg_size, tls_mem_size);
++
++	// Uninitialized TLS expected.
++	if (ppu.gpr[13] != 0) return;
++
++	ppu_initialize_tls_memory(ppu, tls_seg_addr, tls_seg_size, tls_mem_size);
+ 
+ 	sysPrxForUser.notice("TLS initialized (addr=0x%x, size=0x%x, max=0x%x)", s_tls_area - 0x30, s_tls_size, s_tls_max);
+ 

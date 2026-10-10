@@ -1390,3 +1390,72 @@ export behavior remain as implemented. Bundle44. Local property-family audit
 and plist validation PASS; Xcode/UIKit recompilation still requires Actions.
 No P31/core/patch or log selection logic changed. User will report Actions
 completion; do not monitor. After success install the IPA and run30 tests.
+
+## Build45 / P32 production TLS memory bootstrap — 2026-10-10
+
+User supplied ARMSX3-startup-20261010-200532-614-98466.txt, exporting build44
+PID98466. Latest run passes P31 and AUTO PASS all30 stages. The new .txt log
+attachment arrives and is fully readable; its build/result summary and latest
+session extraction work. Copy results itself was not separately confirmed.
+Keep treating accidental image-generation mentions as the user's browser bug.
+Do not monitor Actions after pushing; user reports completion.
+
+P32 integrates the TLS memory portion of sys_initialize_tls from upstream
+rpcs3/Emu/Cell/Modules/sys_ppu_thread_.cpp. The full HLE also initializes
+process mutexes and globals, so this bounded stage shares the production
+memory bootstrap and existing ppu_alloc_tls/ppu_free_tls first. Patch0027
+extracts that memory body into ppu_initialize_tls_memory, called by both the
+normal initializer and the diagnostic. Copy/zero/allocation/bitmap/r13 code
+is retained; one explicit null-pool guard is added before the first TLS write.
+The original fallback allocator likewise guards a failed allocation before
+writing. Earlier patches0001-0026 do not edit this upstream file.
+
+The diagnostic requires a stopped emulator, the current probe worker's owned
+32KiB stack, zero prior r13/TLS globals, exact source0x20080/file9/memory64,
+readable iOSProbe-NUL bytes in the production-loaded ELF data, and vacant
+pool pages. It owns a256KiB pool allocated at0x50000 with system prefix0x30,
+112-byte TLS slots and main r13=0x57060. It dirties two unused slots, calls
+the actual allocator to clear/copy/zero them, frees/reuses the second slot,
+and checks occupancy before invoking the linked guest callback. An RAII
+cleanup restores r13 and all owned TLS statics and destroys/deallocates the
+pool even after callback rejection/throw. It rejects preexisting global state
+without mutation. vm::temporary_unlock on the actual PPU context performs
+the required wait/passive-lock transition before VM allocation and cleanup;
+normal guest check_state may reacquire that lock between those operations.
+
+P32 preserves P31's real argument packer, ELF segment loader, PRX parameter
+linkage and worker register queue. The main VM block is extended to0x90000
+bytes so the pool fits beyond the existing code/data/stack/HLE pages. The
+callee's first two instructions become LBZ r3,r13,-0x7000 and ADDI r3,r3,-63,
+reading byte i (105) from the production-initialized TLS image to return42.
+Its final BLR and caller's BCTRL/stack/LR path stay intact. Twenty guest
+instructions plus HLE RETURN still give21 dispatches. Golden ELF hash changes
+to425793d502cd9f873d859ae752c1dd2f99d040c3. Entry registers carry the probe
+TLS image/file/memory metadata; callback checks those before initialization.
+Whole256KiB pool bytes and aliases match three copied9-byte images with
+zeroed system/BSS areas, before and after the guest read. Two link/worker/TLS
+cycles preserve arguments/frame/data/code/HLE dispatch, free all pool pages,
+balance CPU counters, and restore the prior stopped diagnostic state. Wrapper
+failure codes and ABI/TLS flags are logged on execution mismatch.
+
+Validation: patch0027 applies to pinned upstream. Extraction matches the
+original memory body apart from the explicit null-allocation guard. C++20
+host harness compiles actual bootstrap/allocator/free plus the wrapper using
+mocked VM/thread/logging. Main r13, copied bytes/zero BSS/system areas, dirty
+slots, bitmap free/reuse, fallback allocation/free, repeated cleanup, malformed/
+occupied/preexisting rejection, null allocations and25 injected VM access
+exceptions PASS under address/undefined-behavior sanitizers (leak scanning
+disabled for the host ptrace environment). Mock allocation/free assert the
+required wait/unlock transition, including after simulated guest reacquisition.
+The independent PPC model uses actual upstream helpers for shared encodings
+and verifies exact LBZ0x886d9000/ADDI0x3863ffc1, TLS read/result42, r13 and
+arguments/pool preservation,20 instructions and exact frame/result writes.
+Production P30 segment/parameter/linker regressions PASS, including150 read
+exceptions. Earlier P2-P31 bridge bytes are preserved. No local iOS SDK;
+actual Xcode compilation and device P32 behavior remain pending.
+
+Bundle45; App.mm31 ordered stages. After Actions succeeds install the IPA,
+run all31 diagnostics and send the .txt log or pasted Copy results. This
+stage does not parse a PT_TLS header, invoke the complete TLS HLE or create
+its process mutexes. Full process admission, firmware/LV2/RSX/game boot are
+still untested; no commercial PS3 game has booted.
