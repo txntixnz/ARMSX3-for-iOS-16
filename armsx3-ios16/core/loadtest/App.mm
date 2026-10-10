@@ -28,6 +28,7 @@ static constexpr DiagnosticStage stages[] = {
     {21, "ELF function call and stack return", "armsx3_core_test_elf_call"},
     {22, "ELF fixed segments and rollback", "armsx3_core_test_elf_fixed_segments"},
     {23, "Protected ELF code and data store", "armsx3_core_test_elf_protected_code"},
+    {24, "Production HLE table and ELF return", "armsx3_core_test_elf_hle_table"},
 };
 static constexpr NSUInteger stageCount = sizeof(stages) / sizeof(stages[0]);
 static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";

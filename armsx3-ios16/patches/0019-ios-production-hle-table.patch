@@ -1,0 +1,98 @@
+--- a/rpcs3/Emu/Cell/PPUModule.cpp
++++ b/rpcs3/Emu/Cell/PPUModule.cpp
+@@ -13,6 +13,7 @@
+ #include "Emu/VFS.h"
+ 
+ #include "Emu/Cell/PPUOpcodes.h"
++#include "Emu/Cell/PPUInterpreter.h"
+ #include "Emu/Cell/SPUThread.h"
+ #include "Emu/Cell/PPUAnalyser.h"
+ #include "Emu/Cell/timers.hpp"
+@@ -189,6 +190,55 @@
+ };
+ 
+ // Initialize static modules.
++static void ppu_initialize_hle_table(const std::vector<ppu_intrp_func_t>& hle_funcs)
++{
++	u32& hle_funcs_addr = g_fxo->get<ppu_function_manager>().addr;
++
++	// Allocate memory for the array (must be called after fixed allocations)
++	if (!hle_funcs_addr)
++		hle_funcs_addr = vm::alloc(::size32(hle_funcs) * 8, vm::main);
++	else
++		vm::page_protect(hle_funcs_addr, utils::align(::size32(hle_funcs) * 8, 0x10000), 0, vm::page_writable);
++
++	// Initialize as PPU executable code
++	ppu_register_range(hle_funcs_addr, ::size32(hle_funcs) * 8);
++
++	// Fill the array (visible data: self address and function index)
++	for (u32 addr = hle_funcs_addr, index = 0; index < hle_funcs.size(); addr += 8, index++)
++	{
++		// Function address = next CIA, RTOC = 0 (vm::null)
++		vm::write32(addr + 0, addr + 4);
++		vm::write32(addr + 4, 0);
++
++		// Register the HLE function directly
++		ppu_register_function_at(addr + 4, 4, hle_funcs[index]);
++	}
++
++	// Set memory protection to read-only
++	vm::page_protect(hle_funcs_addr, utils::align(::size32(hle_funcs) * 8, 0x10000), 0, 0, vm::page_writable);
++
++}
++
++
++#if defined(__APPLE__)
++#include <TargetConditionals.h>
++#if TARGET_OS_IPHONE
++// Use the production HLE table builder without module variable/linkage setup.
++extern "C" int armsx3_ios_ppu_prepare_hle_table()
++{
++	if (!Emu.IsStopped() || g_cfg.core.ppu_decoder != ppu_decoder_type::_static ||
++		!g_fxo->is_init() || !g_fxo->is_init<ppu_interpreter_rt>()) return -1;
++	if (!g_fxo->is_init<ppu_function_manager>() && !g_fxo->init<ppu_function_manager>()) return -2;
++	if (g_fxo->get<ppu_function_manager>().addr) return -3;
++	const auto& functions = ppu_function_manager::get();
++	// Bound diagnostic table allocation to one 64 KiB page.
++	if (functions.size() < 2 || functions.size() > 8192) return -4;
++	ppu_initialize_hle_table(functions);
++	return 0;
++}
++#endif
++#endif
++
+ static void ppu_initialize_modules(ppu_linkage_info* link, utils::serial* ar = nullptr)
+ {
+ 	if (!link->modules.empty())
+@@ -348,30 +398,7 @@
+ 	// Initialize double-purpose fake OPD array for HLE functions
+ 	const auto& hle_funcs = ppu_function_manager::get(g_cfg.core.ppu_decoder != ppu_decoder_type::_static);
+ 
+-	u32& hle_funcs_addr = g_fxo->get<ppu_function_manager>().addr;
+-
+-	// Allocate memory for the array (must be called after fixed allocations)
+-	if (!hle_funcs_addr)
+-		hle_funcs_addr = vm::alloc(::size32(hle_funcs) * 8, vm::main);
+-	else
+-		vm::page_protect(hle_funcs_addr, utils::align(::size32(hle_funcs) * 8, 0x10000), 0, vm::page_writable);
+-
+-	// Initialize as PPU executable code
+-	ppu_register_range(hle_funcs_addr, ::size32(hle_funcs) * 8);
+-
+-	// Fill the array (visible data: self address and function index)
+-	for (u32 addr = hle_funcs_addr, index = 0; index < hle_funcs.size(); addr += 8, index++)
+-	{
+-		// Function address = next CIA, RTOC = 0 (vm::null)
+-		vm::write32(addr + 0, addr + 4);
+-		vm::write32(addr + 4, 0);
+-
+-		// Register the HLE function directly
+-		ppu_register_function_at(addr + 4, 4, hle_funcs[index]);
+-	}
+-
+-	// Set memory protection to read-only
+-	vm::page_protect(hle_funcs_addr, utils::align(::size32(hle_funcs) * 8, 0x10000), 0, 0, vm::page_writable);
++	ppu_initialize_hle_table(hle_funcs);
+ 
+ 	// Initialize function names
+ 	const bool is_first = g_ppu_function_names.empty();

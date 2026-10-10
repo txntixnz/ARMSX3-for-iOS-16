@@ -962,3 +962,49 @@ separate data and two-instruction payload, OPD/layout and four invalid
 mapping bounds. Catalog/exports/whitespace PASS. Host cannot validate iOS
 memory protection or actual PPU handler execution; device test pending.
 Still no full ppu_load_exec, firmware, imports/syscalls, game boot or RSX.
+
+## 2026-10-10 — P23 device PASS; build35 / P24 production HLE table
+ARMSX3-startup(20261010-145448).log, pid96337 confirms all22 stages PASS;
+P23 real static interpreter fetches read-only code, executes two PowerPC
+instructions storing42 to separated writable data, verifies permissions,
+aliases/guards, then cleans VM and worker correctly.
+
+Patch0019 factors the existing production HLE descriptor/cache builder from
+ppu_initialize_modules into ppu_initialize_hle_table(const vector&). The
+normal module initialization passes its same original hle_funcs to this
+helper; the allocation/registration/write/protection body is unchanged.
+New iOS diagnostic-only prepare_hle_table wrapper requires stopped emulator,
+static decoder, initialized fxo/interpreter, unused function manager addr,
+and2..8192 functions (one64KiB table bound). Does not initialize module
+variables or linkage exports; no firmware/system process admission.
+
+P24 clones P21 actual ELF analyse/preparation/fast_call and14 guest
+instructions with stack/LR restoration. Main reserved area now192KiB; guest
+allocation64KiB plus separately vm::alloc-owned64KiB HLE table. Calls real
+production builder instead of manually installing only index1. Verifies
+all descriptors self-address/zeroTOC and manager func_addr pairs, odd cache
+slots match every registered handler, even slots remain fallback, entire
+backing page RO/readable/executable. Actual fast_call returns through table
+index1 HLE RETURN;15 dispatch steps. Full guest64KiB expected bytes include
+stack backchain/returnaddr and output35; old fake OPD removed. Full table
+page and privileged alias checked (including zero padding), all cache slots
+checked after execution. CPU counters/TLS/context checks inherited.
+
+TableCleanup RAII clears manager.addr and decommits table segment cache;
+success deallocates actual table64KiB then guest, releases guest segment
+cache and vmclose. On exception scopes unwind before vmclose. No retained
+block shared_ptr. Retains core-owned function-manager/interpreter objects
+for normal core reset. Patch19 targetPPUModule includes PPUInterpreter.h
+explicitly for diagnostic type use.
+
+CFBundleVersion35,23 automatic stages. Patch dry-run PASS against pinned
+source (no previous patch modifies PPUModule). Exact new bridge and exact
+extracted production builder/wrapper compile GNU C++23 with pinned real
+headers. Host runs exact builder and wrapper with mocked VM/fxo/state:
+3887 descriptors/handlers, RO protection, reuse without allocating another
+table, stopped/static/interpreter/existingaddr/count guards PASS. Host mock
+does not execute actual guest handlers or iOS VM protection. New device
+integration pending. Prior ELF stack fixture/analyser behavior unchanged.
+Production table body byte-preservation, catalog/exports/whitespace PASS.
+Next: module linkage/process initialization and full executable loading.
+Still no full ppu_load_exec, firmware, system syscall/gameboot/RSX.
