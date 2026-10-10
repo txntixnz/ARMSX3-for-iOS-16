@@ -4107,9 +4107,14 @@ extern "C" __attribute__((visibility("default"))) int armsx3_core_test_elf_expor
         writeExportWord(20, dataAddress + 160); // known function NID
         writeExportWord(24, dataAddress + 236); // export address table in BSS tail
         writeExportWord(44, dataAddress);       // real OPD (entry + TOC)
-        if (armsx3_ios_ppu_observe_probe_exports(&module, dataAddress + 192) != 0 ||
-            armsx3_ios_ppu_observe_probe_exports(&module, dataAddress + 188) != -1)
-            throw std::runtime_error("P26 production export scanner did not discover bounded guest descriptor");
+        const int exportResult = armsx3_ios_ppu_observe_probe_exports(&module, dataAddress + 192);
+        if (exportResult != 0) {
+            char error[160];
+            std::snprintf(error, sizeof(error), "P26 production export observation failed (wrapper result %d)", exportResult);
+            throw std::runtime_error(error);
+        }
+        if (armsx3_ios_ppu_observe_probe_exports(&module, dataAddress + 188) != -1)
+            throw std::runtime_error("P26 production export wrapper accepted invalid record start");
         ARMSX3StartupLog("P26 PASS: production PRX export scan found guest entry descriptor and function NID; no global exports registered");
         tableCleanup.release();
         if (vm::dealloc(tableAddress, vm::main) != 0x10000 || vm::check_addr(tableAddress))
@@ -4123,5 +4128,6 @@ extern "C" __attribute__((visibility("default"))) int armsx3_core_test_elf_expor
     }
     catch (const std::exception& error) { ARMSX3StartupLog(error.what()); if (initialized) vm::close(); return -1; }
 }
+
 
 

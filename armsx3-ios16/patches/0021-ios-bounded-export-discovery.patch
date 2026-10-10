@@ -1,6 +1,6 @@
 --- a/rpcs3/Emu/Cell/PPUModule.cpp
 +++ b/rpcs3/Emu/Cell/PPUModule.cpp
-@@ -977,4 +977,31 @@
+@@ -977,4 +977,36 @@
  	return result;
  }
  
@@ -24,11 +24,17 @@
 +	std::vector<u32> observed;
 +	const auto special = ppu_load_exports(*info, &localLink, start,
 +		start + sizeof(ppu_prx_module_info), true, &observed);
++	// The production scanner creates a local module shell before its
++	// observation-only continue. No function/variable links may be registered.
++	const auto module = localLink.modules.find("iOSProbe");
 +	if (!special.empty() || observed.size() != 1 ||
-+		observed.front() != info->segs[1].addr || !localLink.modules.empty())
++		observed.front() != info->segs[1].addr || localLink.modules.size() != 1 ||
++		module == localLink.modules.end() || !module->second.functions.empty() ||
++		!module->second.variables.empty() || !localLink.lib_lock.empty())
 +		return -3;
 +	return 0;
 +}
 +#endif
 +
  using import_result_t = std::pair<std::unordered_map<u32, void*>, std::unordered_map<u32, u32>>;
+

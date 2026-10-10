@@ -1078,3 +1078,34 @@ patches lexicographically. Test on-device after the new installable IPA build,
 share startup log from the latest PID. Next: production export registration,
 import backpatch and guest-to-guest function call, followed by real executable
 loader and process setup. Build37/device behavior NOT yet verified.
+
+## 2026-10-10 — P26 assertion repair / build38
+New log ARMSX3-startup(20261010-162211).log, latest PID96907: all 24
+stages P2-P25 PASS. P26 also completed its import/HLE/guest-execution and
+memory checks, then failed at the export-observation assertion. The real
+scanner log already shows iOSProbe FNID0x49524e31, OPD0x10400,
+entry0x10100 and TOC0x10400 correctly discovered. There is no device crash
+in this latest diagnostic sequence; failure is returned as -1 by the bridge.
+
+Root cause: patch0021 incorrectly required localLink.modules to stay empty.
+The pinned production ppu_load_exports creates its local iOSProbe module
+shell before the for_observing_callbacks continue. Observation skips actual
+function/variable registration, but still creates the empty local shell.
+
+Build38 preserves the production scanner and existing P2-P25 paths. The
+wrapper now requires exactly one iOSProbe module with empty functions,
+variables and library locks, plus the existing one-descriptor/empty-special
+checks. CoreBridge logs the exact wrapper return code on failure and checks
+invalid record start separately. Bundle version advances37->38; still25 tests.
+
+Validation in Work: a temporary C++20 host harness compiled the actual pinned
+production export scanner, PRX record and linkage structure with mocked VM,
+logging/HLE dependencies. It reproduced build37's -3 and passed the fixed
+wrapper, bad/null/stopped-state/metadata rejection, byte preservation and
+repeated observation without global registration. Address/undefined behavior
+sanitizers passed (leak scanning disabled due to host ptrace restrictions).
+Sequential PPUModule patches0019/0020/0021 checked and applied on pinned source.
+Host validation does not establish iOS/device success. Install build38 after
+Actions succeeds, run all25 tests and inspect newest PID. P26 device success,
+complete executable loader, firmware/LV2/RSX/game boot remain untested.
+
