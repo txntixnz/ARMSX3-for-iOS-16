@@ -2391,3 +2391,87 @@ treee890fc0a9feb2b6499cd02b8932417e55e1e9765. Build59 pending Actions/phone.
 Do not add P42 until P41 passes on phone. Do not monitor Actions after push.
 User installs ARMSX3_iOS16_INSTALL_THIS_IPA, reruns all40, sends .txt/.ips
 if another crash. Global process/firmware/RSX/game boot remain untested.
+
+2026-10-11: build59 all40 device PASS; build60/P42 guest MFTB
+-----------------------------------------------------------
+Uploaded ARMSX3-startup-20261011-095455-668-1705.txt, header build59,
+PID1705. P2-P41 AUTO PASS and final all-diagnostics PASS. P8 includes both
+instruction/mirror PASS and completed-cleanup PASS; P9-P12 also pass their
+SPU paths. The previous UIKit crash did not recur in this run. This device
+result supports0039 but one run cannot prove the timing-dependent race is
+permanently absent. P41 passes both joinable/detached repeats: current time,
+null-second/no-write and null-nanosecond/partial-write errors, frequency
+80000000, 44 steps, FIFO yields, 16 service calls/15 histories, cleanup.
+Do not describe this as global process or game boot validation.
+
+Before this log, user accidentally deleted the GitHub IPA artifact. Confirmed
+run38122783221 (build59 commitdaeab29460301e8ea6560ecf2e25c9dda2985b47)
+succeeded but install IPA absent; reran job114420781050 successfully through
+connector. No code change or build-number bump for artifact recovery.
+No monitoring; user subsequently supplied the successful phone log above.
+
+Build60 appends P42 export armsx3_core_test_guest_timebase and UI row42
+"Guest timebase full and upper reads". All784933 bytes of baseline
+CoreBridge.cpp (Git blob0138511efec8da94d4dada5293103ce3639a50fa) preserved
+as exact prefix; P2-P41 still unchanged. Include Emu/Cell/timers.hpp in new
+section for core get_timebased_time(). Reuse device-passed P41 private
+scheduler_time_and_call scope and syscall count policy4 unchanged; no new
+scheduler wrappers, services or production instruction-handler changes.
+
+P42 cloned P41 fixture, adds six callee words after SC147 frequency store:
+MFTB r5,TBR268; STD r5,64(r1); MFTB r5,TBR269; STD r5,72(r1);
+MFTB r5,TBR268; STD r5,80(r1). Architectural split TBR268 is the core's
+full64 result, TBR269 upper32. XFX primary31/XO371/Rc0 encodings7cac42e6
+and7cad42e6. Caller24 words unchanged, callee25/100 bytes, total49/196
+bytes at10000..100c4, 50 steps including HLE return (budget64). Calleeentry
+still10060; ELF data/TLS/process metadata unchanged. Golden SHA1
+b792c49b4f4717bfbcae80c1e54acb1d1b92c56b, independently reconstructs
+code/data and production hash records; prior P41 digest preserved.
+
+Callback brackets actual bounded guest execution with get_timebased_time()
+before/after. Read full/upper/full at frame64/72/80; require before<=first
+<=last<=after, upper within first>>32..last>>32 and zero-extended32 bits.
+Allows a low32 carry between reads; no arbitrary delay/progress requirement.
+Current-time syscall outputs/history PCs unchanged; SC48 shifts24 bytes
+within callee but preexisting history checks use final entry/host SC site.
+Service counts remain16/history15; full exact stack expected image extended
+only with three observed BE64 values. Frame128 retains untouched88..127;
+complete ELF/stack/peer-stack/TLS alias and canary checks preserved, repeated
+joinable/detached workers and retained unexecuted peers still clean up.
+
+New0040-ios-guest-timebase-fixture.patch changes only private iOS process
+probe loader wrapper: code max172->196 and exact allowlist108/136/172/196.
+No generic ELF loader change. Applies after0038 and reverses byte-exactly
+against staged PPUModule.cpp;0039 continues its independent SPU fix.
+
+Persisted tests:
+- test_p42_fixture.py: read-only independent instruction encoding/data/hash
+  reconstruction, P41 digest, 49-word lengths, three MFTB and store encodings,
+  unchanged SC positions/count. Optional CoreBridge.cpp path; defaults to
+  repo core/loadtest or local scratch source.
+- test_p42_loader.py: extracts exact pre0040/post0040 wrapper. Reproduces
+  old196-byte rejection; checks all4 permitted sizes, malformed TLS/process,
+  rejected neighboring sizes/no allocations/output mutation, rollback on
+  loader failure and bad loaded size. Supply before/after PPUModule paths.
+- test_p42_timebase.py: exact P42 Program/callback/TLS wrapper; full actual
+  production scheduler/priority/service/fast_call bodies, unchanged actual
+  MFTB operation lambda and get_timebased_time() from pinned core sources.
+  VM/SC transport/flags/locks and scalar guest fetch/decode use host shims.
+  Executes all49 loaded words/50 steps, validates stack/peer canaries and
+  syscall counts/history, both joinability modes. Five corrupt TB variants
+  must throw and restore scheduler state: oversizedupper, zero first/last,
+  last outside bracket, unshiftedupper. Controlled TSC branch verifies low32
+  carry values, high full64 preservation, scale50/offset7 and invalid selector
+  rejection; integration uses unchanged production POSIX monotonic branch.
+  Optional staged rpcs3 source-root and CoreBridge paths make it repo-usable.
+G++ C++20 Werror with ASAN/UBSAN, leak checks off due tool /proc limitation.
+Existing P40/P41 host callbacks and0039's three128-cycle mapping variants
+also passed. No local XcodeSDK/Darwin execution; device P42 still pending.
+
+Baseline maindaeab29460301e8ea6560ecf2e25c9dda2985b47,
+treea07352f85314ef9d89d1e31c0efdfe9b2ecfe95d. Build60 changes Bridge,
+App new row, Info59->60,0040,3 tests and this handoff. No workflow edits.
+Do not monitor Actions after push. User installs
+ARMSX3_iOS16_INSTALL_THIS_IPA, runs all41 diagnostics and sends new log.
+No P43 until P42 device result; peer execution/real context switching,
+scheduler start/full TLS HLE/firmware/RSX/global process/game boot untested.
