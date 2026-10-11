@@ -3929,3 +3929,119 @@ diagnostics, export startup log. No P60 until native phone P59 PASS.
 Actual LV2 scheduling, full TLS HLE/process mutex/global process setup,
 firmware/RSX/game boot remain UNTESTED; earlier P39–P49 scheduler peer
 contexts remain unexecuted. No unsolicited pictures.
+
+## 2026-10-11 — build 80 / P60 shared reservation competition and retry
+
+Device evidence: upload/ARMSX3-startup-20261011-205840-340-6790.txt,
+Build79 pid6790; Library libfile_40ff674bbd9081918d4982f862c893e9.
+Attached scratch file read directly. All58 P2–P59 AUTO PASS, final all-
+stages PASS/no AUTO FAIL. Native P59 about0.0129sec; three results2/2,
+TLS totals17/31,37/65,60/102. Paused reservations, ordered peer-write
+rejection and fresh recovery, retained reservation metadata/rdata/context,
+full memory/stack/TLS/aliases/cache/joins PASS. Native P60 pending.
+
+Build80 appends armsx3_core_test_shared_reservation_retry, UI P60 "Shared
+reservation competition and retry";59diagnostics P2–P60, plist80/iOS16.0.
+CI prepatch invokes test_p60_fixture.py with P43–P59 fixture regression
+chain. Entire1657191byte Build79 bridge prefix preserved; SHA256
+684057baf8716eb5560db03cff4317f6b0a699ac11d71c1badbd709741661c55.
+Appended47262bytes including separator. No pinned core/47patch changes.
+
+P60 retains all P59 arithmetic/FP/vector/status/nested-stack/TLS/atomics/
+paused-context/peer-write and lifecycle checks. Adds17words;104words/
+416bytes SHA1 9c460a614c715b9bccea9bff71d8bc445453c036. Shared word at
+23000 initialized ONCE before workers to44556600; complete surrounding
+DATA64KiB checked after every paired slice. Three transactions carry the
+same shared word forward to44556602,44556604,44556606, no host reset.
+Extra race CR/final outputs at original r6+2010/2014/2018 are disjoint
+from all prior outputs, operand/atomic lines and shared word.
+
+New guest tail PCs:
+348 LIS r5,2;352 ORI r5,r5,3000 -> shared address23000.
+356 LWARX r28,0,r5;360 ADDI r28,r28,1;364 STWCX r28,0,r5.
+368 MFCR r29;372 STW r29,r6,2010 records first outcome.
+376 BC12,2,+24 jumps to400 if CR0.EQ success (winner skips retry).
+380 LWARX r28,0,r5;384 ADDI r28,r28,1;388 STWCX r28,0,r5;
+392 BC4,2,-12 returns to380 if retry failed;396 NOP;400 MFCR r29;
+404 STW r29,r6,2014;408 LWZ r28,r5,0;412 STW r28,r6,2018;end416.
+Actual native LIS declaration and existing BC/ADDI/LWARX/STWCX/CR semantics
+inspected in pinned core. No local Xcode SDK/native compile/result.
+
+Both reserved loads and both additions finish before either first store
+attempt. Owner/peer bounded dispatches are released together at the store
+slice; real native atomic implementation must permit EXACTLY ONE success
+and one failure, accepting either winner. Full CR0 LT/GT/EQ/SO plus other
+CR/status preservation checked. Shared memory must be initial+1 after
+first attempts, including no neighboring byte changes. Release/acquire
+completion and real peer empty-queue wait occur between every slice.
+This creates overlapping reservations; no claim of physical instruction
+execution at the exact same instant or arbitrary scheduling coverage.
+
+First winner is determined only from captured CR0.EQ at slice46. C++ then
+sets instruction budget at slice48 to winner1/loser6; NO context/register
+writes or host conditional-store emulation occur in native bridge. Guest
+BC selects skip/reload path using its retained actual CR. Both end at400;
+loser reloads the updated word and stores initial+2 on its fresh retry.
+Retry branch backedge exists but must be untaken in this controlled case;
+unexpected retry failure/extra iterations stop within the bounded budget
+and fail diagnostic. Both final guest loads/stores must publish initial+2.
+Repeated failing retries, ABA/same-value cases, arbitrary contention and
+full128-byte cross-word invalidation are not proven by this phase.
+
+New slices43..51 budgets2,1,1,1,2,(winner1/loser6),2,1,1;
+PCs356,360,364,368,376,400,408,412,416. Final return1 for both workers;
+all51 earlier boundaries return-2. At44/45 raddr must be23000; all prior
+P59 active-address boundaries retained; other boundaries require raddr0.
+Before EVERY resume retain exact raddr/rtime/res_cached/use_full_rdata,
+all128rdata bytes and all previously checked GPR/FPR/VR/status/CTR/LR/CIA.
+r5 changes by guest setup at43, r28 tracks shared initial/incremented/
+retry/final values, r29 tracks real first/final CR readbacks. Prior r19–
+r27/old readbacks, TLS/stacks/FP/vector outputs remain checked unchanged.
+
+52slices/worker/transaction=312dispatches/306pauses/876instructions,
+39LWARX/51STWCX/30successes/21failures/60MFCR/108integer stores. Three
+first-store competitions each have one winner; three losing-worker fresh
+retries succeed.156peerjobs+queuedexit+owner=158queuepubs/callbacks.
+Exactlytwo retained workers/constructions/joins; TLS totals60/102. Peer
+retired before TLS free, owner joined before cache/deallocation/VM close.
+All setup/allocation/unwind/config/current-ID/TLS/queue guards inherited.
+
+Validation PASS:
+- test_p60_fixture.py checks frozen Build78 AND Build79 prefixes and all
+  P43–P59 fixture regressions. Independently encodes104 literal words,
+  executes separate scalar contexts across312slices/306stops/876steps.
+  Alternates first-store interleaving by transaction to exercise both
+  first winners, validates guest skip/reload/add/store/retry branches,
+  exact CR/registers/paused reservations/full DATA/TLS/stacks/guards,
+  six shared increments and all operation/PC/budget/store counts.
+- test_p60_pair.py extracts exact P60 plus production exec_task/bounded
+  helper/TLS bootstrap/slot guards from unchanged staged pinned source.
+  CPU/VM/reservations/queue/flags/instruction handlers remain HOST SHIMS.
+  Shared conditional stores are serialized by an explicit scalar-model
+  mutex; preferred host first winner alternates across eight full phases.
+  This does NOT substitute for native phone atomic validation. G++C++20
+  Wall/Wextra/Werror pthread ASAN+UBSAN detect_leaks0 PASS:16retained host
+  workers/2496slices; perphase158callbacks/pubs and all operation counts.
+  Both first-winner paths and losing-worker guest retry verified;3skip/
+  3retry entries/3successful retry exits/0taken retry backedges perphase.
+  Faults2..86 and all5allocations/stopped/PPU-slot/FXO plus independently
+  called exact TLS null/wrong-current/pool/pointer/duplicate/live/double-
+  free guards PASS with balanced joins/maps/probe/config/ID cleanup.
+  New faults detect both stores succeeding/both failing, wrong winner
+  skip/retry branch, missing retry increment, shared neighbor corruption,
+  bad shared reserved load/final load/first MFCR, rejected valid retry,
+  lost shared reservation and paused reservation timestamp corruption.
+- All58 native Build79 passes verified; exact frozen prefix, all59 unique
+  UI/export symbols/plist80/iOS16.0, unchanged47patches/pinned core, Python
+  syntax and git whitespace checks PASS. No upstream or patch change;
+  prior applicable patch-chain/native declaration validation retained.
+  Scratch p60-fixture-check.log and p60-host-check.log contain validation.
+
+Baseline main7bdf1d31fbaa05bc8ba07e3237d1885c04e20196. Standing user
+continuation authorizes next incremental build/push. Push Build80 main;
+DO NOT monitor/query Actions after push. User reports workflow outcome.
+Install ARMSX3_iOS16_INSTALL_THIS_IPA via TrollStore, run all59diagnostics,
+export startup log. No P61 until native phone P60 PASS. True LV2 scheduling/
+context switching, full TLS HLE/process mutex/global process/firmware/RSX/
+game boot remain UNTESTED; P39–P49 scheduler peer contexts unexecuted.
+No unsolicited images are part of this diagnostic change.
