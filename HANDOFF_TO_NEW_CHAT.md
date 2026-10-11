@@ -4145,3 +4145,105 @@ Actions after push. User reports workflow result; install
 ARMSX3_iOS16_INSTALL_THIS_IPA via TrollStore, run all60 diagnostics and
 send startup log. No P62 until phone P61 PASS. Full LV2 scheduling/process
 TLS/mutex/global process/firmware/RSX/game boot remain untested. No images.
+
+## 2026-10-12 local checkpoint: Build81 native PASS → Build82/P62 64-bit reservations and carry
+
+User attached ARMSX3-startup-20261011-220021-831-6943.txt. Read from
+scratch upload, not Library. Build81 confirmed; all60 stages P2–P61 AUTO
+PASS and final all-stage PASS, no FAIL. Native P61 winner roles0/1/0 and
+all three failed-retry/backedge/fresh-recovery transactions PASS; old shared
+44556602/04/06, new ordered44557703/06/09, results1/1 and totals17/31→
+37/65→60/102. Stage start1791756016.430256/end6016.438804 (~8.5ms).
+This confirms native peer winning/owner retry plus real guest taken BNE,
+not merely the host model. Full game boot remains untested.
+
+Build82 appends armsx3_core_test_wide_reservation_carry, P62 UI stage,
+plist82 and new fixture/host tests; CI advances to test_p62_fixture.py.
+Build81 original1757203-byte bridge prefix SHA256
+e95c88c8a0aaa86762042a84ccb0a99c1be624940db6edeb2800daaab0aed8ab
+frozen exactly. Prior P2–P61, all47patches and pinned core unchanged.
+61 diagnostics P2–P62. Native LDARX and STDCX decoder XO84/214, interpreter
+extern declarations and LDARX load/STDCX full64-bit value+CR0 EQ/SO paths,
+and ppu_load_acquire_reservation<u64>/ppu_store_reservation<u64> bodies
+verified against staged pinned primary source. No local native SDK compile.
+
+P62 retains all P61 cases and extends guest540→616bytes/154words, SHA1
+c07e96e3c6f2cc625f5486d6d9337e552b82dfe5. Fresh aligned line23100 seeded
+ONCE with55667788fffffffe. Three native ordered first winners1/0/1 (opposite
+P61 roles), both reserved loads and additions completed before first stores.
+Controller orders only first wide store slice71 through existing gates;
+no guest register/reservation/data/store-result editing. Loser takes guest
+reload/add/STDCX retry while winner branches around it. First transaction
+carries from low32-bit fffffffe→ffffffff→00000000, upper word55667788→
+55667789. Three transactions finish5566778900000000/00000002/00000004.
+Both final LD and STD publish full64-bit value; guards check neighboring
+bytes and both halves. Afterwards both guest contexts execute STDCX again
+with consumed reservation and same value as memory: all six MUST reject,
+without writes, full MFCR failure output checked at2040.
+
+New relative PCs:
+540 ADDI r5,r5,80;544 LDARX r28,r5;548 ADDI r28,r28,1;
+552 STDCX r28,r5;556 MFCR r29;560 STW r29,r6,2030;
+564 BC12,2,+24→588 winner skip;
+568 LDARX r28,r5;572 ADDI r28,r28,1;576 STDCX r28,r5;
+580 BC4,2,-12→568 retry (untaken here);584 NOP;
+588 MFCR r29;592 STW r29,r6,2034;596 LD r28,r5;
+600 STD r28,r6,2038;604 STDCX r28,r5 (must fail);
+608 MFCR r29;612 STW r29,r6,2040;end616.
+New slices68..78 budgets1/1/1/1/2/(winner1,loser6)/2/1/1/1/2;
+PC544/548/552/556/564/588/596/600/604/608/616. Final return2 both,
+all78 previous boundaries return-2. Active wide raddr23100 at69/70;
+exact full reservation/context snapshots before EVERY resume inherited.
+CR failure preserved at71/72 for loser, retry success73..76, consumed
+failure77..78; MFCR first72/final74/consumed78 readbacks verified.
+
+79slices/worker/transaction=474dispatches/468pauses/1110instructions.
+Total60reserved loads/78conditional stores/42successes/36failures/96MFCR;
+wide-only9LDARX/15STDCX/6successes/9failures.159integer guest stores:
+15332-bit stores+6wide outputs (host counts wide outputs separately from
+36stack stores).237peerjobs+exit+owner=239pubs/callbacks. Exactly two
+persistent workers/constructions/joins. Old TLS totals60/102, two stacks,
+full64KiB DATA, whole256KiB TLS, code/cache/aliases/guards all retained.
+Old line23000 ends44556606, ordered23080 ends44557709, wide23100 ends
+5566778900000004. Peer join before TLS free, owner join before VM close.
+
+Validation PASS:
+- test_p62_fixture.py chains P43–P61 plus Build78/79/80/81 frozen prefixes,
+  independently encodes154 literal words and executes474slices/468stops/
+  1110instructions. Full contexts/CR/PC/budgets/paused reservations/full
+  memory/TLS/stacks/store counts checked at each boundary; wide winner
+  roles1/0/1, low32 carry, exact64-bit loads/stores, retry and consumed
+  failures verified. Dedicated wide counters9/15/6/9, shared six updates.
+- test_p62_pair.py extracts exact P62 and unchanged production exec_task,
+  bounded helper and TLS bootstrap/slot guard bodies. Native CPU/VM/queue/
+  reservations/instruction handlers still HOST SHIMS. 64-bit scalar model
+  uses full64-bit read/write and the existing serialization mutex; wide
+  ordering supplied by exact bridge gates. G++C++20 Wall/Wextra/Werror
+  pthread ASAN+UBSAN detect_leaks0 PASS:8runs/16retained workers/3792slices;
+  all239pubs/callbacks and exact operation/role/counter checks. Faults2..115
+  detected with cleanup, all5allocations/setup/exact TLS guard negatives
+  retained. New faults99..115 catch truncated LDARX, swapped/truncated
+  STDCX value, lost upper-word carry, both first stores success/failure,
+  refused fresh retry/accepted consumed store, failed-store write, retained
+  or dropped reservation, neighbor corruption, wrong MFCR/finalLD/STD
+  output/winner branch/retry branch. Assert every new fault installed.
+- Build81 all60 native stages verified; exact Build81 prefix, all61 unique
+  UI/export symbols, plist82/iOS16.0, unchanged47patches, Python syntax and
+  git whitespace checks PASS. Scratch p62-fixture-check.log and
+  p62-host-check.log hold results. Native P62 compile is CI; device pending.
+
+Remote baseline main18340b3b01a2d03c364cbde008c7acfc2779e689,
+treeb4af7df351295b9f2927c1fe35085a895b1eb493. Standing continuation/log
+workflow authorizes next build push. DO NOT monitor/query Actions after
+push; user reports outcome. Install ARMSX3_iOS16_INSTALL_THIS_IPA via
+TrollStore, run all61 diagnostics and send startup log. No P63 until native
+phone P62 PASS. Arbitrary contention/ABA/full128 cross-word invalidation/
+LV2 scheduling/firmware/RSX/game boot remain untested. No image deliverable
+is requested by the attached diagnostic log.
+
+Publishing note: local snapshot has mode100644 for core/build-core.sh,
+core/package-loadtest.sh and ios/scripts/build-probe.sh, while remote has
+100755. Preserve remote baseline tree modes; local tree SHA cannot directly
+match remote unless those baseline mode differences are accounted for.
+Verify every published blob against local git hash-object and entire remote
+new tree against baseline+only intended seven files, including modes.

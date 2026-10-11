@@ -67,6 +67,7 @@ static constexpr DiagnosticStage stages[] = {
     {59, "Paused reservations and peer writes", "armsx3_core_test_paused_reservations"},
     {60, "Shared reservation competition and retry", "armsx3_core_test_shared_reservation_retry"},
     {61, "Ordered winners and failed retry backedge", "armsx3_core_test_ordered_reservation_backedge"},
+    {62, "64-bit reservations, carry and consumed stores", "armsx3_core_test_wide_reservation_carry"},
 };
 static constexpr NSUInteger stageCount = sizeof(stages) / sizeof(stages[0]);
 static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
