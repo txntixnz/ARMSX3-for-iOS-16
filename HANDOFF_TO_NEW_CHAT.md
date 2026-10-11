@@ -2691,3 +2691,76 @@ ARMSX3_iOS16_INSTALL_THIS_IPA, install TrollStore, run all45 diagnostics and
 send startup log. Do not advance toP47 until P46 device PASS. Actual peer
 execution/context switching/schedulerstart/full TLS HLE/global process/
 firmware/RSX/game boot remain untested. No images.
+
+
+## 2026-10-11 — build66 phone PASS; build67 adds P47 page attributes
+
+Phone ARMSX3-startup-20261011-124725-730-2787.txt, PID2787, build66:
+all45 AUTO PASS P2-P46 plus final all-diagnostics PASS, no AUTO FAIL.
+P46 both iterations return94: actual1MiB heap0x10000000, first/last
+word/endian subloads, availability1MiB/0/1MiB, oversized2MiB ENOMEM,
+null-output internal release, guest free/double-free and complete cleanup.
+Game boot remains pending. Do not confuse this diagnostic container with
+a future game RAM limit.
+
+Build67 adds armsx3_core_test_page_attributes/UI P47 Guest live and freed
+page attributes. All1137604bytes of build66 Bridge preserved as exact prefix.
+P47 retains P46's1MiB allocation, clocks/FIFO/TLS/heap/arguments/error checks,
+adding two actual loaded guest SC351 sys_memory_get_page_attribute calls.
+Live heap query after heap accesses and before during-allocation SC352 writes
+24byte big-endian sys_page_attr_t at DATA+448: attribute0x40000, access0xf,
+page_size0x100000,pad0; status0 at+472. These are the current production
+handler's reported fields; permissions/access fields are upstream TODOs,
+not proof of complete PS3 permission emulation. Freed heap query after
+free/double-free outputs to DATA+480, must returnEINVAL with all24bytes
+unchangedzero; status at+504. Exact guest PC/name/history/error checked
+for both queries (PC+300/+368), and full DATA/stack/code/TLS/peer aliases
+still compared after each of two joinability iterations. Production table
+SC351 function/name checked before fixture execution.
+
+Fixture103words/412bytes, callee79words/316bytes,104successsteps inclHLE.
+Guest allocation failure guard unchanged, skips16heap-access words and
+then attempts query of the unallocated address; host failure path88steps,
+no heap reads/writes, normal output checks reject it safely. Same CALLER/
+DATA metadata, CODE file600..79c inside fixture800. Golden SHA1
+c8cfa90edc95d79ef5c28e293942c461ca6867a0. SC352 PCs184/316/384,
+allocation208,free332,doublefree348,priority404. Policy7 adds351x2 to
+policy6 counts:28calls/27histories; prior policies0-6 retain exact counts.
+
+New0044 patch touches only private iOS PPUModule process fixture allowlist/
+max (adds412), lv2 diagnostic count policy and new stopped two-worker
+scheduler_page_attributes scope cloned from passed stats scope, sys_sync
+private declaration. Production SC351/allocate/free/query/VM/scheduler
+algorithms and bindings unchanged. P45 memory-statistics scope retained,
+including build65 FXO registry initialization and error/throw restoration.
+
+Validation passed: test_p47_fixture.py independently reconstructs P47
+opcodes/hash/inserted queries/guard/SC PCs/BSS bounds/ABI/status outputs,
+and transitively runs P43-P46 fixtures; now CI prepatch check.
+test_p47_loader.py extracts exact before/after0044 process wrappers,
+reproduces old412 rejection, tests all8accepted sizes, malformed TLS/
+process/lengths and complete output/allocation rollback.
+test_p47_memory.py extracts exact new Program/performSyscalls/callWithTLS,
+unchanged production page-attribute and all earlier service/allocator/
+accounting/time/MFTB/scheduler/IDM bodies. Locks/atomics/FXO/VM/SC transport
+and scalar guest execution remain host shims. Heap virtual0x10000000 uses
+dense backing translated by shim; deliberately different high nibble than
+worker stack0x30000, so actual SC351 takes VM path, not stack4KiB fast path.
+Valid/freed structs/status/history, seven injected page field/error/output
+corruptions reject and restore, null-output EFAULT/out-of-range EINVAL
+no-write and last-word1MiB attribute (host-only boundaries), all8count
+policies including missing351, heap/canaries/endian/ENOMEM, clock/FIFO/TLS
+registry/cached stats and error/throw/leak guards pass. G++C++20 Werror
+ASAN/UBSAN detect_leaks=0. Original P46 callback also passes new shared
+count code. All44patches apply/check and reverse/check against fresh
+pinned source reconstruction, reproduce complete final source bytes and
+restore original bytes; specific0044 three-file roundtrip also exact.
+Workflow YAML/plist/bridge-prefix/diff checks pass. No local Xcode SDK:
+full iOS compile/link and P47 phone execution pending.
+
+Baseline main2dce4cad73140de21ab4d6786bcc860fdf246745. Push build67 main;
+user observes Actions completion. Do not monitor Actions after push.
+Download ARMSX3_iOS16_INSTALL_THIS_IPA, install TrollStore, run all46tests
+and send startup log. NoP48 until phoneP47 PASS. Actual peer execution/
+context switching/schedulerstart/global process/full TLS HLE/firmware/
+RSX/game boot remain untested. No image creation for startup-log work.
