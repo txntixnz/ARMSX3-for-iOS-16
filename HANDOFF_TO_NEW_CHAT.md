@@ -3162,3 +3162,101 @@ and send startup log. No P53 until phone P52 PASS. Full sys_initialize_tls
 process mutex/HLE initialization, global process/LV2 scheduler admission/
 context switches/firmware/RSX/game boot remain UNTESTED. Earlier P39-P49
 scheduler peers remain unexecuted. No images requested or generated.
+
+## 2026-10-11 — build72 phone PASS; build73 adds P53 persistent guest TLS
+
+User supplied ARMSX3-startup-20261011-153907-336-4396.txt and Lets goo.
+Library idlibfile_b6cc7b126a208191b02e5a10ee756337; scratch ../upload same
+filename. Build72 ALL51 P2-P52 AUTO PASS plus final all-stages PASS; no
+AUTO FAIL. P52 native four pairs44/72,-2/78,56/-2,62/90 passed: owner/
+peer production TLS57060/570d0, guest image/zero BSS and isolated writes,
+either budget stop, full aliases/guards and two joins. This newly confirms
+native paired TLS memory/constructor-slot execution, not full TLS HLE
+process mutex initialization or LV2 scheduler/context switching.
+
+Build73 adds armsx3_core_test_persistent_guest_tls/UI P53 Persistent guest
+TLS and budget recovery. Previous1424452byte Bridge prefix byte-exact.
+No source patch added or changed: all47patches retain build72 validation.
+Combines P51 persistent command-queue reuse with P52 real owner TLS bootstrap,
+peer slot allocation/constructor TLS and join-before-free. Exactly TWO
+workers constructed once, owner callback remains inside one existing
+production owned TLS bootstrap, peer remains alive for eight notified
+queued jobs and one queued exit. Exactly one pool and slot per worker
+throughout all16guest jobs. Owner creates peer inside its callback and
+unlocks VM before waiting/joining; RAII cancel/wake/launch-unstarted/join
+retires peer before slot/global pool cleanup, including errors. Callback
+storage declared before owner StopOwner so it outlives every join.
+
+Shared13opcodes52bytes retain P52 loop/image read, read own previous TLS
+BSS via r13-6ff4, ADD that value into count, store/read back own new total,
+store image/previous/total to separate DATA output, ORI9->10with100. Core
+PPUOpcodes.h exposes no ADD encoder: encode X-form manually as
+(31<<26)|(3<<21)|(3<<16)|(8<<11)|(266<<1)=7c634214, as older phases encode
+unexposed helpers. No invented ADD call in final Bridge/host shim. TLS
+pointers57060/570d0 untouched between jobs, normal image/system/unused
+BSS/whole256KiB pool guards and both aliases compare every batch. Outputs
+DATA20100+round*40+i*20 are disjoint12-byte slots with earlier outputs
+retained and untouched limited slots. Full64KiB DATA and super alias
+compared every batch; full CODE/both stacks/cache/aliases after final joins.
+
+Counts17+round*3+i*14, budget8 for(round%4==1,owner) or(round%4==2,peer),
+128 otherwise. Exact results45/73,-2/79,57/-2,63/91,69/97,-2/103,81/-2,
+87/115. Per-batch totals17/31,17/65,40/65,66/105,95/148,95/194,130/194,
+168/246. Success2*N+11steps/CIA10034/r3/r9=total,r7=694f5350,r8=previous,
+r10=total|100,CTR0. Limited8steps/CIA10008/r3=3/CTR=N-3, TLS value and all
+tail registers/output slots unchanged. Each limited worker later recovers
+on same CPU/slot at(round,index)=(2,0),(3,1),(6,0),(7,1). Runner resets only
+its own live inputs/registers/PC/CTR, records14-register/CPU TLS snapshot,
+no syscalls/interrupt/exit. Host owner compares peer snapshot after exact
+release/acquire completed count round+1; never reads peer live registers
+until final join. Callback has no Program/guest access after publication.
+Owner inputs republished after previous peer completion and native queue
+publication. Gate uses monotonic released rounds; ready/completed require
+exact round+1. Queue-wait aggregate counter grows each job (peer is the
+only CPU returning to an empty queue); both live/created+2/deleted baseline
+are required each batch, proving no recreation. Allocation/free while
+peer live reject without mutation. After batch8, real queued peer exit
+executes once, owner unlocks and joins before slot free/double-free guard.
+Existing bootstrap then frees main slot/maps/globals/pool and restores
+owner r13=0; owner exits/publishes, main joins. Final totals168/246/result87/
+batches8 and CPUcreated/deleted+2/live0 required; TLS pages all unmapped,
+segment cache released before four guest deallocations/VM close. Config
+and thread-local construction IDs restored.
+
+Validation passed:
+- test_p53_fixture.py independently encodes13words including ADD fields,
+  signed r13 offsets and ORI direction; retains two scalar contexts and
+  shared pool/data through eight interleaved batches. Independently checks
+  every result/PC/steps/register, previous/total, whole pool/data bytes,
+  limited untouched state, four recoveries and exact accumulated history.
+  P43-P52 fixture/hash checks retained; CI prepatch invokes P53.
+- test_p53_pair.py extracts EXACT full P53 phase and unchanged production
+  TLS globals/allocator/free/bootstrap/peer guards plus probe/exec_task/
+  bounded helper. p53_host_shims.cpp models persistent std::thread workers,
+  mutex/CV queues, strict vm::addr_t enum, thread-local IDs, flags/VM/scalar
+  instructions. Eight repetitions16host workers/128guest jobs; constructor
+  count2 and callback/queue publications10 per run (owner callback +8peer
+  jobs +1peer exit). Guest instruction yields interleave workers; every
+  callback/exit asserts its own production probe cleared/ID restored.
+  Exact eight batch logs/results, totals, snapshots/TLS/guards/aliases/maps/
+  config/counters pass. Corrupt load/data/code/peer BSS/constructor r13,
+  initial/midbatch/queued-exit publication error, dropped third peer job,
+  active-gate cancellation, instruction throw, peer constructor failure,
+  all5allocations (including pool) and stopped/slot/FXO guards all error
+  with balanced joins, maps/probe/TLS globals cleared and config/IDs restored.
+  Also retains independent exact helper null/wrong-current/pool/pointer/
+  duplicate/live-peer/double-free/unchanged-byte guards from P52. G++C++20
+  Wall/Wextra/Werror ASAN/UBSAN detect_leaks=0 PASS. VM/queue/CPU lifecycle/
+  passive-lock/native PPU operations are host shims; native iOS phase pending.
+- Old prefix/plist73/YAML workflow/UI52 uniqueP2-P53 symbols/whitespace pass.
+  No source patch changed; previous full47patch chain check/apply/reverse/
+  pinned EOF and byte identity validation remains valid. No local Xcode SDK:
+  native iOS compile/link/device P53 pending.
+
+Baseline main3e3eae74c55f367ed3c8d7caaf569425fc0a4a80. Push build73 main;
+user observes Actions completion. DO NOT monitor Actions after push.
+Install ARMSX3_iOS16_INSTALL_THIS_IPA via TrollStore, run all52diagnostics
+and send startup log. No P54 until phone P53 PASS. Full TLS HLE process
+mutex/global process/LV2 scheduler admission/context switches/firmware/RSX/
+game boot remain UNTESTED. Earlier P39-P49 scheduler peers remain unexecuted.
+No images requested or generated.
