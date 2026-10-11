@@ -4473,3 +4473,118 @@ TrollStore, run all63 diagnostics and send startup log. No P65 until native
 P64 PASS. After that, prioritize integrating guest synchronization/scheduler
 behavior over adding equivalent atomic fixtures. Preserve remote script
 100755 baseline modes; verify remote baseline tree+only seven intended files.
+
+## 2026-10-12 checkpoint: Build84 native PASS → Build85/P65 integrated guest spinlock
+
+User attached ARMSX3-startup-20261011-233546-624-7416.txt. Read scratch
+attachment. Build84 confirmed, all63 diagnostics P2–P64 AUTO PASS and
+final all-stage PASS, no FAIL. Native P64 starts1791761742.296294 and ends
+1742.309789 (~13.5ms). All three115-slice transaction pairs results2/2,
+totals17/31→37/65→60/102, old shared/wide results preserved. Native full128
+cross-word stores, cached reload timestamps/source cached addresses,
+outside-line rejections/fresh recovery/consumed failures all PASS.
+User explicitly selected Midnight Club Los Angeles as desired first game;
+that is a future target, game boot/RSX/firmware still untested. Build84 ZIP
+was accidentally deleted; reran successful workflow's single build job
+114600110769 on run38183256017 (attempt2) with GitHub rerun_job, success=true.
+No source changes for rerun. User supplied this phone log afterwards.
+
+Build85 appends ONLY armsx3_core_test_guest_spinlock_handoff, adds P65 UI,
+plist85, CI test_p65_fixture.py and two new tests. Original Build84 prefix
+1941662 bytes SHA256
+63e582a260e62048c8f07078e9bbde0d73ff90649d7af1e98b5392923b0165ff
+frozen exactly. Previous P2–P64/47patches/pinned upstream unchanged;64 UI
+stages P2–P65. P65 is a new compact workload; it does NOT rerun all P64
+atomic fixtures internally (the UI and chained fixtures retain them).
+Scaffold uses proven two persistent native workers, production TLS slots,
+bounded dispatch, gate/queue/lifecycle/VM cleanup from P64. Job initializer
+sets transaction inputs once, all later resumes compare complete retained
+GPR/FPR/VR/status/CIA/CTR/LR and reservation snapshots without edits.
+Reservation mode0 and stopped-core RSX accessfalse held for this diagnostic,
+saved/restored on all exits, with all other configuration RAII preserved.
+
+New guest spinlock program29words/116bytes, SHA1
+c8762334c18218a5eae0ad7f502135218ee598e8:
+0 LWARX r7,r5;4 CMPWI r7,0;8 BNE -8→0 if held;
+12 LI r8,1;16 STWCX r8,r5;20 BNE -20→0 if lost acquisition;
+24 ISYNC;28 LWZ r9,r5,128 counter;32 LWZ r11,r5,132 checksum;
+36 ADDI r9,r9,1;40 ADD r11,r11,r10 token;
+44 STW counter;48 STW checksum;52/56/60 STW own counter/checksum/token;
+64 LWSYNC;68 LI r8,0;72 STW lock release;
+76 LWZ r12,r13,-6ff4 previousTLS;80 ADDI r12,r12,1;
+84 STW TLS;88 STW own TLS output;92..112 six NOPs;end116.
+Native primary CMPI/ISYNC/SYNC decoder XO and interpreter handlers inspected;
+ISYNC handler atomic_fence_acquire, SYNC handler atomic_fence_seq_cst
+(including guest LWSYNC encoding). Fence opcodes/decode executed, but this
+controlled test is NOT a weak-memory litmus test.
+
+Shared lock23000=0, counter23080=0, checksum23084=0 initialized ONCE.
+Tokens1..6, own outputs20200+transaction100+worker80. Two retained threads
+execute3transactions each, first roles0/1/0. Both load lock0 before first
+store. Designated first stores1; other conditional store loses and guest
+BNE retries. Waiting worker completes THREE LWARX/CMPWI/BNE held-lock loops
+while first worker computes/updates protected counter/checksum and outputs.
+Whole DATA check ensures waiting worker cannot write protected values or
+its own outputs during held-lock slices. First guest LWSYNC/STW releases0;
+second guest reserved load sees0, STWCX takes lock, ISYNC enters critical
+section, updates each value exactly once and releases. Both TLS counters
+advance once per transaction. Final lock0, counter6, checksum21, TLS3/3.
+Counter/checksum histories2/3→4/10→6/21; own output counter/checksum shows
+which worker owned each critical section. Release/acquire word and adjacent
+bytes/full DATA/full TLS/stacks/aliases/cache preserved at every boundary.
+No host controller writes guest lock/counter/output/register/reservation
+results. Only acquisition slice1 and release-before-reload slice7 are
+ordered by native callback gates; other paired slices release concurrently.
+
+16slices per worker pertransaction=96dispatches/90pauses/219instructions,
+first29steps/second44steps (extra6lost-acquisition instructions+9held-loop
+instructions).18LWARX/9STWCX/6successes/3failures;18CMPWI,9held BNE backedges,
+3lost-acquisition backedges,6successful acquisition exits,6ISYNC/6LWSYNC.
+42non-TLS32-bit stores+6TLS stores; lock12writes (6conditional locks+
+6ordinary releases), counter/checksum6writes each,24own output stores.
+No guest calls/stack/FP/vector writes; all untouched64-bit GPR and FPR/VR/
+status/stack canaries checked.48peerjobs+exit+owner=50pubs/callbacks.
+Exactlytwo persistent workers/constructions/joins. Peer join before TLS free,
+owner join before VM/cache/deallocation; all errors cancel gates and balance
+maps/thread counts/TLS/id/config/probe state. Sequential role alternation
+also exercises native cached reservations without resetting rtime/res_cached.
+
+Validation PASS:
+- test_p65_fixture.py chains P43–P64 and all frozen prefixes throughBuild84;
+  independently encodes29 literal words and models96dispatches/90stops/
+  219instructions with scalar memory, CR, cached reservation timestamps and
+  real guest branch targets. Checks full GPR/CR/PC/step budgets/active raddr,
+  exact lock/protected values/deferred outputs/whole memory/TLS/guards and
+  operation/write counts at every boundary; both lock owner roles tested.
+  Static Build84 hash retained (not dynamic gitHEAD), safe for CI/new commits.
+- test_p65_pair.py extracts exact P65 plus unchanged production exec_task,
+  bounded helper and TLS bootstrap/slot guards. CPU/VM/queue/reservations/
+  instruction/fence operations remain HOST MODELS, not native emulation.
+  G++C++20 Wall/Wextra/Werror pthread ASAN+UBSAN detect_leaks0 PASS:8runs/
+  16retained workers/768slices; all50pubs/callbacks and instruction/branch/
+  fence/store/lifecycle counters exact, all three transaction log values.
+  Selected applicable foundational faults2..17/26/27/36..41/48/49/51..55/
+  59/60 and new147..167 detected; unused old instruction-specific faults
+  not claimed. New faults catch bad compare/held or lost retry branch,
+  wrongly successful/rejected acquisitions, wrong counter/checksum update,
+  premature/missing unlock, waiting-worker output write, lost paused
+  reservation/status/TLS/token/neighbor output, failed store writing lock,
+  changed stack/CR/address/retry PC. All5allocation/setup/exact TLS guard
+  negatives and config max3/RSXtrue restoration retained. Test template
+  bswap64 name preserved (do not blindly replace p64 substrings).
+- Build84 all63 native diagnostics verified.64unique UI/export symbols,
+  exact frozen prefix/plist85/iOS16.0/47unchangedpatches/Python syntax/git
+  whitespace PASS. Scratch p65-fixture-check.log and p65-host-check.log
+  contain results. Native P65 compile via CI; phone result awaits user.
+
+Remote baseline maind29292e1bb8ec5b00c17bc92c7a0e0de4c0b8301,
+tree793c716120e444a53e3f75fec59a05536e7c5528. Standing log/continuation
+workflow and observed native P64 PASS authorize Build85 push. DO NOT
+monitor/query Actions after push; user reports outcome. Install
+ARMSX3_iOS16_INSTALL_THIS_IPA via TrollStore, run all64 diagnostics and
+send startup log. No P66 until phone P65 PASS. Next consider production
+synchronization HLE / actual scheduler integration, not equivalent atomic
+fixtures. Controlled guest spinlock workload is now integrated, while
+arbitrary contention/weak-memory stress/production sys_spinlock HLE/LV2
+scheduling/renderer/firmware/game boot remain untested. Preserve remote
+100755 script baseline modes; verify baseline tree+seven intended changes.
