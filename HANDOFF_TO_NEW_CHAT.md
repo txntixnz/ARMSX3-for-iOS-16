@@ -3480,3 +3480,129 @@ context switches/full TLS HLE process mutex/global process/firmware/RSX/
 game boot remain UNTESTED. This phase proves bounded guest calls and stack
 continuation, not actual LV2 scheduling. P39–P49 scheduler peer contexts
 remain unexecuted. No images requested/generated.
+
+## 2026-10-11 — build 76 / P56 paused floating-point and vector guest calls
+
+Newest phone evidence: upload/ARMSX3-startup-20261011-165241-768-5063.txt
+(build75, pid5063; Library libfile_f5ce5e1901608191861e806eded1f6be,
+attachment file_00000000e19481f481a579fdbd174622). All54 P2–P55 AUTO PASS,
+final all-stages PASS, no AUTO FAIL. P55's six nested caller/callee/leaf
+transactions complete 72 dispatches/66 pauses, exact stack/SP/LR/rTOC,
+results2/2 for each pair and TLS totals17/31,37/65,60/102. Full aliases/
+cache and join/cleanup pass. Native P55 about0.0029 sec. Next stage authorized.
+
+User "Continue this task" while P56 validation was in progress: continue
+same ARMSX3 objective. Build76 adds armsx3_core_test_resumed_guest_simd,
+UI56 "Paused floating-point and vector guest calls": 55 diagnostics P2–P56.
+Plist76; CI fixture56. Appends425lines/33013bytes to CoreBridge.cpp while
+retaining the exact entire build75 prefix1501861bytes. No changes to
+upstream sources or the47 overlay patches. No image artifact requested by
+actual task text; none generated (tool-selection hint had image_gen, but
+startup text/log continuation is the active task; user has opposed
+unsolicited images in earlier emulator tasks).
+
+New milestone adds native PPU LFD/FADD/STFD and LVX/VXOR/STVX to P55's
+nested guest calls, with real production TLS slots and two persistent
+native PPU workers. Shared49words/196bytes, SHA1
+0b455429814787413fabaf02c87bf75e18214e58. Caller+0/callee+64/leaf+144 stay
+unchanged; main end branch at+44 now B(152) to+196. Leaf loop ends at+160,
+then two LFDs at160/164, FADD168, STFD172, LVXs176/180, VXOR184, STVX188,
+BLR192. Native PPUOpcodes.h exposes LFD/STFD/LVX/STVX; no FADD/VXOR
+encoders, so explicit A-form FADD wordfc61102a and VXOR106114c4 used.
+Staged real interpreter semantics and decoder entries inspected; ADD's
+manual X-form retained. Exact literal words/manual definitions checked
+by independent fixture. Native code and native handlers are not compiled
+locally (no Xcode SDK); device P56 result pending.
+
+Each of three paired transactions has18 slices per worker: 108 bounded
+calls and102 budget stops. Budgets:
+4,7,3,5,2*N-6,2,1,1,2,1,1,3,2,2,5,3,2,8.
+Exact paused CIA offsets:
+16,144,156,152,160,168,172,176,184,188,192,96,104,112,20,32,40,196.
+First17 slices return-2, final returns2. Calls2*N+40 instructions,
+564 total per phase. Added six FADDs/six STFDs/six VXORs/six STVXs and
+12 LFDs/12 LVXs; same36 stack stores/12 linked calls/12 BLR returns/
+six TLS stores/18 integer output stores. TLS counts and final totals
+remain17/31,37/65,60/102. Native LV2 scheduling is still NOT exercised.
+
+For each worker/transaction, output slot=20200+transaction*100+worker*80.
+Initial outputs and gaps are a5. Integer image/previous/total at0/4/8;
+FP result8bytes at+16; vector result16bytes at+32; inputs at+64,+72,
+vector A+80/vector B+96. Entire slot128bytes leaves guards and previous
+outputs intact. DATA initialized once before workers, copies TLS image
+at20080. Double inputs left=1.5+transaction*0.5+worker*2.0 and
+right=2.25+transaction*0.25+worker*4.0, sums3.75/9.75,4.5/10.5,5.25/11.25;
+all exactly representable. Native byte outputs checked big-endian via
+bit_cast<u64>/be_t<u64>. Vectors use distinct nonuniform byte patterns:
+A=10+transaction*17+worker*53+byte*3,
+B=e1-transaction*11-worker*29-byte*5 (mod256); expected bytewise XOR.
+This validates vector endian conversion/lane order as well as computation.
+
+Cold initialization only at transaction slice0: all32 FPRs=7.0, all32
+VRs raw3c canaries; r5=80,r11=96,r12=32 for indexed vector access. Later
+callbacks resume with no resets. Full prior GPR+CTR/LR/CIA snapshot and
+256raw FPR bytes/512raw VR bytes compared BEFORE any dispatch or write.
+After dispatch, all32 FPR bit patterns checked against their exact stage
+values and unchanged7.0 canaries. VR1/2/3 canonically serialized through
+real be_t<v128> and checked against loaded/computed vectors; every byte
+of the remaining29 VRs must retain3c. Floating/vector register snapshots
+refreshed only after dispatch. FPSCR/CR/XER/general FP edge cases are
+not part of this phase; do not claim complete architectural state validation.
+
+Slice5: both FPR inputs loaded, f3 still7.0, FP output untouched.
+Slice6: FADD result retained, output untouched.
+Slice7: STFD output committed; vectors still3c.
+Slice8: both vectors loaded, v3 still3c, vector output untouched.
+Slice9: VXOR retained, output untouched.
+Slice10: STVX committed. Slice11 returns leaf and loads TLS image/previous;
+12 TLS commit;13 first two integer output words;14 callee epilogue/return;
+15 caller total output/LR load;16 restores original SP/LR;17 completes.
+All64KiB stack normal/super images (two128byte frames each), whole256KiB
+TLS pool, DATA aliases, guards/unused slots/old outputs checked every
+slice. Full CODE/data/stacks/cache and deallocation verified after joins.
+
+Owner/peer lifetime and cleanup inherited from phone-proven P55.54 peer
+jobs+queued exit+owner callback=56 publications/callbacks, exactly two
+constructions/joins. Gate ordinaltransaction*18+slice+1; real empty queue
+wait counter grows with live2/created+2/deleted baseline invariant. Peer
+completion remains final Program/guest memory access; release/acquire
+wait before owner edits/reads. Final slices54/batches3/result2/totals60/102.
+Peer joins before slot free; bootstrap resets owner r13/map/TLS globals/
+pool, owner joins before cache decommit/guest frees/VM close; all unwind
+cancel/unstarted-worker/join/config/thread-local-ID guards retained.
+
+Validation PASS:
+- test_p56_fixture.py independently encodes49 literal words/manual fields,
+  executes separate interleaved scalar GPR/FPR/canonical VR contexts with
+  retained stacks/TLS/data through all108 slices. Exact PC/CTR/LR/SP/rTOC,
+  every FPR/vector byte/canary, deferred store and full memory image;
+  564 instructions/102 stops, all operation/store/call counts, final60/102.
+  P43–P55 hash/fixture regressions retained; CI prepatch invokes P56.
+- test_p56_pair.py extracts exact full P56 bridge and production bounded
+  probe/exec_task/helper, TLS globals/bootstrap/alloc/free/paired guards.
+  Extends unchanged checked-in p53_host_shims.cpp with explicit phase
+  fault ordinal56, double/VR storage and big-endian vector conversion,
+  fixture-specific scalar FP/vector operations. Native CPU/VM/flags/
+  queue/instruction handlers are HOST SHIMS, not native iOS operations.
+  G++ C++20 Wall/Wextra/Werror pthread ASAN+UBSAN detect_leaks=0 PASS:
+  eight phases/16 persistent host workers/864 slices, exact56 callback/
+  publication count, two joins and operation counts per phase. Corrupted
+  paused unused FPR/VR, computed f3/v3 before store, FP load/add/store,
+  vector endian/XOR/store, plus all prior register/stack/branch/return/
+  CODE/DATA/TLS/constructor/publication/dropped-job/gate/instruction
+  faults detected with balanced joins/counts and cleared maps/probe/
+  TLS globals/config/IDs. Allfive allocations and stopped/PPU-slot/FXO
+  guards, independent null/wrong-current/pool/pointer/duplicate/live/
+  double-free TLS guard calls passed. Results saved in scratch logs.
+- Exact1501861-byte prior Bridge prefix; all55 unique UI/exports P2–P56,
+  plist76/YAML fixture56/unchanged47patches/whitespace PASS. Prior full47
+  patch-chain/pinned-EOF check/apply/reverse/byte identity remains valid
+  because no upstream source or patch changed. No local Xcode SDK.
+
+Baseline mainec19b0be75277ca6c8bc7190cf3bcc615a92339b. Push build76 main;
+user reports build completion. DO NOT monitor Actions after push.
+Install ARMSX3_iOS16_INSTALL_THIS_IPA in TrollStore, run all55diagnostics
+and send startup log. No P57 until phone P56 PASS. Real LV2 scheduling/
+context switches/full TLS HLE process mutex/global process/firmware/RSX/
+game boot remain UNTESTED. Earlier P39–P49 scheduler peer contexts remain
+unexecuted. No unsolicited pictures.

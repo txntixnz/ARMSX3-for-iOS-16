@@ -61,6 +61,7 @@ static constexpr DiagnosticStage stages[] = {
     {53, "Persistent guest TLS and budget recovery", "armsx3_core_test_persistent_guest_tls"},
     {54, "Paused guest contexts and exact continuation", "armsx3_core_test_resumed_guest_tls"},
     {55, "Nested guest calls and paused stack frames", "armsx3_core_test_resumed_guest_calls"},
+    {56, "Paused floating-point and vector guest calls", "armsx3_core_test_resumed_guest_simd"},
 };
 static constexpr NSUInteger stageCount = sizeof(stages) / sizeof(stages[0]);
 static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
