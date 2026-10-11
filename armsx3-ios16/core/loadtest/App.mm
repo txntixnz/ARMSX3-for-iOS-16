@@ -46,6 +46,7 @@ static constexpr DiagnosticStage stages[] = {
     {38, "Single-worker scheduler queue and priority", "armsx3_core_test_scheduler_queue"},
     {39, "Two-worker scheduler priority ordering", "armsx3_core_test_scheduler_pair"},
     {40, "Guest yield and FIFO scheduler ordering", "armsx3_core_test_scheduler_yield"},
+    {41, "Guest current time and timebase frequency", "armsx3_core_test_guest_time"},
 };
 static constexpr NSUInteger stageCount = sizeof(stages) / sizeof(stages[0]);
 static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";

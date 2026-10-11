@@ -2256,3 +2256,79 @@ Baseline main04b676c4cbed5736cdda681d03995e36e46c5ad2,
 tree1e93a561f69171ea04fc8584f70c64998460f842. Build57 pending Xcode/phone.
 Do not advance to P41 until P40 device passes. Do not monitor Actions.
 User installs ARMSX3_iOS16_INSTALL_THIS_IPA, reruns all39, sends log.
+
+2026-10-11: build57 DEVICE PASS; build58 P41 guest timing integration
+------------------------------------------------------------------
+Uploaded ARMSX3-startup-20261011-014349-556-1300.txt, PID1300, build57.
+All39 P2-P40 PASS. Both P40 repeats show FIFO worker0/peer1 -> peer0/worker1,
+tail yield preserves order, both CELL_CANCEL1 without context switch,
+scope result35, main SLEEP3/unexecuted peer STOP, exact aliases and cleanup.
+Final AUTO PASS. The0037 loader fix is device-confirmed.
+
+Build58 appends P41 "Guest current time and timebase frequency". Earlier
+P35 already covered stack-information SC49; do not duplicate that milestone.
+P2-P40 prefix722084 bytes remains byte-identical, Git blob
+8f2e0fe168f70775be7aca0831094a54033c312f. Clone device-passed P40 bounded
+ELF/TLS/two-node yield fixture, extend loaded callee with real SC145 current
+time and SC147 timebase frequency. Pinned production sys_time.cpp and syscall
+table inspected: seconds/nanoseconds are signed64 outputs, frequency80MHz.
+Current-time service checks seconds pointer before any write; with valid
+seconds/null nanoseconds it publishes seconds then returns CELL_EFAULT.
+P41 dispatches both error cases through loaded SC binding, checks signed
+error/history/CIA and exact DATA bytes; verifies partial seconds write within
+host epoch-second bracket, then restores that private scratch word.
+
+Actual loaded callee retains two yield SCs, then uses caller frame+32/+40
+for seconds/nanoseconds, frame+48 for status0, frame+56 for80000000 frequency;
+restores worker ID and priority output pointer, queries SC48, returns. Guest
+caller/join/TLS42 unchanged.43 opcodes/172 code bytes, callee76, guest end100ac,
+44 steps including HLE return within budget64. Guest SC145 CIA begin+132,
+SC147 CIA begin+144; syscall history stores positive frequency in error field
+because BIND records full gpr3. Dynamic seconds within before/after host
+epoch bracket +/-1 second, nanoseconds<1e9; exact BE64 outputs and surrounding
+full stack bytes/aliases verified on both joinable/detached repeats. Golden
+module SHA1 35e335c137465f30906b2020757022063602cf7f independently reconstructed
+with unchanged P40 hash cross-check; initial DATA unchanged.
+
+P41 Configuration captures/restores clock scale and console-time offset,
+temporarily100/0; enables/restores call history and existing probe settings.
+Require history capacity>=15 before worker execution. New private iOS scope
+ios_probe_scheduler_time_and_call clones P40 guard/admission/order/RAII logic
+and invokes count policy4:43=2,46=2,47=5,48=2,145=3,147=1,6=1, others0.
+16 calls/15 BIND histories. Policies0-3 preserve prior expectations.
+New0038 adds only this private scope/export/header declaration, private count
+policy and loader shape acceptance108/136/172 with172 upper bound. Production
+time handlers, binding dispatch, scheduler, yield and fast_call are unchanged.
+Keep unexecuted peer cleanup, priorities/timestamps/tag restoration, exact
+ELF/BSS/stack/TLS/HLE/cache checks and CPU counter balance. No scheduler start,
+peer guest execution/context switch, timers/sleep or timebase instruction yet.
+
+Host P41 regression compiles actual full production scheduler/priority/yield/
+service/fast_call bodies, real current-time and frequency functions, all
+private policies/scopes and exact P41 callback. Independent bounded PPC
+executor decodes43 emitted instructions, dispatches real service handlers,
+checks44 steps, histories15, TLS42, stack/peer bytes, and null seconds/no-write
+vs null nanoseconds/partial-write. Both variants, missing145/147 counts,
+negative/throwing callback, bad counts, timestamp/priority/order/FIFO mutation
+rollback, isolation/shape/nested guards and policies0-4 pass. Uses POSIX host
+clock branch; clocks/offset100/0. VM aliases, locks/atomics, SC transport/
+history and opcode executor are host substitutes; full iOS interpreter/ABI
+still require phone. Production old P40 and P39 callback regressions pass,
+including P37/P38 scopes. G++ C++20 Wall/Wextra/Werror ASAN/UBSAN, leaks off
+due tool /proc restriction. Exact all-three-source0038 reverse/apply passes;
+40 unique ordered UI stages P2-P41 and unique C exports verified. No XcodeSDK.
+
+Persist test_p41_loader.py: accepts before0038/after0038 PPUModule source
+arguments. Compiles real wrapper with dependency substitutes. Old172 fixture
+reproduces-2 at old guard; fixed108/136/172 each pass four malformed TLS and
+three malformed process checks with no allocation/unchanged outputs,
+successful publication, loader failure/bad loaded-size rollback. Rejects
+0/104/112/132/140/168/176 lengths, bin mismatch/data351. Same meaningful
+boundary regression as0037, covering the expanded fixture before push.
+
+Baseline maind59e5afc0d3a3c49d7fe327aa2f01cb308e0ce98,
+treef0532781ac4cd51606be32d77cdd5a8c009dfc7d. Info58; Bridge/App/Info,
+0038/test_p41_loader.py/handoff changed. Workflow and log export unchanged.
+Build58/P41 pending Actions and phone. Do not monitor Actions. User installs
+ARMSX3_iOS16_INSTALL_THIS_IPA, runs all40 diagnostics and sends log.
+Full process/firmware/RSX/game boot remain untested.
