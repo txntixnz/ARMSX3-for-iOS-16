@@ -3606,3 +3606,110 @@ and send startup log. No P57 until phone P56 PASS. Real LV2 scheduling/
 context switches/full TLS HLE process mutex/global process/firmware/RSX/
 game boot remain UNTESTED. Earlier P39–P49 scheduler peer contexts remain
 unexecuted. No unsolicited pictures.
+
+## 2026-10-11 — build 77 / P57 paused condition, carry and floating status
+
+Newest device evidence: upload/ARMSX3-startup-20261011-182232-268-5528(1).txt,
+build76 pid5528; attachment file_00000000eb2882109ef2dbc5aa679213,
+Library libfile_d200266440b481918eb0c3e4ee6801ae. Read the scratch copy per
+user instruction. All55 P2–P56 AUTO PASS, final all-stages PASS/no AUTO FAIL.
+Native P56 finishes about0.0073sec, three results2/2 and TLS totals17/31,
+37/65,60/102. Real FP/vector inputs/results/stores, 108 dispatches/102
+pauses, all32 GPR/FPR/VR snapshots and nested stack/aliases/cache/lifecycle
+checks PASS. No native P57 evidence yet. User's standing "Continue this
+task" covers the next incremental build and push; do not monitor Actions.
+
+Build77 appends armsx3_core_test_resumed_guest_status (P57) while preserving
+exact entire1534874byte build76 Bridge prefix; appended36867bytes/471lines.
+UI "Paused condition, carry and floating status", stagesP2–P57 =56 checks.
+Plist77, CI test_p57_fixture.py. No upstream sources or47patches changed.
+Shared59words/236bytes SHA1=34666ca12655524b6ffb024c74ecc37795748b58.
+Retains P56 caller/callee/leaf stacks, real production TLS slots, persistent
+native pair, FP/vector operands/results, and all cleanup guards.
+
+Record-form FADD wordfc61102b now forces native FPCC/FPSCR field4 and CR1
+updates regardless of cached interpreter optional set_fpcc setting; real
+PPUInterpreter.cpp selection/handler inspected. Positive exact sum gives
+FG nibble4 in FPSCR field4 (packedshift12) and CR1 (packedshift24).
+PPUThread.h's actual cr.pack/unpack and fpscr.bits.pack/unpack used; XER
+serialized explicitly SO31/OV30/CA29/count0..6, avoiding struct padding.
+VRSAVE included as unchanged distinct canary. Snapshot four packed status
+registers BEFORE every resume together with all GPR/FPR/VR/CTR/LR/CIA.
+Only slice0 initializes context; no later callback resets state.
+
+Initial CR=8a6c5e79 xor(transaction<<8) xor(worker<<12),
+FPSCR=13579bdf xor(transaction<<20) xor(worker<<24),
+XER.SO=!worker, OV=transaction&1, CA=worker, count15+transaction+worker;
+VRSAVE=5aa50000|(transaction<<8)|worker. Nonzero unused fields must survive.
+After FADD, only expected CR1 and FPSCR FPCC fields change. Initial XER CA
+is opposite each later expected carry. Native ADDIC./CMPDI/MFCR/MFSPR/BC
+handlers and encoder declarations inspected directly in pinned overlay.
+No local native core compile; these inspections don't prove phone results.
+
+Caller end B(+44) still jumps to+196, now new tenword tail:
+196 ADDIC. r15,r14,1 (manual35ee0001, no native ADDIC encoder),
+200 CMPDI CR7,r15,0;204 MFCR r16 (manual7e000026, no encoder),
+208 MFSPR r17,XER (MFSPR(17,32): helper expects encoded swappedSPR bits),
+212/216/220 STW r16/r17/r15 to output+48/+52/+56,
+224 BC12,30,+8 tests CR7.EQ without altering CTR,
+228 LI r18,1111;232 STW r18,output+60;end236.
+Owner inputr14=UINT64_MAX ->r15zero/carry1, CR0/CR7 EQ+SO nibble3,
+taken BC skips LI and publishes2222. Peer input7+transaction ->r15=8/9/10,
+carry0, CR0/CR7 GT nibble4, not-taken BC executes LI/publishes1111.
+XER OV/SO/count and all other CR/FPSCR fields retain their distinct values.
+Guest MFCR/MFSPR readbacks verified in registers and exact big-endian memory.
+
+Threepaired transactions,24slices eachworker =144 bounded dispatches/
+138 budget stops. Budgets4,7,3,5,2*N-6,2,1,1,2,1,1,3,2,2,5,3,2,2,
+1,1,2,3,1,4. Offsets16,144,156,152,160,168,172,176,184,188,192,
+96,104,112,20,32,40,196,200,204,212,224,(owner232/peer228),236.
+First23 return-2, finalowner1/peer2. Slice18 carry/CR0,19 CR7,20 guest
+readbacks,21 firstthree status/result stores,22 branch pause on distinct
+PCs,23 final branch output. Total621 instructions, six ADDIC./CMPDI/MFCR/
+MFSPR/conditional tailBC, three taken/three not-taken. Old564instructions
+plus3*(owner9+peer10)=621. Six native FADD/STFD/VXOR/STVX,12LFD/LVX,
+36stackstores/12calls/12returns, sixTLS stores,42integer output stores.
+All full DATA/pool/two64KiB stacks normal+super aliases checked eachslice,
+prior transaction outputs/guards and CODE/cache afterjoins retained.
+FinalTLS totals60/102,72peerjobs + exit + ownercallback =74queuepubs/
+callbacks. Exactlytwo constructed/retired workers and two joins; queued
+exit/free-after-peer-retirement/ownerjoin-before-VMclose unchanged.
+
+Validation PASS:
+- test_p57_fixture.py independent manual/native-form encoding and literal
+  59word list/SHA1; separate interleaved scalar oracle executes all144
+  retained contexts/slices with exact CR/XER/FPSCR/VRSAVE/branch PC and
+  registers, deferred guest readbacks/stores and whole memory/stack/TLS
+  images. 138stops/621steps, totals60/102. P43–P56 fixture regressions PASS.
+- test_p57_pair.py extracts exact whole P57, real production exec_task/
+  bounded helper and TLS globals/bootstrap/alloc/free/paired guard bodies.
+  Reuses unchanged p53_host_shims.cpp with explicit scalar FP/vector/
+  condition/carry/readback/branch models. Native CPU/VM/queue/flags and
+  instruction handlers are HOST SHIMS, not native iOS execution. G++
+  C++20 Wall/Wextra/Werror pthread ASAN+UBSAN detect_leaks0: eight full
+  phases/16persistent host workers/1152slices PASS;74callbacks/queuepubs,
+ 621instructions, all operation counts including three taken/three not-
+  taken branches and six of each new status operation PASS.
+  Faults2..47: all previous queue/publication/instruction/allocation/TLS/
+  constructor/GPR/FPR/VR/stack/branch faults plus paused CR bit, XER CA/SO/
+  count, FPSCR unused bit and VRSAVE drift, wrong carry/comparison/branch,
+  wrong FPSCR FPCC and MFCR/MFSPR readbacks detected. Balanced joins/counts,
+  cleared mappings/probe/TLS globals and restored config/IDs verified.
+  Allfive allocations, stopped/PPU slots/FXO guards, independent exact TLS
+  null/wrong-current/pool/pointer/duplicate/live/double-free guards PASS.
+- Build76 all55 native PASS verified; exact1534874byte prefix, all56 unique
+  UI/exported symbols/plist77/workflow/unchanged47patches and whitespace
+  PASS. No upstream/patch change, so prior full47patch-chain check/apply/
+  reverse/pinned-EOF byte identity remains applicable. No Xcode SDK/native
+  compile or native P57 result claimed. Scratch p57-host-check.log and
+  p57-fixture-check.log contain successful validation output.
+
+Baseline main9150707638ec78a7511d5ab6bb7cc648bf71d163. Push build77 main;
+user reports build completion, DO NOT query Actions afterpush. Install
+ARMSX3_iOS16_INSTALL_THIS_IPA in TrollStore, run all56diagnostics, send
+startup log. No P58 until native phone P57 PASS. This tests specific exact
+integer/positive-double architectural state, not all FP exceptions/rounding,
+vector status/reservations/full architectural context nor real LV2 context
+switches. LV2 scheduling/full TLS HLE process mutex/global process/firmware/
+RSX/game boot remain UNTESTED. P39–P49 scheduler peer contexts remain
+unexecuted. No images requested/generated.
