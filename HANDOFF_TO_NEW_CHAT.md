@@ -2636,3 +2636,58 @@ Build65 modifies only P45 iOS diagnostic wrapper in existing0043: explicitly ini
 Strengthened test_p45_memory.py: compiles the exact pinned IdManager.h select body (template signature/constraints, map storage and supporting transport remain host substitutes). FXO shim now rejects get<T>() on unconstructed storage instead of letting enumeration use an unrelated vector. Build64 scope with initialization removed reproduces the unsafe access as a deterministic shim exception before callback/history; this host check deliberately avoids dereferencing trap pointers. Corrected scope initializes once, survives reuse across both joinability modes, rejects injected map-init failure without guest execution, preserves a sparse real-container registry while rejecting the scope. Existing P45 tests all pass:94steps/25histories, three total/availability reports1MiB and1MiB/960KiB/1MiB, cache restoration/error/throw, corrupted statistics, heap/canaries/endian, allocation guard, clocks/FIFO/TLS/history and cleanup. G++C++20 Werror ASAN/UBSAN detect_leaks=0. Exact production select body is used by both outer guard and query. P44 full callback regression also passes. P45 fixture/loader and P43 pinned-EOF regression pass. Complete0041→0042→0043 apply/check/reverse/check reproduces all four final source files and restores baselines byte-exactly.
 
 No local Xcode SDK; full iOS compile/link and corrected P45 phone execution remain pending. Do not add P46 until P45 passes on the phone. Push build65 correction to main; user observes Actions completion. After success download ARMSX3_iOS16_INSTALL_THIS_IPA, install TrollStore, run all44diagnostics and send the log. Do not monitor Actions after push. Baseline main0e827b39ac3c8700607871d87888592e87d059aa, tree1ca48b9d9108c8b9be49492edebe5894c01633c4. Four changed repository files:0043 patch, test_p45_memory.py, Info.plist.in and handoff. The review IdManager.h is a byte-exact pinned source dependency for local tests, not a new repository file.
+
+
+## 2026-10-11 — build65 phone PASS; build66 adds P46 1 MiB pages
+
+Phone attachment ARMSX3-startup-20261011-121853-136-2572(1).txt, PID2572,
+build65. Exactly44 AUTO PASS stages P2-P45 and final all-diagnostics PASS.
+P45 twice returns94, with constructed/empty memory-container registry,
+three total/available reports1MiB and1MiB/960KiB/1MiB, correct first/last
+heap snapshots/endian subloads, free/double-free and scheduler/TLS cleanup.
+The build65 registry correction is now device-confirmed. Game boot pending.
+
+Build66 adds armsx3_core_test_memory_1m and UI rowP46 Guest 1 MiB memory pages.
+All1064313bytes of build65 CoreBridge remain an exact unchanged prefix.
+New stage reuses the passed P45 stopped-worker/syscall policy6/memory-statistics
+scopes without adding/changing upstream patches or production algorithms.
+Guest SC348 now requests0x100000 bytes with flag0x400 SYS_MEMORY_PAGE_SIZE_1M.
+Guest ADDIS for the last-word pointer advances1MiB, not64KiB; STW/LWZ at
+allocation+0xffffc and LBZ/LHZ retain12345678/89abcdef/12/89ab results.
+Returned allocation must be1MiB-aligned. After free, first/last addresses
+are both unmapped; double-free remainsEINVAL. Availability now1MiB/0/1MiB.
+Diagnostic1MiB container is isolated test metadata, not the future game limit.
+
+Pre-guest real SC348 error cases: zero sizeEALIGN, size0xfffff with1MiB
+flagEALIGN, size2MiB with1MiB flagENOMEM (container only1MiB, no VM allocation
+or output mutation), valid1MiB with null outputEFAULT after internal release.
+These replace the new stage's64KiB preflight cases, retaining four calls and
+all syscall history/count indexes. P45 still retains its original tests.
+Only3 guest words differ from P45: indices48(size),49(flag),62(end pointer).
+93words/372bytes, callee69words/276bytes,94successsteps/78guest-ENOMEM steps,
+all12guestSC PCs, DATA metadata and file offsets unchanged. Golden SHA1
+c8da24be12d80e9c20442d28885eebed3d7c6288. Exact full DATA/stack/code/TLS/peer
+alias and canary comparisons and two joinability modes remain intact.
+
+Host validation: test_p46_fixture.py runs P43-P45 fixture regressions and
+independently encodes/checks three changed words, hash, allocation-failure
+branch, region bounds,1MiB alignment/last mapping and availability snapshots.
+CI runs this fixture prepatch (replaces P45 fixture command, preserving those
+checks transitively). test_p46_memory.py compiles exact new Program/callback
+and production service/allocator/accounting/scheduler/clock/MFTB/IDM bodies.
+VM/FXO/atomics/locks/SC transport/scalar guest executor remain host substitutes.
+Asserts production user1m location/block flags on both null-output and guest
+allocations, all1MiB released heap bytes plus adjacent canaries, two allocation/
+free events (oversized request performs no VM allocation), availability zero,
+all existing corruption/cleanup/TLS/FIFO/clock/history/registry guards.
+G++C++20 Werror ASAN/UBSAN detect_leaks=0 passed, plus original P45 callback.
+All43 existing patches apply/check to exact pinned upstream; pinned-source
+P43 EOF regression, bridge-prefix, workflow YAML/plist and diff checks pass.
+No local Xcode SDK: full iOS compile/link and P46 device test pending.
+
+Baseline mainccfffaffc561eb1094a040a4c540a3b7b045455c. Push build66 to main;
+user observes Actions completion. Do not monitor Actions after push. Download
+ARMSX3_iOS16_INSTALL_THIS_IPA, install TrollStore, run all45 diagnostics and
+send startup log. Do not advance toP47 until P46 device PASS. Actual peer
+execution/context switching/schedulerstart/full TLS HLE/global process/
+firmware/RSX/game boot remain untested. No images.
