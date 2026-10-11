@@ -1,0 +1,108 @@
+"""Host checks of exact P54 bridge plus production thread-local dispatch boundary.
+
+Usage: python test_p54_pair.py staged/rpcs3/Emu/Cell/PPUThread.cpp CoreBridge.cpp staged/rpcs3/Emu/Cell/Modules/sys_ppu_thread_.cpp
+Named CPU workers, VM, decoder, flags and instruction handlers are host shims;
+real exec_task and bounded-helper bodies are extracted. Device execution pending.
+"""
+from pathlib import Path
+import subprocess,sys,tempfile
+if len(sys.argv)!=4:raise SystemExit(__doc__)
+def function(text,signature):
+    start=text.index(signature);opening=text.index('{',start);end=opening+1;depth=1
+    while depth:
+        depth+=(text[end]=='{')-(text[end]=='}');end+=1
+    return text[start:end]
+core=Path(sys.argv[1]).read_text();bridge=Path(sys.argv[2]).read_text()
+# The shim is checked in alongside this test so it is usable from the repository.
+shims=(Path(__file__).with_name('p53_host_shims.cpp')).read_text()
+assert 'fault==8 && queue_publications==10' in shims
+shims=shims.replace('fault==8 && queue_publications==10','fault==8 && queue_publications==29')
+assert 'callback_calls++;command(*this,{0},nullptr,nullptr);assert_dispatch_clear();' in shims
+shims=shims.replace('callback_calls++;command(*this,{0},nullptr,nullptr);assert_dispatch_clear();',
+    'callback_calls++;command(*this,{0},nullptr,nullptr);assert_dispatch_clear();'
+    'if(this->id==ppu_thread::id_base+1){'
+    'if(fault==14)this->gpr[31]^=1;if(fault==15)this->cia-=4;'
+    'if(fault==16)this->ctr+=1;if(fault==17)this->gpr[13]^=0x70;}')
+shims=shims.replace('void instruction(ppu_thread&c,',
+    'std::atomic<unsigned> executed{0},tls_stores{0},output_stores{0};\nvoid instruction(ppu_thread&c,')
+shims=shims.replace('const u32 x=op.opcode,type=x>>26', '++executed;const u32 x=op.opcode,type=x>>26')
+shims=shims.replace('case 36:vm::write32', 'case 36:if(ra==13)++tls_stores;else ++output_stores;vm::write32')
+production=function(core,'struct ios_ppu_dispatch_probe')+';\n'
+assert 'static thread_local ios_ppu_dispatch_probe* s_ios_ppu_dispatch_probe = nullptr;' in core
+production+='static thread_local ios_ppu_dispatch_probe* s_ios_ppu_dispatch_probe=nullptr;\n'
+production+=function(core,'void ppu_thread::exec_task(')+'\n'
+production+=function(core,'extern "C" int armsx3_ios_ppu_exec_bounded(')+'\n'
+production+='void assert_dispatch_clear(){assert(!s_ios_ppu_dispatch_probe);assert(cpu_thread::current);assert(id_manager::g_id==0); }\n'
+tls=Path(sys.argv[3]).read_text()
+production+=tls[tls.index('static u32 s_tls_addr'):tls.index('static u32 ppu_alloc_tls()')]+'\n'
+for signature in ['static u32 ppu_alloc_tls(', 'static void ppu_free_tls(', 'static void ppu_initialize_tls_memory(',
+                  'extern "C" int armsx3_ios_ppu_probe_tls_and_call(', 'static bool ios_probe_tls_pair_owner(',
+                  'extern "C" u32 armsx3_ios_ppu_probe_alloc_peer_tls(', 'extern "C" int armsx3_ios_ppu_probe_free_peer_tls(']:
+    production+=function(tls,signature)+'\n'
+phase=function(bridge,'extern "C" __attribute__((visibility("default"))) int armsx3_core_test_resumed_guest_tls(')
+checks=r'''
+void restored(){
+ assert(!cpu_thread::live && cpu_thread::g_threads_created==cpu_thread::g_threads_deleted);
+ assert(!s_ios_ppu_dispatch_probe);
+ assert(!s_tls_addr&&!s_tls_file&&!s_tls_zero&&!s_tls_size&&!s_tls_area&&!s_tls_max&&!s_tls_map);
+ assert(g_cfg.core.ppu_prof.get() && g_cfg.core.spu_prof.get() && g_cfg.core.spu_debug.get());
+ assert(g_cfg.core.ppu_decoder.get()==ppu_decoder_type::llvm && g_cfg.core.thread_scheduler.get()==thread_scheduler_mode::native);
+ assert(std::none_of(vm::allocated.begin(),vm::allocated.end(),[](bool x){return x;}));
+ assert(id_manager::g_id==0);
+}
+int main(){
+ for(unsigned repetition=0;repetition<8;repetition++){
+  logs.clear();construct_calls=0;callback_calls=0;queue_publications=0;executed=0;tls_stores=0;output_stores=0;
+  auto created=cpu_thread::g_threads_created.load(),deleted=cpu_thread::g_threads_deleted.load();
+  assert(armsx3_core_test_resumed_guest_tls()==0);restored();
+  assert(cpu_thread::g_threads_created==created+2 && cpu_thread::g_threads_deleted==deleted+2 && callback_calls==29 && construct_calls==2 && queue_publications==29);
+  assert(executed==390 && tls_stores==6 && output_stores==18);
+  for(const char* values:{"results=1/1 previous=0/0 totals=17/31",
+   "results=1/1 previous=17/31 totals=37/65", "results=1/1 previous=37/65 totals=60/102"})
+   assert(std::count_if(logs.begin(),logs.end(),[=](const auto&s){return s.find(values)!=std::string::npos;})==1);
+ }
+ for(fault=2;fault<=17;fault++){
+  logs.clear();construct_calls=0;callback_calls=0;queue_publications=0;
+  assert(armsx3_core_test_resumed_guest_tls()==-1);restored();
+ }
+ fault=0;
+ // Includes the real TLS bootstrap allocation, in addition to CODE/DATA/stacks.
+ for(vm::fail_alloc=1;vm::fail_alloc<=5;vm::fail_alloc++){
+  assert(armsx3_core_test_resumed_guest_tls()==-1);restored();
+ }
+ vm::fail_alloc=0;
+ Emu.stopped=false;assert(armsx3_core_test_resumed_guest_tls()==-1);Emu.stopped=true;restored();
+ g_cfg.core.ppu_threads=1;assert(armsx3_core_test_resumed_guest_tls()==-1);g_cfg.core.ppu_threads=2;restored();
+ fxo.available=false;assert(armsx3_core_test_resumed_guest_tls()==-1);fxo.available=true;restored();
+ // Independently call the exact helpers inside the exact production bootstrap.
+ vm::init();for(unsigned i=0;i<4;i++)assert(vm::alloc(0x10000,vm::main)==0x10000+i*0x10000);
+ std::memcpy(vm::base(0x20080),"iOSProbe",9);
+ const ppu_thread_params params{static_cast<vm::addr_t>(0x30000),0x8000,0,{},0,0};
+ ppu_thread owner(params,"manual TLS guard context",1000);
+ assert(!armsx3_ios_ppu_probe_alloc_peer_tls(&owner,0x50000));
+ assert(armsx3_ios_ppu_probe_free_peer_tls(&owner,0x50000,0x570d0)==-1);
+ cpu_thread::current=&owner;cpu_thread::live=1;
+ const auto guards=+[](ppu_thread*context,u32 pool,void*)->int{
+  const auto*bytes=static_cast<const u8*>(vm::base(pool));std::vector<u8>before(bytes,bytes+0x40000);
+  assert(!armsx3_ios_ppu_probe_alloc_peer_tls(nullptr,pool));
+  assert(!armsx3_ios_ppu_probe_alloc_peer_tls(context,pool+0x10000));
+  cpu_thread::current=nullptr;assert(!armsx3_ios_ppu_probe_alloc_peer_tls(context,pool));cpu_thread::current=context;
+  assert(!std::memcmp(vm::base(pool),before.data(),before.size()));
+  const u32 tls=armsx3_ios_ppu_probe_alloc_peer_tls(context,pool);assert(tls==0x570d0);
+  assert(!armsx3_ios_ppu_probe_alloc_peer_tls(context,pool));
+  assert(armsx3_ios_ppu_probe_free_peer_tls(context,pool,tls+4)==-1);
+  cpu_thread::live=2;assert(armsx3_ios_ppu_probe_free_peer_tls(context,pool,tls)==-1);assert(s_tls_map[1]);cpu_thread::live=1;
+  assert(armsx3_ios_ppu_probe_free_peer_tls(context,pool,tls)==0);
+  assert(armsx3_ios_ppu_probe_free_peer_tls(context,pool,tls)==-1);
+  assert(!std::memcmp(vm::base(pool),before.data(),before.size()));return 0;
+ };
+ assert(armsx3_ios_ppu_probe_tls_and_call(&owner,0x20080,9,64,guards,nullptr)==0);
+ assert(!owner.gpr[13]&&!vm::check_addr(0x50000));
+ cpu_thread::current=nullptr;cpu_thread::live=0;vm::close();restored();
+ std::puts("PASS: exact P54 phase/production bounded dispatch and TLS helpers; eight runs/16 persistent host workers/432 bounded slices, 48 stops/run resume all GPR/CTR/LR/CIA through loop/TLS commit/deferred output; 390 instructions/run, exactly6 TLS+18 output stores, totals60/102, 29 callbacks/publications/two joins; clobbered paused GPR/PC/CTR/r13 and prior queue/constructor/allocation/byte/setup faults restore all resources; host VM/queue/PPU instruction shims remain");
+}
+'''
+with tempfile.TemporaryDirectory(prefix='p54-pair-') as temp:
+    source=Path(temp)/'test.cpp';binary=Path(temp)/'test';source.write_text(shims+production+phase+checks)
+    subprocess.run(['g++','-std=c++20','-Wall','-Wextra','-Werror','-pthread','-fsanitize=address,undefined','-fno-omit-frame-pointer',str(source),'-o',str(binary)],check=True)
+    subprocess.run([str(binary)],check=True)

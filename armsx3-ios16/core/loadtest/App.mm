@@ -59,6 +59,7 @@ static constexpr DiagnosticStage stages[] = {
     {51, "Persistent PPU pair and budget recovery", "armsx3_core_test_persistent_ppu_pair"},
     {52, "Paired guest TLS allocation and isolation", "armsx3_core_test_paired_guest_tls"},
     {53, "Persistent guest TLS and budget recovery", "armsx3_core_test_persistent_guest_tls"},
+    {54, "Paused guest contexts and exact continuation", "armsx3_core_test_resumed_guest_tls"},
 };
 static constexpr NSUInteger stageCount = sizeof(stages) / sizeof(stages[0]);
 static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";

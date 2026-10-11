@@ -3260,3 +3260,104 @@ and send startup log. No P54 until phone P53 PASS. Full TLS HLE process
 mutex/global process/LV2 scheduler admission/context switches/firmware/RSX/
 game boot remain UNTESTED. Earlier P39-P49 scheduler peers remain unexecuted.
 No images requested or generated.
+
+## 2026-10-11 — build 74 / P54 exact paused guest continuations
+
+Latest phone evidence: upload/ARMSX3-startup-20261011-160344-645-4641.txt
+(build73, pid4641; Library libfile_787dca4ff5ec8191b6c7c7aea13b5c8d,
+attachment file_00000000615082109da1d08fa65cf419). ALL52 P2-P53 AUTO PASS,
+final all-stages PASS, no AUTO FAIL. Native P53 same owner/peer workers and
+production slots57060/570d0 survive eight pairs; expected results
+45/73,-2/79,57/-2,63/91,69/97,-2/103,81/-2,87/115 and retained totals168/246.
+Four budget stops leave prior TLS/output intact and later transactions
+recover. P53 completes about0.0024sec; cleanup/aliases/cache/joins pass.
+
+P54/build74 implements armsx3_core_test_resumed_guest_tls, UI54 "Paused
+guest contexts and exact continuation"; 53 diagnostics P2-P54. Plist74.
+Appends330lines/25370bytes to CoreBridge.cpp, preserving every byte of
+build73's1448080-byte prefix. Existing47 upstream overlay patches unchanged.
+
+Meaningful new distinction: P53 initialized registers/CIA for each new job;
+P54 initializes only at the start of a transaction, then resumes the SAME
+live context at its exact paused CIA on all later bounded calls. Uses
+unchanged shared13-word/52-byte guest code with real decoded LI/MTCTR/
+ADDI/BC/LWZ/ADD/STW/ORI. No invented ADD encoder; manual X-form retained.
+Exactly TWO native workers and ONE production TLS pool/slot pair persist.
+Owner stays inside existing stopped diagnostic TLS wrapper, constructs the
+peer with its real allocated TLS pointer; notified peer command queue
+returns to a real empty-queue wait after each slice. No LV2 admission.
+
+Three paired transactions; counts17/31,20/34,23/37. Each has nine bounded
+slices PER worker. Budgets:3,5,2*N-6,2,1,1,1,3,4. Exact CIA offsets after
+each:12,8,16,24,28,32,36,48,52. First eight return-2, final returns1.
+- First pause: LI/MTCTR/one ADDI complete, r3=1, CTR=N, pending BC at+12.
+- Next pause: r3=3, CTR=N-3, back at loop ADDI+8.
+- Loop completion: r3=N, CTR0 at+16, TLS/output still unchanged.
+- TLS image/previous value read: r7='iOSP', r8=previous total, CIA+24.
+- ADD: r3=previous+N at+28, TLS still previous.
+- TLS STW: own total committed at+32; output still sentinel.
+- TLS reread: r9=total at+36; output still sentinel.
+- Three output STWs: image/previous/total written, CIA+48, r10 sentinel.
+- Final ORI: r10=total|0x100, CIA+52, positive1 result.
+Final paired totals17/31,37/65,60/102. Each TLS cell written exactly once
+per transaction, all18 output words written once, old transaction outputs
+retained. There are54 bounded dispatches and48 budget stops per phase.
+
+Every invocation snapshots all32 GPRs+CTR/LR/CIA after dispatch. For any
+resume, compares the current snapshot against that prior snapshot BEFORE
+any register write or execution; mismatch returns-8 and fails phase.
+Only slice0 initializes inputs/CIA/CTR/LR. Expected14 live registers and
+native CPU/thread TLS checked at every slice, along with result and clean
+syscall/interrupt/exit state. Whole256KiB TLS pool normal/super aliases and
+64KiB DATA aliases verified at every slice (including untouched system/BSS/
+unused slots and output guards); full CODE/stacks/cache verified afterjoin.
+
+Exactly27 retained peer jobs+one queued exit; one owner callback, total29
+queue publications/callbacks. Aggregate real queue wait grows every job;
+live2/created baseline+2/deleted baseline invariant throughout. Existing
+active-peer/duplicate/double-free guards retained. Completion release is
+peer's final Program/memory access; owner waits acquire before editing
+jobs/reading guest bytes. Queue ordinal transaction*9+slice+1; final slice
+count27/batches3/result1 required. Peer joins before production slot free,
+existing wrapper restores owner r13=0 and clears TLS globals/map/pool;
+owner joins before segment decommit/guest dealloc/VM close. All unwind
+lifetime/cancellation/unstarted-worker/join guards retained from P53.
+
+Validation PASS:
+- test_p54_fixture.py independently encodes the guest instructions and runs
+  a separate scalar shared-memory oracle, retaining both contexts across
+  all slices and interleaving one instruction per worker. Exact PC/CTR/
+  registers/step counts and full bytes checked at every boundary. Total
+ 390 executed instructions,48 stops,six TLS stores and18 one-time output
+  stores, final60/102. P43-P53 hash/fixture regressions retained; workflow
+  prepatch now invokes P54 fixture.
+- test_p54_pair.py extracts exact full P54 phase, production probe/
+  exec_task/bounded helper and production TLS globals/bootstrap/alloc/free/
+  paired guards. Reuses checked-in p53_host_shims.cpp with explicit P54
+  queued-exit fault ordinal29, instruction/store counters and paused-state
+  corruption hooks. G++ C++20 Wall/Wextra/Werror pthread ASAN+UBSAN
+  (ASAN_OPTIONS=detect_leaks=0): eight runs,16 persistent host workers,
+ 432 bounded slices. Per run390instructions/six TLS stores/18 output
+  stores,29 callbacks/publications,two constructions/joins. Injected
+  unused GPR31/CIA/CTR/r13 drift between peer callbacks all detected.
+  Prior corrupt load/data/code/peer BSS/constructor r13, initial/midjob/
+  exit queue publication errors, dropped job, gate cancellation,
+  instruction/constructor exceptions, allfive allocation failures and
+  stopped/two-slot/FXO guards return-1 with balanced counts/joins,
+  cleared maps/probe/TLS globals and restored config/IDs. Independent
+  null/wrong-current/pool/pointer/duplicate/live/double-free helpers pass.
+  VM/flags/queue/CPU construction/lifecycle/native instruction handlers are
+  HOST SHIMS, not a native iOS build or native PPU execution result.
+- Old1448080-byte Bridge prefix, all53 unique UI/exported symbols,
+  plist74/YAML fixture54 and git whitespace checks PASS. No upstream
+  source or patch changed; build72 full47patch-chain check/apply/reverse/
+  pinned EOF/byte identity validation remains applicable. No localXcodeSDK.
+
+Baseline main aed3f4f91fb4d158f6c98d6d703041cabb15f3f8. Push build74 main;
+user observes build completion. DO NOT monitor Actions after push.
+Install ARMSX3_iOS16_INSTALL_THIS_IPA via TrollStore, run all53diagnostics
+and send startup log. No P55 until phone P54 PASS. Actual LV2 scheduler
+admission/context switching/full TLS HLE process mutex/global process/
+firmware/RSX/game boot remain UNTESTED. P54 proves bounded diagnostic
+continuation; it does not exercise native LV2 scheduling. Earlier P39-P49
+scheduler peer contexts remain unexecuted. No images requested/generated.
