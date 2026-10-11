@@ -1,0 +1,39 @@
+--- a/rpcs3/Emu/Cell/Modules/sys_ppu_thread_.cpp
++++ b/rpcs3/Emu/Cell/Modules/sys_ppu_thread_.cpp
+@@ -151,6 +151,36 @@
+ 	}
+ 	catch (...) { return -6; }
+ }
++
++// The existing owned TLS bootstrap stays active on the owner CPU. Allocate a
++// second real slot while it is the only live CPU, then retire the peer before
++// release. No global TLS metadata is changed while the peer executes.
++extern "C" u64 armsx3_ios_live_cpu_threads();
++static bool ios_probe_tls_pair_owner(ppu_thread* owner, u32 pool)
++{
++    return owner && Emu.IsStopped() && get_current_cpu_thread() == owner &&
++        armsx3_ios_live_cpu_threads() == 1 && owner->stack_addr == 0x30000u && owner->stack_size == 0x8000u &&
++        pool == 0x50000u && owner->gpr[13] == pool + 0x7060u && s_tls_addr == 0x20080u &&
++        s_tls_file == 9u && s_tls_zero == 55u && s_tls_size == 0x70u && s_tls_area == pool + 0x30u &&
++        s_tls_max == (0x40000u - 0x30u) / 0x70u && s_tls_map && s_tls_map[0] &&
++        vm::check_addr(pool, vm::page_readable | vm::page_writable, 0x40000u);
++}
++extern "C" u32 armsx3_ios_ppu_probe_alloc_peer_tls(ppu_thread* owner, u32 pool)
++{
++    if (!ios_probe_tls_pair_owner(owner, pool) || s_tls_map[1] || s_tls_map[2]) return 0;
++    vm::temporary_unlock(*owner);
++    const u32 slot = ppu_alloc_tls();
++    if (slot != pool + 0xa0u) { ppu_free_tls(slot); return 0; }
++    return slot + 0x7030u;
++}
++extern "C" int armsx3_ios_ppu_probe_free_peer_tls(ppu_thread* owner, u32 pool, u32 tls)
++{
++    if (!ios_probe_tls_pair_owner(owner, pool) || tls != pool + 0x70d0u || !s_tls_map[1] || s_tls_map[2]) return -1;
++    vm::temporary_unlock(*owner);
++    ppu_free_tls(tls - 0x7030u);
++    return s_tls_map[1] ? -2 : 0;
++}
++
+ #endif
+ 
+ void sys_initialize_tls(ppu_thread& ppu, u64 main_thread_id, u32 tls_seg_addr, u32 tls_seg_size, u32 tls_mem_size)

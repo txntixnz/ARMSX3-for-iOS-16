@@ -4,7 +4,11 @@ import ast,re,runpy,sys
 root=Path(__file__).resolve().parent
 runpy.run_path(str(root/'test_p50_fixture.py'))
 bridge=Path(sys.argv[1]) if len(sys.argv)>1 else root.parent/'core/loadtest/CoreBridge.cpp'
-source=bridge.read_text();stage=source.split('int armsx3_core_test_persistent_ppu_pair()',1)[1]
+source=bridge.read_text();start=source.index('int armsx3_core_test_persistent_ppu_pair()')
+opening=source.index('{',start);end=opening+1;depth=1
+while depth:
+    depth+=(source[end]=='{')-(source[end]=='}');end+=1
+stage=source[start:end] # Later diagnostics must not affect P51's construction count.
 code=stage.split('const std::array<u32, 7> opcodes{',1)[1].split('};',1)[0]
 def form(op,rt,ra,imm):return(op<<26)|(rt<<21)|(ra<<16)|(imm&0xffff)
 ops=[]

@@ -3061,3 +3061,104 @@ and send startup log. No P52 until phone P51 PASS. Full LV2 scheduler
 admission/context switching/global process/full TLS HLE/firmware/RSX/game
 boot remain UNTESTED. Earlier P39-P49 scheduler peers remain unexecuted.
 No images requested or generated.
+
+## 2026-10-11 — build71 phone PASS; build72 adds P52 paired guest TLS
+
+User supplied ARMSX3-startup-20261011-150754-444-4118(1).txt and Continue/
+Here you go. Library idlibfile_30f4ca3195008191bb227649dadbe1fb, scratch
+../upload/ARMSX3-startup-20261011-150754-444-4118(1).txt. Build71 ALL50
+P2-P51 AUTO PASS, final all-stages PASS, no AUTO FAIL. P51 eight batches
+39/67,-2/73,51/-2,57/85,63/91,-2/97,75/-2,81/109 passed on SAME two native
+workers: notified real queues, four isolated budget stops and later recovery,
+retained output/guards/aliases/cache/snapshots, queued exits/two joins.
+This newly confirms persistent paired native PPU execution/reuse on device,
+not physical simultaneous CPU execution or actual LV2 scheduling.
+
+Build72 adds armsx3_core_test_paired_guest_tls/UI P52 Paired guest TLS
+allocation and isolation. Keeps previous1402983byte Bridge prefix exact.
+CODE/DATA/two stacks remain10000/20000/30000/40000, four64KiB allocations;
+main reserve now10000 size80000 leaves50000-8ffff for owned256KiB TLS pool.
+Shared12words48bytes: LI3,MTCTR4,ADDI3,BC loop; LWZ7,r13-7000(image first
+word iOSP), LWZ8,r13-6ff4(initial BSS zero), STW3,r13-6ff4(own count),
+LWZ9,r13-6ff4,STW7/r8/r9 to output+0/+4/+8,ORI9->10 with100. Four pairs
+counts17+round*3+i*14. Budgets8 for(round1,owner),(round2,peer),128 otherwise.
+Expected44/72,-2/78,56/-2,62/90. Success2*N+10steps/CIA10030/r3=N/CTR0,
+r7=694f5350/r8=0/r9=N/r10=N|100, output12bytes image/zero/count. Limited
+8steps/CIA10008/r3=3/CTR=N-3, all TLS-tail registers/outputs/BSS untouched.
+
+Owner native worker starts with constructor TLS0 and invokes EXACT existing
+armsx3_ios_ppu_probe_tls_and_call(P32 bootstrap, unchanged). It initializes
+production global pool metadata once and main slot through real allocator,
+retaining existing dirty/free/reuse tests for slots1/2. New patch0047 changes
+ONLY sys_ppu_thread_.cpp, appending iOS-only helpers before existing endif:
+- ios_probe_tls_pair_owner requires stopped/current owner, live count1,
+  owner stack30000/8000, pool50000, r13=57060, exact image20080/file9/zero55/
+  size70/area50030/max metadata, map0 active, whole pool readable/writable.
+- armsx3_ios_ppu_probe_alloc_peer_tls requires map1/map2 free, temporarily
+  unlocks owner and calls REAL ppu_alloc_tls. Exact slot500a0 gives r13570d0;
+  unexpected allocation is freed and rejected. No algorithm changes.
+- armsx3_ios_ppu_probe_free_peer_tls requires owner guard, exact570d0,
+  map1 active/map2free (therefore only after peer retirement/live count1),
+  unlocks owner and calls REAL ppu_free_tls; verifies map1free.
+Owner creates its peer INSIDE the owned bootstrap callback, passes peerTLS
+through real ppu_thread_params::tls_addr (explicit vm::addr_t enum cast),
+checks constructor r13/unique ID, and starts native peer callback. Peer
+publishes ready and waits release/cancel; owner requires both live at gate
+and rejects active-peer slot free, releases gate and both run bounded guest
+code. Guest runner reads/writes only own context; snapshots14values include
+stack/r2/r3/count/output/r7-r10/r13/CTR/CIA/LR/gpr30 and own CPU/thread TLS.
+Peer unlocks VM, sets exit, then publishes completed. Owner unlocks its VM
+passive lock BEFORE waiting/joining peer. PeerCleanup cancels/wakes/joins on
+unwind, also starts constructed-but-unlaunched peers with exit, then frees
+peer slot while owner pool still alive. Normal path fully joins peer BEFORE
+pool/guest comparisons or free. Whole256KiB TLS pool normal/super aliases
+must match: images at60/d0/140, system areas/zero BSS/guards untouched except
+successful owner/peer count words at6c/dc. Slot pointers remain57060/570d0.
+Invalid pool/unallocated/duplicate/active-peer/double-free guards checked.
+Explicit slot free succeeds, then free again rejects; guard release skipped
+once token cleared. Returning existing wrapper frees main slot/global map/
+metadata/pool and restores owner r13=0. Outer owner callback then exits and
+publishes final completion; main joins before checking snapshots/whole guest
+CODE/DATA/stacks/cache/unmapped TLS pages and counterscreated/deleted+2/live0.
+Four pairs reconstruct8native workers, independently restore whole TLS pool
+per pair. Callback storage is declared BEFORE StopOwner, ensuring it outlives
+join on timeout/unwind. Thread-local construction IDs restore in both host
+main and owner CPU; no shared metadata mutation while peer runs. Segment
+cache release precedes four guest deallocations/VM close; config restored.
+
+Validation passed:
+- test_p52_fixture.py independently encodes all12words including signed
+  r13 offsets and source-first ORI, interleaves two scalar guest contexts
+  against one shared pool/data address space, compares exact results/PCs/
+  partial registers/all pool/data bytes for either budget stop. P43-P51
+  hashes/fixtures retained. P51 fixture extraction now bounds its own exact
+  function (old count-to-EOF included later diagnostics); P51 source unchanged.
+- test_p52_pair.py extracts EXACT full P52 phase and production TLS globals,
+  ppu_alloc_tls/free/initialize/old wrapper/new pair guards/helpers plus exact
+  exec_task/probe/bounded helper. p52_host_shims.cpp models native std::thread
+  command workers, VM/flags/decoder/scalar PPU ops; vm::addr_t is actual-like
+  enum, constructor consumes TLS param, id_manager::g_id is thread_local.
+  Eight full repetitions32host pairs/64workers, instruction yields; every
+  worker checks own probe cleared and construction ID restored at exit.
+  All exact4pair results, TLS/image/BSS/slots/snapshots/pool/guest aliases/
+  counts/config/maps pass. Corrupt load/data/code/peer TLS BSS/constructor r13,
+  owner/peer/midphase queue publication, gate cancellation, instruction throw,
+  peer constructor failure, all5allocations (including TLS pool), stopped/
+  slot/FXO guards return error and join/free/close/restore. Independently call
+  exact slot helpers inside exact old bootstrap with null/wrong-current/
+  wrong-pool/duplicate/wrong-pointer/live-peer/double-free guards and unchanged
+  whole-pool bytes. G++C++20 Wall/Wextra/Werror ASAN/UBSAN detect_leaks=0 PASS.
+  VM/queue/CPU lifecycle/instruction operations/passive-lock behavior are host
+  shims; actual native operations/new iOS phase remain pending device test.
+- ALL47patches check/apply/reverse/check pinned upstream92b931b9fb5eef7f1317
+  cb482917dfc19aceebd9, exact staging/restored bytes, pinned P43 EOF regression
+  pass. Plist72/workflow P52 fixture/UI51 uniqueP2-P52 symbols/prefix/whitespace
+  pass. No local Xcode SDK; iOS compile/link/device P52 pending.
+
+Baseline main9608059f0a4c2292634b0d1ff2cd2ebd3a63ac84. Push build72 main;
+user observes Actions completion. DO NOT monitor Actions after push.
+Install ARMSX3_iOS16_INSTALL_THIS_IPA via TrollStore, run all51diagnostics
+and send startup log. No P53 until phone P52 PASS. Full sys_initialize_tls
+process mutex/HLE initialization, global process/LV2 scheduler admission/
+context switches/firmware/RSX/game boot remain UNTESTED. Earlier P39-P49
+scheduler peers remain unexecuted. No images requested or generated.

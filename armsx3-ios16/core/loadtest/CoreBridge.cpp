@@ -18122,3 +18122,281 @@ extern "C" __attribute__((visibility("default"))) int armsx3_core_test_persisten
     }
     catch (const std::exception& error) { ARMSX3StartupLog(error.what()); if (initialized) vm::close(); return -1; }
 }
+
+extern "C" u32 armsx3_ios_ppu_probe_alloc_peer_tls(ppu_thread*, u32);
+extern "C" int armsx3_ios_ppu_probe_free_peer_tls(ppu_thread*, u32, u32);
+extern "C" __attribute__((visibility("default"))) int armsx3_core_test_paired_guest_tls()
+{
+    ARMSX3StartupLog("P52 BEFORE two active PPU workers sharing the production TLS pool with isolated guest slots");
+    bool initialized = false;
+    try
+    {
+        if (!Emu.IsStopped() || armsx3_ios_live_cpu_threads())
+            throw std::runtime_error("P52 requires stopped emulator and no live CPU workers");
+        struct Configuration
+        {
+            bool ppu = g_cfg.core.ppu_prof.get(), spu = g_cfg.core.spu_prof.get(), debug = g_cfg.core.spu_debug.get();
+            thread_scheduler_mode scheduler = g_cfg.core.thread_scheduler.get();
+            ppu_decoder_type decoder = g_cfg.core.ppu_decoder.get();
+            Configuration() { g_cfg.core.ppu_prof.set(false); g_cfg.core.spu_prof.set(false);
+                g_cfg.core.spu_debug.set(false); g_cfg.core.thread_scheduler.set(thread_scheduler_mode::os);
+                g_cfg.core.ppu_decoder.set(ppu_decoder_type::_static); }
+            ~Configuration() { g_cfg.core.ppu_prof.set(ppu); g_cfg.core.spu_prof.set(spu);
+                g_cfg.core.spu_debug.set(debug); g_cfg.core.thread_scheduler.set(scheduler);
+                g_cfg.core.ppu_decoder.set(decoder); }
+        } configuration;
+        if (g_cfg.core.ppu_threads + 0u != 2u || !g_fxo->is_init() ||
+            (!g_fxo->is_init<ppu_interpreter_rt>() && !g_fxo->init<ppu_interpreter_rt>()))
+            throw std::runtime_error("P52 requires two PPU slots and initialized core interpreter");
+        vm::init(); initialized = true;
+        if (!vm::reserve_map(vm::main, 0x10000, 0x80000))
+            throw std::runtime_error("P52 main memory block unavailable");
+        const std::array<u32, 4> addresses{0x10000, 0x20000, 0x30000, 0x40000};
+        for (u32 address : addresses)
+            if (vm::alloc(0x10000, vm::main, 0x10000) != address)
+                throw std::runtime_error("P52 isolated code/data/stack allocation failed");
+        const u32 codeAddress = addresses[0], dataAddress = addresses[1];
+        using namespace ppu_instructions;
+        using namespace ppu_instructions::implicts;
+        const std::array<u32, 12> opcodes{LI(3, 0), MTCTR(4), ADDI(3, 3, 1), BC(16, 0, -4),
+            LWZ(7, 13, -0x7000), LWZ(8, 13, -0x6ff4), STW(3, 13, -0x6ff4), LWZ(9, 13, -0x6ff4),
+            STW(7, 6, 0), STW(8, 6, 4), STW(9, 6, 8), ORI(9, 10, 0x100)};
+        std::memcpy(vm::base(dataAddress + 0x80), "iOSProbe", 9);
+        auto* code = reinterpret_cast<be_t<u32>*>(vm::base(codeAddress));
+        for (u32 i = 0; i < opcodes.size(); ++i) code[i] = opcodes[i];
+        const auto* bytes = static_cast<const u8*>(vm::base(codeAddress));
+        const std::vector<u8> expectedCode(bytes, bytes + 0x10000);
+        struct SegmentCacheCleanup {
+            u8* pointer; bool active = false;
+            void release() { if (active) { utils::memory_decommit(pointer, 0x8000); active = false; } }
+            ~SegmentCacheCleanup() { release(); }
+        } segmentCleanup{vm::g_exec_addr + vm::g_exec_addr_seg_offset + (codeAddress >> 1)};
+        segmentCleanup.active = true;
+        ppu_register_range(codeAddress, sizeof(opcodes));
+        ppu_register_function_at(codeAddress, sizeof(opcodes), nullptr);
+        auto& interpreter = g_fxo->get<ppu_interpreter_rt>();
+        const auto* cache = reinterpret_cast<const ppu_intrp_func*>(vm::g_exec_addr + u64(codeAddress) * 2);
+        if (!vm::check_addr(codeAddress, vm::page_executable, 0x10000))
+            throw std::runtime_error("P52 executable registration failed");
+        for (u32 i = 0; i < opcodes.size(); ++i)
+            if (!cache[i].fn || cache[i].fn != interpreter.decode(opcodes[i]))
+                throw std::runtime_error("P52 shared guest code was not eagerly decoded");
+        std::array<std::vector<u8>, 2> expectedStacks;
+        for (u32 i = 0; i < 2; ++i) {
+            const auto* stack = static_cast<const u8*>(vm::base(addresses[2 + i]));
+            expectedStacks[i].assign(stack, stack + 0x10000);
+        }
+        struct Gate { std::atomic<bool> go{false}, cancel{false}; };
+        struct Job {
+            u32 begin = 0, end = 0, budget = 0, count = 0, output = 0;
+            int result = -99; bool tls = false, clean = false;
+            std::array<u64, 14> registers{};
+            std::atomic<bool> ready{false}, completed{false};
+        };
+        struct Program {
+            Gate gate; std::array<Job, 2> jobs;
+            int result = -99; bool tlsMemory = false, restored = false;
+            std::atomic<bool> completed{false};
+        };
+        const auto runGuest = +[](ppu_thread& context, Job& job) {
+            job.tls = get_current_cpu_thread() == &context && thread_ctrl::get_current() != nullptr;
+            context.gpr[2] = 0x13579000; context.gpr[4] = job.count; context.gpr[6] = job.output;
+            context.gpr[7] = 0x76540000; context.gpr[8] = 0x87650000;
+            context.gpr[9] = 0x98760000; context.gpr[10] = 0xa9870000;
+            context.lr = 0x12340000; context.ctr = 0; context.cia = job.begin;
+            try { job.result = armsx3_ios_ppu_exec_bounded(&context, job.begin, job.end, job.budget); }
+            catch (const std::exception&) { job.result = -7; }
+            job.registers = {context.gpr[1], context.gpr[2], context.gpr[3], context.gpr[4], context.gpr[6],
+                context.gpr[7], context.gpr[8], context.gpr[9], context.gpr[10], context.gpr[13], context.ctr, context.cia, context.lr, context.gpr[30]};
+            job.clean = !context.syscall_history.index && !context.interrupt_thread_executing;
+        };
+        for (u32 round = 0; round < 4; ++round)
+        {
+            auto* data = static_cast<u8*>(vm::base(dataAddress));
+            std::memset(data, 0xa5, 0x10000); std::memcpy(data + 0x80, "iOSProbe", 9);
+            std::vector<u8> expectedData(data, data + 0x10000);
+            const u64 live = armsx3_ios_live_cpu_threads();
+            const auto created = cpu_thread::g_threads_created.load(), deleted = cpu_thread::g_threads_deleted.load();
+            Program program;
+            for (u32 i = 0; i < program.jobs.size(); ++i) {
+                auto& job = program.jobs[i]; job.begin = codeAddress; job.end = codeAddress + sizeof(opcodes);
+                job.count = 17 + round * 3 + i * 14; job.output = dataAddress + 0x100 + i * 0x100;
+                job.budget = ((round == 1 && i == 0) || (round == 2 && i == 1)) ? 8u : 128u;
+            }
+            {
+                // Callback storage outlives the stop/join guard on every unwind.
+                struct Callback { Program* program; decltype(runGuest) runner; } callback{&program, runGuest};
+                std::unique_ptr<named_thread<ppu_thread>> owner;
+                bool launched = false, joined = false;
+                struct StopOwner {
+                    Program& program; decltype(owner)& slot; bool& started; bool& finished;
+                    ~StopOwner() {
+                        program.gate.cancel.store(true, std::memory_order_release);
+                        program.gate.go.store(true, std::memory_order_release);
+                        if (!slot) return;
+                        slot->state += cpu_flag::exit; slot->state.notify_one();
+                        slot->cmd_notify.store(1); slot->cmd_notify.notify_one();
+                        if (!started) { *slot = thread_state::created; started = true; }
+                        if (!finished) { (*slot)(); finished = true; }
+                    }
+                } stopOwner{program, owner, launched, joined};
+                {
+                    struct ConstructionID { u32 previous = id_manager::g_id;
+                        explicit ConstructionID(u32 id) { id_manager::g_id = id; }
+                        ~ConstructionID() { id_manager::g_id = previous; } } constructionID{ppu_thread::id_base};
+                    const ppu_thread_params params{static_cast<vm::addr_t>(addresses[2]), 0x8000, 0, {}, 0, 0};
+                    owner = std::make_unique<named_thread<ppu_thread>>(stx::launch_retainer{}, params, "iOS guest TLS owner", 1000);
+                }
+                const ppu_intrp_func_t executeOwner = +[](ppu_thread& context, ppu_opcode_t, be_t<u32>*, ppu_intrp_func*) {
+                    auto& callback = *reinterpret_cast<Callback*>(context.gpr[30]);
+                    auto& program = *callback.program;
+                    const auto callWithTLS = +[](ppu_thread* owner, u32 pool, void* user) -> int {
+                        auto& callback = *static_cast<Callback*>(user); auto& program = *callback.program;
+                        if (pool != 0x50000 || owner->gpr[13] != pool + 0x7060)
+                            throw std::runtime_error("P52 production main TLS slot mismatch");
+                        std::unique_ptr<named_thread<ppu_thread>> peer;
+                        bool launched = false, joined = false;
+                        u32 peerTLS = 0;
+                        struct PeerCleanup {
+                            ppu_thread& owner; Program& program; decltype(peer)& slot;
+                            bool& started; bool& finished; u32 pool; u32& tls;
+                            void join() {
+                                vm::temporary_unlock(owner);
+                                if (slot && !finished) {
+                                    slot->state += cpu_flag::exit; slot->state.notify_one();
+                                    slot->cmd_notify.store(1); slot->cmd_notify.notify_one();
+                                    if (!started) { *slot = thread_state::created; started = true; }
+                                    (*slot)(); finished = true;
+                                }
+                            }
+                            ~PeerCleanup() {
+                                program.gate.cancel.store(true, std::memory_order_release);
+                                program.gate.go.store(true, std::memory_order_release);
+                                join();
+                                if (tls) armsx3_ios_ppu_probe_free_peer_tls(&owner, pool, tls);
+                            }
+                        } cleanup{*owner, program, peer, launched, joined, pool, peerTLS};
+                        if (armsx3_ios_ppu_probe_alloc_peer_tls(owner, pool + 0x10000) ||
+                            armsx3_ios_ppu_probe_free_peer_tls(owner, pool, pool + 0x70d0) != -1)
+                            throw std::runtime_error("P52 invalid pool/unallocated peer TLS guards failed");
+                        peerTLS = armsx3_ios_ppu_probe_alloc_peer_tls(owner, pool);
+                        if (peerTLS != pool + 0x70d0 || armsx3_ios_ppu_probe_alloc_peer_tls(owner, pool))
+                            throw std::runtime_error("P52 real peer TLS allocation or duplicate-slot guard failed");
+                        {
+                            struct ConstructionID { u32 previous = id_manager::g_id;
+                                explicit ConstructionID(u32 id) { id_manager::g_id = id; }
+                                ~ConstructionID() { id_manager::g_id = previous; } } constructionID{ppu_thread::id_base + 1};
+                            const ppu_thread_params params{static_cast<vm::addr_t>(0x40000), 0x8000, peerTLS, {}, 0, 0};
+                            peer = std::make_unique<named_thread<ppu_thread>>(stx::launch_retainer{}, params, "iOS guest TLS peer", 1000);
+                        }
+                        if (peer->id == owner->id || peer->gpr[13] != peerTLS)
+                            throw std::runtime_error("P52 peer constructor TLS register/ID mismatch");
+                        const ppu_intrp_func_t executePeer = +[](ppu_thread& context, ppu_opcode_t, be_t<u32>*, ppu_intrp_func*) {
+                            auto& callback = *reinterpret_cast<Callback*>(context.gpr[30]);
+                            auto& program = *callback.program; auto& job = program.jobs[1];
+                            job.ready.store(true, std::memory_order_release);
+                            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+                            while (!program.gate.go.load(std::memory_order_acquire) && !program.gate.cancel.load(std::memory_order_acquire) &&
+                                std::chrono::steady_clock::now() < deadline) std::this_thread::yield();
+                            if (!program.gate.go.load(std::memory_order_acquire) || program.gate.cancel.load(std::memory_order_acquire)) job.result = -6;
+                            else callback.runner(context, job);
+                            vm::temporary_unlock(context);
+                            context.state += cpu_flag::exit;
+                            job.completed.store(true, std::memory_order_release);
+                        };
+                        peer->gpr[30] = u64(reinterpret_cast<uintptr_t>(&callback)); peer->cia = program.jobs[1].begin;
+                        peer->cmd_list({{ppu_cmd::ptr_call, 0}, std::bit_cast<u64>(executePeer)});
+                        peer->state -= cpu_flag::stop + cpu_flag::exit + cpu_flag::suspend + cpu_flag::memory + cpu_flag::wait;
+                        *peer = thread_state::created; launched = true;
+                        const auto readyDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+                        while (!program.jobs[1].ready.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < readyDeadline)
+                            std::this_thread::yield();
+                        if (!program.jobs[1].ready.load(std::memory_order_acquire) || armsx3_ios_live_cpu_threads() != 2)
+                            throw std::runtime_error("P52 peer did not reach gate with both workers live");
+                        // Releasing a slot while its peer is live must reject without mutation.
+                        if (armsx3_ios_ppu_probe_free_peer_tls(owner, pool, peerTLS) != -1)
+                            throw std::runtime_error("P52 active-peer TLS free was not rejected");
+                        program.gate.go.store(true, std::memory_order_release);
+                        callback.runner(*owner, program.jobs[0]);
+                        vm::temporary_unlock(*owner);
+                        const auto finishDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+                        while (!program.jobs[1].completed.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < finishDeadline)
+                            std::this_thread::yield();
+                        if (!program.jobs[1].completed.load(std::memory_order_acquire))
+                            throw std::runtime_error("P52 peer guest execution deadline exceeded");
+                        cleanup.join();
+                        std::vector<u8> expectedPool(0x40000, 0);
+                        for (u32 i = 0; i < 3; ++i) std::memcpy(expectedPool.data() + 0x60 + i * 0x70, "iOSProbe", 9);
+                        for (u32 i = 0; i < 2; ++i) if (program.jobs[i].budget != 8 && program.jobs[i].result > 0) {
+                            const be_t<u32> value = program.jobs[i].count;
+                            std::memcpy(expectedPool.data() + 0x6c + i * 0x70, &value, sizeof(value));
+                        }
+                        if (std::memcmp(vm::base(pool), expectedPool.data(), expectedPool.size()) ||
+                            std::memcmp(vm::get_super_ptr(pool), expectedPool.data(), expectedPool.size()) ||
+                            owner->gpr[13] != pool + 0x7060 || peer->gpr[13] != peerTLS)
+                            throw std::runtime_error("P52 guest TLS slots/image/system/BSS/whole pool aliases differ");
+                        if (armsx3_ios_ppu_probe_free_peer_tls(owner, pool, peerTLS) != 0 ||
+                            armsx3_ios_ppu_probe_free_peer_tls(owner, pool, peerTLS) != -1)
+                            throw std::runtime_error("P52 retired peer TLS release/double-free guard failed");
+                        peerTLS = 0; program.tlsMemory = true;
+                        return program.jobs[0].result;
+                    };
+                    program.result = armsx3_ios_ppu_probe_tls_and_call(&context, 0x20080, 9, 64, callWithTLS, &callback);
+                    program.restored = !context.gpr[13] && !vm::check_addr(0x50000);
+                    context.state += cpu_flag::exit;
+                    program.completed.store(true, std::memory_order_release);
+                };
+                owner->gpr[30] = u64(reinterpret_cast<uintptr_t>(&callback)); owner->cia = codeAddress;
+                owner->cmd_list({{ppu_cmd::ptr_call, 0}, std::bit_cast<u64>(executeOwner)});
+                owner->state -= cpu_flag::stop + cpu_flag::exit + cpu_flag::suspend + cpu_flag::memory + cpu_flag::wait;
+                *owner = thread_state::created; launched = true;
+                const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(6);
+                while (!program.completed.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline)
+                    std::this_thread::yield();
+                if (!program.completed.load(std::memory_order_acquire)) throw std::runtime_error("P52 owned TLS pair deadline exceeded");
+                (*owner)(); joined = true;
+                if (!program.tlsMemory || !program.restored || program.result != program.jobs[0].result)
+                    throw std::runtime_error("P52 owned TLS callback/release/restoration mismatch");
+                for (u32 i = 0; i < program.jobs.size(); ++i) {
+                    const auto& job = program.jobs[i]; const bool limited = job.budget == 8;
+                    const std::array<u64, 14> expected{addresses[2 + i] + 0x8000 - ppu_stack_start_offset,
+                        0x13579000, limited ? 3u : job.count, job.count, job.output,
+                        limited ? 0x76540000u : 0x694f5350u, limited ? 0x87650000u : 0u,
+                        limited ? 0x98760000u : job.count, limited ? 0xa9870000u : (job.count | 0x100u),
+                        0x57060u + i * 0x70u, limited ? job.count - 3 : 0, limited ? codeAddress + 8 : job.end, 0x12340000u, u64(reinterpret_cast<uintptr_t>(&callback))};
+                    if (!job.tls || !job.clean || job.registers != expected || job.result != (limited ? -2 : int(job.count * 2 + 10)))
+                        throw std::runtime_error("P52 guest TLS instruction/result/register/budget mismatch");
+                    if (!limited) {
+                        const std::array<be_t<u32>, 3> words{0x694f5350u, 0u, job.count};
+                        std::memcpy(expectedData.data() + job.output - dataAddress, words.data(), sizeof(words));
+                    }
+                }
+            }
+            for (u32 address = 0x50000; address < 0x90000; address += 0x1000)
+                if (vm::check_addr(address)) throw std::runtime_error("P52 TLS pool remains mapped after pair cleanup");
+            for (const auto& region : std::array<std::pair<u32, const std::vector<u8>*>, 4>{
+                std::pair{codeAddress, &expectedCode}, std::pair{dataAddress, &expectedData},
+                std::pair{addresses[2], &expectedStacks[0]}, std::pair{addresses[3], &expectedStacks[1]}})
+                if (std::memcmp(vm::base(region.first), region.second->data(), 0x10000) ||
+                    std::memcmp(vm::get_super_ptr(region.first), region.second->data(), 0x10000))
+                    throw std::runtime_error("P52 full guest code/data/stack guard or alias mismatch");
+            for (u32 i = 0; i < opcodes.size(); ++i)
+                if (cache[i].fn != interpreter.decode(opcodes[i])) throw std::runtime_error("P52 shared code cache changed");
+            if (armsx3_ios_live_cpu_threads() != live || cpu_thread::g_threads_created.load() != created + 2 ||
+                cpu_thread::g_threads_deleted.load() != deleted + 2)
+                throw std::runtime_error("P52 owner/peer CPU lifecycle counters did not balance");
+            char message[192];
+            std::snprintf(message, sizeof(message), "P52 PASS: pair=%u results=%d/%d, real owner/peer TLS slots57060/570d0, guest image/BSS reads and isolated writes, budget isolation, full aliases/guards and two joins",
+                round + 1, program.jobs[0].result, program.jobs[1].result);
+            ARMSX3StartupLog(message);
+        }
+        segmentCleanup.release();
+        for (u32 address : addresses)
+            if (vm::dealloc(address, vm::main) != 0x10000 || vm::check_addr(address))
+                throw std::runtime_error("P52 paired guest deallocation failed");
+        vm::close(); initialized = false;
+        ARMSX3StartupLog("P52 PASS: four pairs/eight native PPU workers use one production TLS pool per pair; constructor peer r13 and real slot allocation, both guests read copied image/zero BSS and write isolated TLS values, either budget stop leaves the other intact; invalid/duplicate/active-peer/double-free guards, whole pool/guest aliases/cache and joins before slot/pool cleanup; full TLS HLE process mutex/LV2 scheduling/firmware/RSX/game boot remain untested");
+        return 0;
+    }
+    catch (const std::exception& error) { ARMSX3StartupLog(error.what()); if (initialized) vm::close(); return -1; }
+}
