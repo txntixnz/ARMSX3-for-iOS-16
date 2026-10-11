@@ -4045,3 +4045,103 @@ export startup log. No P61 until native phone P60 PASS. True LV2 scheduling/
 context switching, full TLS HLE/process mutex/global process/firmware/RSX/
 game boot remain UNTESTED; P39–P49 scheduler peer contexts unexecuted.
 No unsolicited images are part of this diagnostic change.
+
+## 2026-10-11 checkpoint: Build80 native PASS → Build81/P61 ordered winners and failed retry backedge
+
+User uploaded ARMSX3-startup-20261011-212418-869-6870.txt and said
+“Lets goo 🔥”. Read the attachment from scratch upload, not Library.
+Build80 CFBundleVersion verified. All59 native diagnostics P2–P60 AUTO
+PASS, final all-stage PASS, no FAIL. P60 three transactions: winner0 each,
+shared44556602/04/06, results1/1, totals17/31→37/65→60/102. P60 ends
+1791753852.818315 after start3852.811500. Therefore actual native peer
+winning/owner retry was still not proven, although host models covered it.
+
+Build81 appends ONLY armsx3_core_test_ordered_reservation_backedge to the
+bridge, adds one App stage P61, plist81, CI fixture P61 and two new host
+checks. Original Build80 prefix1704453 bytes SHA256
+f77bbcafd54609c2ba35763257cbe3eacb7d01c936770d8b25badc511b018f4c
+is frozen and checked along with Build78/79. Prior P2–P60/47patches/pinned
+core remain unchanged. 60 UI diagnostics P2–P61. All original P60 cases
+retained inside P61, including its unordered shared line23000 and retries.
+
+New guest code extends416→540 bytes (135words), SHA1
+a5ed7a5288c3c22cb2f47507184bbbb746487866. Independent shared line23080,
+initial44557700, initialized once before workers. Three transaction winner
+roles0/1/0. Both loads and additions precede either first store. Only slices
+55 and58 order the worker dispatches: owner first executes before releasing
+peer gate; peer first completes and reaches real empty command queue before
+owner runs. No guest register/reservation/memory/result is changed by the
+ordering controller. Existing other slices retain parallel paired release.
+Exactly two persistent native PPU workers, real production TLS slots,
+real bounded dispatch and production reservation operations are required.
+
+New guest PCs (relative to10000):
+416 ORI r5,r5,80;420 LWARX r28,r5;424 ADDI r28,r28,1;
+428 STWCX r28,r5;432 MFCR r29;436 STW r29,r6,2020;
+440 BC12,2,+48 selects winner488, loser444;
+444 LWARX r28,r5;448 ADDI r28,r28,1;452 STWCX r28,r5;
+456 MFCR r29;460 STW r29,r6,2024;464 BC4,2,-20 retries444;
+468 NOP;472 B+52→524;476/480/484 unused padding;
+488 LWZ r28,r5;492 ADDI r28,r28,1;496 STW r28,r5;
+500..520 six NOPs;524 MFCR r29;528 STW r29,r6,2028;
+532 LWZ r28,r5;536 STW r28,r6,202c;end540.
+
+After ordered first store winner succeeds and loser fails, shared base+1.
+Winner skips to488; loser loads/adds fresh and pauses at452 with raddr23080.
+Winner executes ordinary guest STW496 (base+2) BEFORE loser STWCX452.
+This native stale retry must fail without writing. At59 guest MFCR failure
+is stored and checked along with full memory/context. At60 loser BNE464
+must take backedge EXACTLY444. At61 fresh LWARX pauses,62 ADDI pauses,63
+conditional store succeeds (base+3). At64 MFCR overwrites first failure
+output with success and BNE is untaken; loser forward branch and winner
+NOPs converge524. Both final readback and final word stores match. Winner's
+2024 output stays untouched canary. New shared word ends44557709; original
+P60 shared word44556606. Both winner roles and losing retry roles tested.
+No claim of arbitrary contention, ABA/full128 cross-word invalidation or
+actual LV2 scheduler context switching; queue waits are command waits.
+
+68slices/worker/transaction=408dispatches/402pauses/1011instructions.
+51LWARX/63STWCX/36successes/27failures/78MFCR/135integer stores.
+204peerjobs+exit+owner=206queuepubs/callbacks. Old P60 skip/retry counters
+3/3/0backedges/3exits; new ordered counters3skips/3retry paths/3taken
+backedges/3successful exits/3ordinary winner stores per phase.
+Exact all32GPR/CTR/LR/CIA/FPR/VR/CR/XER/FPSCR/VRSAVE and raddr/rtime/
+res_cached/use_full_rdata/all128rdata snapshot compared before every resume.
+Full DATA64KiB, both stacks64KiB, whole TLS256KiB, neighbors/aliases,
+all old outputs/code/cache and TLS totals60/102 verified at each boundary.
+Peer join precedes TLS release; owner join precedes cache/VM cleanup.
+
+Validation PASS:
+- test_p61_fixture.py chains P43–P60 regressions and frozen prefix checks;
+  independently encodes135 literal words and models408slices/402stops/
+  1011instructions. Both ordered roles, first retry failure output before
+  overwrite, exact taken backedge/fresh load/paused reservation/successful
+  exit and nine total new shared writes all checked, full memory/TLS/
+  stacks and exact instruction/store counts. New counters3/3/3/3; loser
+  output2024 written twice, winner output untouched.
+- test_p61_pair.py extracts exact P61 plus real production exec_task,
+  bounded helper and production TLS bootstrap/slot guard bodies from staged
+  pinned source. CPU/VM/reservation/instruction/queue operations remain
+  HOST SHIMS, no native compile claim. Old P60 scalar atomic model mutex
+  and alternating preferred winner retained; new ordering comes from exact
+  bridge controller itself. G++C++20 Wall/Wextra/Werror pthread ASAN+UBSAN
+  detect_leaks0 PASS: eight runs/16retained host workers/3264slices; exact
+  operation/publication counts and old/new branches checked. Faults2..98
+  detected, including skipped invalidating STW, falsely accepted stale retry,
+  rejected fresh retry, wrong backedge/winner branch, lost paused reservation,
+  bad final load/add/MFCR/neighbor/proof output/forward branch. All5
+  allocations/setup/exact TLS guard negatives balanced cleanup. Added
+  assertions that each new fault is actually installed in host shims.
+- All59 native Build80 passes verified. 60 unique UI/export symbols,
+  plist81/iOS16.0, frozen prefix, Python syntax, unchanged47patches and
+  git whitespace checks PASS. No Xcode/iOS SDK locally; compilation is CI,
+  native P61 execution awaits user's phone log. Scratch p61-fixture-check.log
+  and p61-host-check.log retain the validation results.
+
+Remote baseline main67f90c9cf1f5a08c5ca1d08ed3475ccbd33c9778,
+treebb6208ad5a570c595575a84acbd31da82e41f72b. User's standing continuation
+and observed native P60 PASS authorize Build81 push. Do NOT monitor/query
+Actions after push. User reports workflow result; install
+ARMSX3_iOS16_INSTALL_THIS_IPA via TrollStore, run all60 diagnostics and
+send startup log. No P62 until phone P61 PASS. Full LV2 scheduling/process
+TLS/mutex/global process/firmware/RSX/game boot remain untested. No images.
