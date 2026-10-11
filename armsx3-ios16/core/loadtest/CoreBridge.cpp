@@ -16775,3 +16775,926 @@ extern "C" __attribute__((visibility("default"))) int armsx3_core_test_page_attr
     }
     catch (const std::exception& error) { ARMSX3StartupLog(error.what()); if (initialized) vm::close(); return -1; }
 }
+
+#include "Emu/Cell/lv2/sys_process.h"
+extern "C" int armsx3_ios_process_sdk_probe_and_call(ppu_thread*, u32, int (*)(ppu_thread*, void*), void*);
+extern "C" int armsx3_ios_ppu_probe_scheduler_process_sdk_and_call(ppu_thread*, ppu_thread*, int (*)(ppu_thread*, void*), void*);
+extern "C" __attribute__((visibility("default"))) int armsx3_core_test_process_sdk()
+{
+    ARMSX3StartupLog("P49 BEFORE loaded guest process PID/SDK queries with scoped ELF SDK publication/restoration and null/partially mapped page outputs and live/freed page-attribute SC351 and 1MiB-page allocation/read/write/free and SC352 availability before/during/after allocation, heap/endian and clock/FIFO/TLS regression");
+    bool initialized = false;
+    try
+    {
+        if (!Emu.IsStopped()) throw std::runtime_error("P49 requires stopped emulator");
+        struct Configuration
+        {
+            s64 clocksScale = g_cfg.core.clocks_scale.get(), consoleOffset = g_cfg.sys.console_time_offset.get();
+            bool callHistory = g_cfg.core.ppu_call_history.get();
+            bool debugPPU = g_cfg.core.ppu_debug.get();
+            bool ppu = g_cfg.core.ppu_prof.get(), spu = g_cfg.core.spu_prof.get(), debug = g_cfg.core.spu_debug.get();
+            thread_scheduler_mode scheduler = g_cfg.core.thread_scheduler.get();
+            ppu_decoder_type decoder = g_cfg.core.ppu_decoder.get();
+            Configuration() { g_cfg.core.clocks_scale.set(100); g_cfg.sys.console_time_offset.set(0); g_cfg.core.ppu_call_history.set(true); g_cfg.core.ppu_debug.set(false); g_cfg.core.ppu_prof.set(false); g_cfg.core.spu_prof.set(false);
+                g_cfg.core.spu_debug.set(false); g_cfg.core.thread_scheduler.set(thread_scheduler_mode::os);
+                g_cfg.core.ppu_decoder.set(ppu_decoder_type::_static); }
+            ~Configuration() { g_cfg.core.clocks_scale.set(clocksScale); g_cfg.sys.console_time_offset.set(consoleOffset); g_cfg.core.ppu_call_history.set(callHistory); g_cfg.core.ppu_debug.set(debugPPU); g_cfg.core.ppu_prof.set(ppu); g_cfg.core.spu_prof.set(spu);
+                g_cfg.core.spu_debug.set(debug); g_cfg.core.thread_scheduler.set(scheduler);
+                g_cfg.core.ppu_decoder.set(decoder); }
+        } configuration;
+        if (!g_fxo->is_init() ||
+            (!g_fxo->is_init<ppu_interpreter_rt>() && !g_fxo->init<ppu_interpreter_rt>()))
+            throw std::runtime_error("P49 fixed objects/interpreter unavailable");
+        if (!ppu_get_syscall(1) || !ppu_get_syscall(25) || !ppu_get_syscall(351) || !ppu_get_syscall(352) || !ppu_get_syscall(348) || !ppu_get_syscall(349) || !ppu_get_syscall(145) || !ppu_get_syscall(147) || !ppu_get_syscall(43) || !ppu_get_syscall(46) || !ppu_get_syscall(47) || !ppu_get_syscall(48) || !ppu_get_syscall(6) || ppu_get_syscall(1024) ||
+            ppu_get_syscall_name(1) != "sys_process_getpid" ||
+            ppu_get_syscall_name(25) != "sys_process_get_sdk_version" ||
+            ppu_get_syscall_name(351) != "sys_memory_get_page_attribute" ||
+            ppu_get_syscall_name(352) != "sys_memory_get_user_memory_size" ||
+            ppu_get_syscall_name(348) != "sys_memory_allocate" ||
+            ppu_get_syscall_name(349) != "sys_memory_free" ||
+            ppu_get_syscall_name(145) != "sys_time_get_current_time" ||
+            ppu_get_syscall_name(147) != "sys_time_get_timebase_frequency" ||
+            ppu_get_syscall_name(43) != "sys_ppu_thread_yield" ||
+            ppu_get_syscall_name(46) != "sys_ppu_thread_get_join_state" ||
+            ppu_get_syscall_name(47) != "sys_ppu_thread_set_priority" ||
+            ppu_get_syscall_name(48) != "sys_ppu_thread_get_priority")
+            throw std::runtime_error("P49 production syscall table unavailable");
+        if (g_cfg.core.ppu_threads + 0u != 2u) throw std::runtime_error("P49 requires two configured PPU hardware slots");
+        struct Arguments {
+            std::vector<std::string> argv = Emu.argv, envp = Emu.envp;
+            std::vector<u8> data = Emu.data;
+            ~Arguments() { Emu.argv = std::move(argv); Emu.envp = std::move(envp); Emu.data = std::move(data); }
+        } arguments;
+        Emu.argv = {"probe", "123456789012345", "1234567890123456"};
+        Emu.envp = {"LANG=C", ""};
+        Emu.data.resize(17);
+        for (u32 i = 0; i < Emu.data.size(); ++i) Emu.data[i] = u8(0xa0 + i);
+        vm::init(); initialized = true;
+        if (!vm::reserve_map(vm::main, 0x10000, 0x90000))
+            throw std::runtime_error("P49 main memory block unavailable");
+        const u32 address = 0x10000, codeAddress = address, dataAddress = 0x20000, stackAddress = 0x30000, peerStackAddress = 0x90000;
+        using namespace ppu_instructions;
+        using namespace ppu_instructions::implicts;
+        const auto dform = [](u32 op, u32 reg, u32 base, u32 imm) {
+            return (op << 26) | (reg << 21) | (base << 16) | (imm & 0xffff);
+        };
+        // XFX-form MFTB uses a split TBR number: architectural 268 (full
+        // 64-bit TB on PPU) and 269 (upper 32 bits), XO371, Rc0.
+        const auto mftb = [](u32 reg, u32 tbr) {
+            return (31u << 26) | (reg << 21) | ((tbr & 31u) << 16) | ((tbr >> 5) << 11) | (371u << 1);
+        };
+        std::array<u32, 121> opcodes{};
+        static_assert(0x600 + sizeof(opcodes) <= 0x800, "P49 CODE must fit its separate ELF file region");
+        // Loaded callee yields, queries current time into frame+32/+40 and
+        // stores time status/frequency at frame+48/+56 and three MFTB results at
+        // frame+64/+72/+80; allocation address/status/free/double-free at
+        // frame+88/+92/+100/+104; heap snapshots at +96/+108/+112/+116.
+        // Separate CODE file region avoids overlap with unchanged DATA. Two free
+        // DATA words at +24/+28 preserve both return values; caller outputs
+        // stay at DATA+32..63 before the first PRX module record.
+        const std::array<u32, 24> caller{MFLR(0), STDU(1, 1, -128), STD(0, 1, 16), STD(2, 1, 24),
+            dform(24, 7, 3, 0), dform(32, 11, 10, 0), dform(32, 12, 11, 0), dform(32, 2, 11, 4),
+            MTCTR(12), BCTRL(), LD(2, 1, 24), dform(24, 2, 9, 0), STD(3, 2, 16),
+            ADDI(3, 2, 24), ADDI(11, 0, 46), SC(0), dform(36, 3, 2, 28),
+            dform(34, 3, 13, -0x7000), ADDI(3, 3, -63), STD(3, 2, 0),
+            LD(0, 1, 16), ADDI(1, 1, 128), MTLR(0), BLR()};
+        for (u32 i = 0; i < caller.size(); ++i) opcodes[i] = caller[i];
+        const std::array<u32, 97> callee{ADDI(11, 0, 43), SC(0), dform(36, 3, 2, 24),
+            ADDI(11, 0, 43), SC(0), dform(36, 3, 2, 28),
+            ADDI(3, 1, 32), ADDI(4, 1, 40), ADDI(11, 0, 145), SC(0), STD(3, 1, 48),
+            ADDI(11, 0, 147), SC(0), STD(3, 1, 56),
+            mftb(5, 268), STD(5, 1, 64), mftb(5, 269), STD(5, 1, 72), mftb(5, 268), STD(5, 1, 80),
+            ADDI(3, 2, 384), ADDI(11, 0, 352), SC(0), dform(36, 3, 2, 408),
+            dform(15, 3, 0, 16), ADDI(4, 0, 0x400), ADDI(5, 1, 88), ADDI(11, 0, 348), SC(0), dform(36, 3, 1, 92),
+            // CMPWI cr0,r3,0; BNE skips all heap accesses if allocation fails.
+            // Preserve r7 (worker ID), r8 (TLS image) and r9 (caller TOC).
+            dform(11, 0, 3, 0), dform(16, 4, 2, 68),
+            dform(32, 6, 1, 88), dform(15, 5, 0, 0x1234), dform(24, 5, 5, 0x5678),
+            dform(36, 5, 6, 0), dform(32, 3, 6, 0), dform(36, 3, 1, 96),
+            dform(15, 10, 6, 16), dform(15, 5, 0, 0x89ab), dform(24, 5, 5, 0xcdef),
+            dform(36, 5, 10, -4), dform(32, 3, 10, -4), dform(36, 3, 1, 108),
+            dform(34, 3, 6, 0), dform(36, 3, 1, 112), dform(40, 3, 10, -4), dform(36, 3, 1, 116),
+            dform(32, 3, 1, 88), ADDI(4, 2, 448), ADDI(11, 0, 351), SC(0), dform(36, 3, 2, 472),
+            // Invalid outputs on a live page: null, then an aligned pointer
+            // with only eight mapped bytes before the retained peer's guard.
+            dform(32, 3, 1, 88), ADDI(4, 0, 0), ADDI(11, 0, 351), SC(0), dform(36, 3, 2, 508),
+            dform(32, 3, 1, 88), dform(15, 4, 0, 10), ADDI(4, 4, -8), ADDI(11, 0, 351), SC(0), dform(36, 3, 2, 512),
+            ADDI(3, 2, 392), ADDI(11, 0, 352), SC(0), dform(36, 3, 2, 412),
+            dform(32, 3, 1, 88), ADDI(11, 0, 349), SC(0), dform(36, 3, 1, 100),
+            dform(32, 3, 1, 88), ADDI(11, 0, 349), SC(0), dform(36, 3, 1, 104),
+            dform(32, 3, 1, 88), ADDI(4, 2, 480), ADDI(11, 0, 351), SC(0), dform(36, 3, 2, 504),
+            ADDI(3, 2, 400), ADDI(11, 0, 352), SC(0), dform(36, 3, 2, 416),
+            // Preserve the PID returned by SC1 in r3 for the SC25 SDK query.
+            ADDI(11, 0, 1), SC(0), dform(36, 3, 2, 544),
+            ADDI(4, 2, 548), ADDI(11, 0, 25), SC(0), dform(36, 3, 2, 552),
+            dform(24, 7, 3, 0), ADDI(4, 2, 40), ADDI(11, 0, 48), SC(0), BLR()};
+        for (u32 i = 0; i < callee.size(); ++i) opcodes[24 + i] = callee[i];
+        ppu_exec_object::ehdr_t header{};
+        header.e_magic = "\177ELF"_u32; header.e_class = 2; header.e_data = 2;
+        header.e_curver = 1; header.e_os_abi = elf_os::lv2; header.e_type = elf_type::exec;
+        header.e_machine = elf_machine::ppc64; header.e_version = 1;
+        header.e_entry = dataAddress + 8; header.e_phoff = sizeof(header);
+        header.e_ehsize = sizeof(header); header.e_phentsize = sizeof(ppu_exec_object::phdr_t); header.e_phnum = 5;
+        std::array<ppu_exec_object::phdr_t, 5> segments{};
+        segments[0].p_type = 1; segments[0].p_flags = 5; segments[0].p_offset = 0x600;
+        segments[0].p_vaddr = codeAddress; segments[0].p_filesz = sizeof(opcodes);
+        segments[0].p_memsz = 0x10000; segments[0].p_align = 0x100;
+        segments[1].p_type = 1; segments[1].p_flags = 6; segments[1].p_offset = 0x300;
+        segments[1].p_vaddr = dataAddress; segments[1].p_filesz = 352;
+        segments[1].p_memsz = 0x10000; segments[1].p_align = 0x100;
+        segments[2].p_type = 0x60000002; segments[2].p_offset = 0x400;
+        segments[2].p_vaddr = dataAddress + 256; segments[2].p_filesz = 40;
+        segments[2].p_memsz = 40; segments[2].p_align = 4;
+        segments[3].p_type = 7; segments[3].p_flags = 4; segments[3].p_offset = 0x380;
+        segments[3].p_vaddr = dataAddress + 128; segments[3].p_filesz = 9;
+        segments[3].p_memsz = 64; segments[3].p_align = 16;
+        segments[4].p_type = 0x60000001; segments[4].p_offset = 0x440;
+        segments[4].p_vaddr = dataAddress + 320; segments[4].p_filesz = 32;
+        segments[4].p_memsz = 32; segments[4].p_align = 4;
+        static_assert(sizeof(header) + sizeof(segments) <= 0x200);
+        std::vector<u8> fixture(0x800, 0);
+        std::memcpy(fixture.data(), &header, sizeof(header));
+        std::memcpy(fixture.data() + sizeof(header), segments.data(), sizeof(segments));
+        const auto fileWord = [&](u32 offset, u32 value) { const be_t<u32> word = value;
+            std::memcpy(fixture.data() + offset, &word, 4); };
+        for (u32 i = 0; i < opcodes.size(); ++i) fileWord(0x600 + i * 4, opcodes[i]);
+        fileWord(0x300, codeAddress + 96); fileWord(0x304, dataAddress);
+        fileWord(0x308, codeAddress); fileWord(0x30c, dataAddress + 32);
+        fixture[0x340] = 44; fixture[0x347] = 2;
+        fileWord(0x350, dataAddress + 128); fileWord(0x354, dataAddress + 160); fileWord(0x358, dataAddress + 176);
+        std::memcpy(fixture.data() + 0x380, "iOSProbe", 9);
+        fileWord(0x3a0, 0x49524e31); fileWord(0x3a4, 0x49524e32);
+        fileWord(0x3b0, codeAddress); fileWord(0x3b4, codeAddress);
+        fixture[0x3c0] = 44; fixture[0x3c5] = 1; fixture[0x3c7] = 1;
+        fileWord(0x3d0, dataAddress + 128); fileWord(0x3d4, dataAddress + 160);
+        fileWord(0x3d8, dataAddress + 236); fileWord(0x3ec, dataAddress);
+        const std::array<u32, 10> control{40, 0x1b434cec, 0, 0, dataAddress + 192,
+            dataAddress + 236, dataAddress + 64, dataAddress + 108, 0, 0};
+        for (u32 i = 0; i < control.size(); ++i) fileWord(0x400 + i * 4, control[i]);
+        const std::array<u32, 8> processWords{32, 0x13bcc5f6, 0x00330000, 0x00360001, 1100, 0x8000, 0x10000, 0};
+        for (u32 i = 0; i < processWords.size(); ++i) fileWord(0x440 + i * 4, processWords[i]);
+        const auto stream = fs::make_stream(fixture);
+        ppu_exec_object elf(stream);
+        ppu_module<lv2_obj> module;
+        module.name = "iOS loaded ELF linkage probe";
+        if (elf.get_error() != elf_error::ok || elf.progs.size() != 5)
+            throw std::runtime_error("P49 five-header ELF parsing failed");
+        const auto tlsHeader = elf.progs[3];
+        // Production 64-bit overflow rejection must leave all outputs untouched.
+        for (u32 field = 0; field < 7; ++field) {
+            auto invalid = tlsHeader;
+            if (field == 0) invalid.p_vaddr = u64{1} << 32;
+            if (field == 1) invalid.p_filesz = u64{1} << 32;
+            if (field == 2) invalid.p_memsz = u64{1} << 32;
+            if (field == 3) invalid.p_filesz = 65;
+            if (field == 4) invalid.p_memsz = 8;
+            if (field == 5) invalid.p_vaddr = dataAddress + 129;
+            if (field == 6) invalid.p_type = 1;
+            u32 image = 0xaaaaaaaa, file = 0xbbbbbbbb, memory = 0xcccccccc;
+            const int result = armsx3_ios_ppu_read_probe_tls_header(&invalid, &image, &file, &memory);
+            if (result != (field < 3 ? -2 : field == 6 ? -1 : -3) ||
+                image != 0xaaaaaaaa || file != 0xbbbbbbbb || memory != 0xcccccccc)
+                throw std::runtime_error("P49 TLS header rejection changed metadata outputs");
+        }
+        std::array<u32, 8> processParameters; processParameters.fill(0xaaaaaaaa);
+        const auto parametersUntouched = [&] { return std::all_of(processParameters.begin(), processParameters.end(),
+            [](u32 value) { return value == 0xaaaaaaaau; }); };
+        for (u32 field = 0; field < 4; ++field) {
+            if (field == 0) elf.progs[3].p_filesz = 65;
+            if (field == 1) elf.progs[3].p_flags = 6;
+            if (field == 2) elf.progs[3].bin.clear();
+            if (field == 3) elf.progs[3].bin[0] ^= 1;
+            const int result = armsx3_ios_ppu_load_probe_process_image_segments(&elf, &module, processParameters.data());
+            elf.progs[3] = tlsHeader;
+            if (result != -5 || !module.segs.empty() || !module.addr_to_seg_index.empty() ||
+                vm::check_addr(codeAddress) || vm::check_addr(dataAddress) || !parametersUntouched())
+                throw std::runtime_error("P49 malformed TLS program allocated memory or changed outputs");
+        }
+        const auto processHeader = elf.progs[4];
+        const auto processWord = [](ppu_exec_object::prog_t& prog, u32 index, u32 value) {
+            const be_t<u32> word = value; std::memcpy(prog.bin.data() + index * 4, &word, 4);
+        };
+        // The production parser preserves defaults on bad magic/priority;
+        // this bounded wrapper rejects any result outside its private shape.
+        for (u32 field = 0; field < 8; ++field) {
+            auto invalid = processHeader;
+            if (field == 0) processWord(invalid, 1, 0);
+            if (field == 1) processWord(invalid, 0, 8);
+            if (field == 2) processWord(invalid, 3, 0x00360002);
+            if (field == 3) processWord(invalid, 4, 3072);
+            if (field == 4) processWord(invalid, 5, 0x100000);
+            if (field == 5) processWord(invalid, 6, 0x100000);
+            if (field == 6) processWord(invalid, 7, 1);
+            if (field == 7) invalid.bin.resize(31);
+            std::array<u32, 5> output; output.fill(0xbbbbbbbb);
+            if (armsx3_ios_ppu_read_probe_process_parameters(&invalid, output.data()) != (field == 7 ? -1 : -3) ||
+                !std::all_of(output.begin(), output.end(), [](u32 value) { return value == 0xbbbbbbbbu; }))
+                throw std::runtime_error("P49 invalid process parameters changed outputs");
+        }
+        for (u32 field = 0; field < 3; ++field) {
+            if (field == 0) processWord(elf.progs[4], 1, 0);
+            if (field == 1) elf.progs[4].bin.resize(31);
+            if (field == 2) processWord(elf.progs[4], 2, 1); // Valid parser fields, but inconsistent file bytes.
+            const int result = armsx3_ios_ppu_load_probe_process_image_segments(&elf, &module, processParameters.data());
+            elf.progs[4] = processHeader;
+            if (result != -6 || !module.segs.empty() || !module.addr_to_seg_index.empty() ||
+                vm::check_addr(codeAddress) || vm::check_addr(dataAddress) || !parametersUntouched())
+                throw std::runtime_error("P49 malformed process program allocated memory or changed outputs");
+        }
+        if (armsx3_ios_ppu_load_probe_process_image_segments(&elf, &module, processParameters.data()) != 0 ||
+            processParameters != std::array<u32, 8>{0x00360001, 1100, 0x8000, 0x10000, 0, dataAddress + 128, 9, 64})
+            throw std::runtime_error("P49 production ELF process/TLS metadata and loading failed");
+        const u32 tlsImage = processParameters[5], tlsFile = processParameters[6], tlsMemory = processParameters[7];
+        ARMSX3StartupLog("P49 PASS: executable process parameters and TLS metadata, defaults/shape rejection before allocation");
+        const std::array<u8, 20> expectedHash{0x4c, 0x9d, 0x73, 0xc8, 0x48, 0x81, 0x7e, 0xe4, 0xa4, 0x0e, 0xb2, 0xaa, 0xfd, 0xd5, 0x0d, 0x46, 0x86, 0xe2, 0x3a, 0x70};
+        if (std::memcmp(module.sha1, expectedHash.data(), expectedHash.size()))
+            throw std::runtime_error("P49 production ELF hash mismatch");
+        std::vector<u8> expectedCode(0x10000, 0), expectedData(0x10000, 0);
+        std::memcpy(expectedCode.data(), fixture.data() + 0x600, sizeof(opcodes));
+        std::memcpy(expectedData.data(), fixture.data() + 0x300, 352);
+        auto* guest = static_cast<u8*>(vm::base(codeAddress));
+        auto* data = static_cast<u8*>(vm::base(dataAddress));
+        if (std::memcmp(guest, expectedCode.data(), 0x10000) || std::memcmp(data, expectedData.data(), 0x10000) ||
+            module.segs.size() != 2 || module.addr_to_seg_index.at(codeAddress) != 0 ||
+            module.addr_to_seg_index.at(dataAddress) != 1)
+            throw std::runtime_error("P49 loaded ELF contents/BSS/metadata mismatch");
+        // Prepare exact fixture blocks from the production-loaded ELF segments.
+        // Global process initialization and main-thread admission remain pending.
+        ppu_function callerFunction{};
+        callerFunction.addr = codeAddress; callerFunction.toc = dataAddress + 32; callerFunction.size = 96;
+        callerFunction.blocks.emplace(codeAddress, 96);
+        ppu_function calleeFunction{};
+        calleeFunction.addr = codeAddress + 96; calleeFunction.toc = dataAddress; calleeFunction.size = 388;
+        calleeFunction.blocks.emplace(codeAddress + 96, 388);
+        module.funcs.push_back(std::move(callerFunction)); module.funcs.push_back(std::move(calleeFunction));
+        struct SegmentCacheCleanup {
+            u8* pointer; bool active = false;
+            void release() { if (active) { utils::memory_decommit(pointer, 0x8000); active = false; } }
+            ~SegmentCacheCleanup() { release(); }
+        } segmentCleanup{vm::g_exec_addr + vm::g_exec_addr_seg_offset + (address >> 1)};
+        segmentCleanup.active = true;
+        auto& interpreter = g_fxo->get<ppu_interpreter_rt>();
+        const auto* codeCache = reinterpret_cast<const ppu_intrp_func*>(vm::g_exec_addr + u64(codeAddress) * 2);
+        const auto fallback = codeCache[0].fn;
+        if (armsx3_ios_ppu_prepare_module(&module) != 0)
+            throw std::runtime_error("P49 static caller/callee module preparation failed");
+        for (u32 i = 0; i < opcodes.size(); ++i) {
+            const auto expected = interpreter.decode(opcodes[i]);
+            if (codeCache[i].fn != expected || codeCache[i].fn == fallback)
+                throw std::runtime_error("P49 caller/callee instruction decoding mismatch");
+        }
+        const auto* pageCache = reinterpret_cast<const ppu_intrp_func*>(vm::g_exec_addr + u64(address) * 2);
+        std::vector<ppu_intrp_func_t> codeHandlers;
+        for (u32 i = 0; i < 0x10000 / 4; ++i) codeHandlers.push_back(pageCache[i].fn);
+        if (vm::alloc(0x10000, vm::main, 0x10000) != stackAddress)
+            throw std::runtime_error("P49 worker stack allocation failed");
+        const auto* stack = static_cast<const u8*>(vm::base(stackAddress));
+        std::vector<u8> expectedStack(stack, stack + 0x10000);
+        if (!g_fxo->is_init<ppu_function_manager>() && !g_fxo->init<ppu_function_manager>())
+            throw std::runtime_error("P49 function manager initialization failed");
+        auto& manager = g_fxo->get<ppu_function_manager>();
+        if (manager.addr) throw std::runtime_error("P49 requires unused function manager address");
+        struct TableCleanup {
+            ppu_function_manager& manager;
+            void release() {
+                if (!manager.addr) return;
+                const u32 address = manager.addr; manager.addr = 0;
+                utils::memory_decommit(vm::g_exec_addr + vm::g_exec_addr_seg_offset + (address >> 1), 0x8000);
+            }
+            ~TableCleanup() { release(); }
+        } tableCleanup{manager};
+        if (armsx3_ios_ppu_prepare_hle_table() != 0)
+            throw std::runtime_error("P49 production HLE table preparation failed");
+        const u32 tableAddress = manager.addr;
+        if (tableAddress != 0x40000 ||
+            !vm::check_addr(tableAddress, vm::page_readable | vm::page_executable, 0x10000))
+            throw std::runtime_error("P49 HLE table allocation or flags mismatch");
+        const auto* table = static_cast<const u8*>(vm::base(tableAddress));
+        const std::vector<u8> tableBefore(table, table + 0x10000);
+        const auto* cache = reinterpret_cast<const ppu_intrp_func*>(vm::g_exec_addr + u64(tableAddress) * 2);
+        std::vector<ppu_intrp_func_t> handlers;
+        for (u32 i = 0; i < 0x10000 / 4; ++i) handlers.push_back(cache[i].fn);
+        if (!vm::falloc(peerStackAddress, 0x10000, vm::main) ||
+            !vm::check_addr(peerStackAddress, vm::page_readable | vm::page_writable, 0x10000))
+            throw std::runtime_error("P49 retained peer stack allocation failed");
+        if (!vm::check_addr(peerStackAddress + 0xfff8, vm::page_readable, 8) ||
+            vm::check_addr(peerStackAddress + 0xfff8, vm::page_readable, 24) || vm::check_addr(0xa0000))
+            throw std::runtime_error("P49 requires an eight-byte mapped peer tail followed by an unmapped guard");
+        vm::write64(peerStackAddress + 0xfff8, 0x5aa55aa5deadbeefull);
+        const auto* peerStack = static_cast<const u8*>(vm::base(peerStackAddress));
+        const std::vector<u8> expectedPeerStack(peerStack, peerStack + 0x10000);
+        const auto created = cpu_thread::g_threads_created.load(), deleted = cpu_thread::g_threads_deleted.load();
+        const u64 live = armsx3_ios_live_cpu_threads();
+        // Independent golden layout: 64 bytes of pointer storage, 96 bytes
+        // of aligned strings, and 32 bytes reserved for 17 exitspawn bytes.
+        const u32 argvAddress = stackAddress + 0x7f40, envpAddress = argvAddress + 32;
+        const u32 initialStack = stackAddress + processParameters[2] - ppu_stack_start_offset - 192;
+        const u32 frameAddress = initialStack - 128;
+        struct Program {
+            u32 begin, end, returnAddress, dataAddress, initialStack, stackAddress, entryOPD, argvAddress, envpAddress;
+            u32 tlsImage, tlsFileSize, tlsMemorySize, primaryPriority, primaryStackSize, mallocPageSize, sdkVersion;
+            u64 clockSeconds = 0, clockNanoseconds = 0, timebaseFirst = 0, timebaseUpper = 0, timebaseLast = 0;
+            u32 allocatedAddress = 0;
+            u32 id = 0, peerStackAddress = 0x90000;
+            ppu_thread* peer = nullptr;
+            int result = -99; bool tls = false, abi = false, tlsMemory = false, syscalls = false, joinable = true; std::atomic<bool> completed{false};
+        } program{vm::read32(u32(elf.header.e_entry)), codeAddress + u32(sizeof(opcodes)), manager.func_addr(1, true), dataAddress, initialStack, stackAddress, u32(elf.header.e_entry), argvAddress, envpAddress, tlsImage, tlsFile, tlsMemory, processParameters[1], processParameters[2], processParameters[3], processParameters[0]};
+        const auto executeLinked = +[](void* user, u32 descriptor, u32 invalidDescriptor) -> int {
+            auto& program = *static_cast<Program*>(user);
+            if (descriptor != program.dataAddress || vm::read32(descriptor) != program.begin + 96 ||
+                vm::read32(program.dataAddress + 176) != descriptor ||
+                vm::read32(program.dataAddress + 180) != invalidDescriptor)
+                throw std::runtime_error("P49 callback did not receive active backpatched guest descriptor");
+            program.result = -99; program.tls = false; program.abi = false; program.tlsMemory = false; program.syscalls = false; program.completed.store(false, std::memory_order_release);
+            std::unique_ptr<named_thread<ppu_thread>> worker;
+            {
+                struct ConstructionID { u32 previous = id_manager::g_id;
+                    ConstructionID() { id_manager::g_id = ppu_thread::id_base; }
+                    ~ConstructionID() { id_manager::g_id = previous; } } construction_id;
+                const ppu_thread_params params{static_cast<vm::addr_t>(program.stackAddress), program.primaryStackSize, 0, vm::_ref<ppu_func_opd_t>(program.entryOPD), 0, 0};
+                worker = std::make_unique<named_thread<ppu_thread>>(stx::launch_retainer{}, params, "iOS guest syscall probe", program.primaryPriority, program.joinable ? 0 : 1);
+            }
+            struct StopWorker { named_thread<ppu_thread>& worker;
+                ~StopWorker() { worker.state += cpu_flag::exit; worker.state.notify_one();
+                    worker.cmd_notify.store(1); worker.cmd_notify.notify_one(); } } stop{*worker};
+            std::unique_ptr<named_thread<ppu_thread>> peer;
+            {
+                struct ConstructionID { u32 previous = id_manager::g_id;
+                    ConstructionID() { id_manager::g_id = ppu_thread::id_base + 1; }
+                    ~ConstructionID() { id_manager::g_id = previous; } } construction_id;
+                const ppu_thread_params params{static_cast<vm::addr_t>(program.peerStackAddress), program.primaryStackSize,
+                    0, vm::_ref<ppu_func_opd_t>(program.entryOPD), 0, 0};
+                peer = std::make_unique<named_thread<ppu_thread>>(stx::launch_retainer{}, params,
+                    "iOS retained scheduler peer", program.primaryPriority, 1);
+            }
+            struct RetainedPeerCleanup { named_thread<ppu_thread>& peer;
+                ~RetainedPeerCleanup() {
+                    // CPU counters are incremented by construction and retired
+                    // by cpu_thread::operator(), not by the object destructor.
+                    // Start only with exit set, so cleanup runs without cpu_task.
+                    peer.state += cpu_flag::exit;
+                    peer = thread_state::created;
+                    peer();
+                } } peerCleanup{*peer};
+            // This peer is never launched or given a guest command. Clear the
+            // constructor's CPU flags only for stopped-scheduler classification.
+            peer->state -= cpu_flag::stop + cpu_flag::exit + cpu_flag::suspend + cpu_flag::memory + cpu_flag::wait;
+            if (peer->id == worker->id || peer->stack_addr != program.peerStackAddress ||
+                peer->stack_size != program.primaryStackSize || peer->entry_func.addr != program.begin ||
+                peer->entry_func.rtoc != program.dataAddress + 32 || peer->interrupt_thread_executing ||
+                peer->gpr[1] != program.peerStackAddress + program.primaryStackSize - ppu_stack_start_offset ||
+                peer->joiner != ppu_join_status::detached || peer->prio.load().prio != program.primaryPriority)
+                throw std::runtime_error("P49 retained peer constructor mismatch");
+            program.peer = peer.get();
+            if (worker->syscall_history.data.size() < 31)
+                throw std::runtime_error("P49 requires a syscall history ring with at least thirty-one entries");
+            if (worker->stack_size != program.primaryStackSize ||
+                static_cast<s64>(worker->prio.load().prio) != program.primaryPriority || worker->gpr[1] != program.stackAddress + 0x8000 - ppu_stack_start_offset ||
+                worker->joiner != (program.joinable ? ppu_join_status::joinable : ppu_join_status::detached) ||
+                worker->entry_func.addr != program.begin || worker->entry_func.rtoc != program.dataAddress + 32)
+                throw std::runtime_error("P49 real worker constructor entry/stack mismatch");
+            u32 argv = 0xaaaaaaaa, envp = 0xbbbbbbbb;
+            const auto* stack = static_cast<const u8*>(vm::base(program.stackAddress));
+            const std::vector<u8> beforeArguments(stack, stack + 0x10000);
+            const auto firstArgument = Emu.argv[0];
+            Emu.argv[0] = std::string(129, 'x');
+            const int rejected = armsx3_ios_ppu_prepare_probe_arguments(worker.get(), &argv, &envp);
+            Emu.argv[0] = firstArgument;
+            if (rejected != -2 || argv != 0xaaaaaaaa || envp != 0xbbbbbbbb ||
+                worker->gpr[1] != program.stackAddress + 0x8000 - ppu_stack_start_offset ||
+                std::memcmp(stack, beforeArguments.data(), 0x10000))
+                throw std::runtime_error("P49 oversized arguments were not rejected without mutation");
+            if (armsx3_ios_ppu_prepare_probe_arguments(worker.get(), &argv, &envp) != 0 ||
+                argv != program.argvAddress || envp != program.envpAddress || worker->gpr[1] != program.initialStack)
+                throw std::runtime_error("P49 production executable argument packing failed");
+            const std::vector<u8> packedArguments(stack, stack + 0x10000);
+            u32 secondArgv = 0xaaaaaaaa, secondEnvp = 0xbbbbbbbb;
+            if (armsx3_ios_ppu_prepare_probe_arguments(worker.get(), &secondArgv, &secondEnvp) != -1 ||
+                secondArgv != 0xaaaaaaaa || secondEnvp != 0xbbbbbbbb ||
+                worker->gpr[1] != program.initialStack || std::memcmp(stack, packedArguments.data(), 0x10000))
+                throw std::runtime_error("P49 already prepared worker was not rejected without mutation");
+            program.id = worker->id;
+            const ppu_intrp_func_t execute = +[](ppu_thread& context, ppu_opcode_t, be_t<u32>*, ppu_intrp_func*) {
+                auto& program = *reinterpret_cast<Program*>(context.gpr[30]);
+                program.tls = get_current_cpu_thread() == &context && thread_ctrl::get_current() != nullptr;
+                program.abi = context.stack_size == program.primaryStackSize &&
+                    static_cast<s64>(context.prio.load().prio) == program.primaryPriority && context.gpr[3] == 3 && context.gpr[4] == program.argvAddress &&
+                    context.gpr[5] == program.envpAddress && context.gpr[6] == 2 && context.gpr[7] == program.id &&
+                    context.gpr[8] == program.tlsImage && context.gpr[9] == program.tlsFileSize && context.gpr[10] == program.tlsMemorySize &&
+                    context.gpr[11] == program.entryOPD && context.gpr[12] == program.mallocPageSize && context.gpr[13] == 0 &&
+                    context.gpr[1] == program.initialStack && context.entry_func.addr == program.begin &&
+                    context.entry_func.rtoc == program.dataAddress + 32;
+                if (!program.abi) {
+                    program.result = -98; context.state += cpu_flag::exit;
+                    program.completed.store(true, std::memory_order_release); return;
+                }
+                const auto callWithTLS = +[](ppu_thread* worker, u32 pool, void* user) -> int {
+                    auto& program = *static_cast<Program*>(user);
+                    std::vector<u8> expected(0x40000, 0);
+                    for (u32 i = 0; i < 3; ++i)
+                        std::memcpy(expected.data() + 0x60 + i * 0x70, "iOSProbe", 9);
+                    if (pool != 0x50000 || worker->gpr[13] != pool + 0x7060 ||
+                        std::memcmp(vm::base(pool), expected.data(), expected.size()) ||
+                        std::memcmp(vm::get_super_ptr(pool), expected.data(), expected.size()))
+                        throw std::runtime_error("P49 TLS image/system area/BSS/slot reuse mismatch");
+                    const auto performSyscalls = +[](ppu_thread* worker, void* user) -> int {
+                        auto& program = *static_cast<Program*>(user);
+                        const auto* bytes = static_cast<const u8*>(vm::base(program.dataAddress));
+                        const std::vector<u8> beforeErrors(bytes, bytes + 0x10000);
+                        const auto savedCIA = worker->cia;
+                        const auto savedR3 = worker->gpr[3], savedR11 = worker->gpr[11], savedR4 = worker->gpr[4];
+                        const auto savedFunction = worker->current_function;
+                        const auto historyStart = worker->syscall_history.index;
+                        const u32 scAddress = program.begin + 60;
+                        const u32 scOpcode = vm::read32(scAddress);
+                        if (scOpcode != ppu_instructions::SC(0))
+                            throw std::runtime_error("P49 mapped SC opcode mismatch");
+                        const auto sc = g_fxo->get<ppu_interpreter_rt>().decode(scOpcode);
+                        // Execute that loaded SC on the real worker for null and
+                        // unused-service errors; production bindings advance CIA.
+                        worker->gpr[11] = 46; worker->gpr[3] = 0;
+                        sc(*worker, {scOpcode}, vm::_ptr<u32>(scAddress), nullptr);
+                        const auto& fault = worker->syscall_history.data[(worker->syscall_history.index - 1) % worker->syscall_history.data.size()];
+                        if (worker->gpr[3] != u64(s64(s32(CELL_EFAULT))) || worker->cia != scAddress + 4 ||
+                            worker->syscall_history.index != historyStart + 1 || fault.cia != scAddress ||
+                            !fault.func_name || std::strcmp(fault.func_name, "sys_ppu_thread_get_join_state") ||
+                            fault.error != u64(s64(s32(CELL_EFAULT))) || worker->current_function != savedFunction)
+                            throw std::runtime_error("P49 null join-state SC did not return CELL_EFAULT");
+                        worker->gpr[11] = 6; worker->gpr[3] = 0x12345678;
+                        sc(*worker, {scOpcode}, vm::_ptr<u32>(scAddress), nullptr);
+                        if (worker->gpr[3] != u32(CELL_ENOSYS) || worker->cia != scAddress + 4 ||
+                            worker->syscall_history.index != historyStart + 1 || worker->current_function != savedFunction ||
+                            std::memcmp(bytes, beforeErrors.data(), beforeErrors.size()) ||
+                            std::memcmp(vm::get_super_ptr(program.dataAddress), beforeErrors.data(), beforeErrors.size()))
+                            throw std::runtime_error("P49 unused-service SC did not return CELL_ENOSYS without memory writes");
+                        // Current-time service rejects null seconds without writes, but
+                        // publishes seconds before rejecting null nanoseconds. Test both.
+                        const auto epochSeconds = []() -> s64 { return std::chrono::duration_cast<std::chrono::seconds>(
+                            std::chrono::system_clock::now().time_since_epoch()).count(); };
+                        for (u32 which = 0; which < 2; ++which) {
+                            const auto history = worker->syscall_history.index;
+                            const s64 before = epochSeconds();
+                            worker->gpr[11] = 145;
+                            worker->gpr[3] = which ? program.dataAddress + 16 : 0;
+                            worker->gpr[4] = which ? 0 : program.dataAddress + 16;
+                            sc(*worker, {scOpcode}, vm::_ptr<u32>(scAddress), nullptr);
+                            const s64 after = epochSeconds();
+                            const auto& event = worker->syscall_history.data[(worker->syscall_history.index - 1) % worker->syscall_history.data.size()];
+                            if (worker->gpr[3] != u64(s64(s32(CELL_EFAULT))) || worker->cia != scAddress + 4 ||
+                                worker->syscall_history.index != history + 1 || event.cia != scAddress ||
+                                !event.func_name || std::strcmp(event.func_name, "sys_time_get_current_time") ||
+                                event.error != u64(s64(s32(CELL_EFAULT))) || worker->current_function != savedFunction)
+                                throw std::runtime_error("P49 current-time null output error/history mismatch");
+                            if (which) {
+                                const s64 seconds = s64(vm::read64(program.dataAddress + 16));
+                                if (seconds < std::min(before, after) - 1 || seconds > std::max(before, after) + 1)
+                                    throw std::runtime_error("P49 null-nanoseconds call did not publish current seconds");
+                                vm::write64(program.dataAddress + 16, 0);
+                            }
+                            if (std::memcmp(bytes, beforeErrors.data(), beforeErrors.size()) ||
+                                std::memcmp(vm::get_super_ptr(program.dataAddress), beforeErrors.data(), beforeErrors.size()))
+                                throw std::runtime_error("P49 current-time error changed unexpected bytes");
+                        }
+                        // All calls use the real SC binding. The null-output case
+                        // allocates and internally frees 1MiB before reporting EFAULT.
+                        // A 2MiB request exceeds the isolated 1MiB container;
+                        // production accounting must reject it before VM allocation.
+                        const std::array<std::array<u64, 4>, 4> memoryErrors{{
+                            {0, 0x400, program.dataAddress + 16, u32(CELL_EALIGN)},
+                            {0xfffff, 0x400, program.dataAddress + 16, u32(CELL_EALIGN)},
+                            {0x200000, 0x400, program.dataAddress + 16, u32(CELL_ENOMEM)},
+                            {0x100000, 0x400, 0, u32(CELL_EFAULT)}}};
+                        for (const auto& request : memoryErrors) {
+                            const auto history = worker->syscall_history.index;
+                            worker->gpr[11] = 348; worker->gpr[3] = request[0];
+                            worker->gpr[4] = request[1]; worker->gpr[5] = request[2];
+                            sc(*worker, {scOpcode}, vm::_ptr<u32>(scAddress), nullptr);
+                            const auto& event = worker->syscall_history.data[(worker->syscall_history.index - 1) % worker->syscall_history.data.size()];
+                            const u64 expected = u64(s64(s32(request[3])));
+                            if (worker->gpr[3] != expected || worker->cia != scAddress + 4 ||
+                                worker->syscall_history.index != history + 1 || event.cia != scAddress ||
+                                !event.func_name || std::strcmp(event.func_name, "sys_memory_allocate") ||
+                                event.error != expected || worker->current_function != savedFunction ||
+                                std::memcmp(bytes, beforeErrors.data(), beforeErrors.size()) ||
+                                std::memcmp(vm::get_super_ptr(program.dataAddress), beforeErrors.data(), beforeErrors.size()))
+                                throw std::runtime_error("P49 allocation boundary/null output result/history or publication mismatch");
+                        }
+                        // Both invalid boundaries are independent of process privileges.
+                        // Setting the already-current priority uses the real self fast path;
+                        // the scoped wrapper has already admitted both equal-priority workers.
+                        const std::array<s32, 3> requests{-513, 3072, s32(program.primaryPriority)};
+                        for (s32 requested : requests) {
+                            const u64 history = worker->syscall_history.index;
+                            worker->gpr[11] = 47; worker->gpr[3] = program.id;
+                            worker->gpr[4] = u64(s64(requested));
+                            sc(*worker, {scOpcode}, vm::_ptr<u32>(scAddress), nullptr);
+                            const u64 expected = requested == s32(program.primaryPriority) ? 0 : u64(s64(s32(CELL_EINVAL)));
+                            const auto& event = worker->syscall_history.data[(worker->syscall_history.index - 1) % worker->syscall_history.data.size()];
+                            if (worker->gpr[3] != expected || worker->cia != scAddress + 4 ||
+                                worker->syscall_history.index != history + 1 || event.cia != scAddress ||
+                                !event.func_name || std::strcmp(event.func_name, "sys_ppu_thread_set_priority") ||
+                                event.error != expected || worker->current_function != savedFunction ||
+                                static_cast<s64>(worker->prio.load().prio) != program.primaryPriority ||
+                                std::memcmp(bytes, beforeErrors.data(), beforeErrors.size()) ||
+                                std::memcmp(vm::get_super_ptr(program.dataAddress), beforeErrors.data(), beforeErrors.size()))
+                                throw std::runtime_error("P49 priority SC boundary/no-change validation failed");
+                        }
+                        auto* peer = program.peer;
+                        const auto peerPriority = peer->prio.load();
+                        const u64 tag = lv2_obj::g_priority_order_tag.load();
+                        const s64 order = worker->prio.load().order;
+                        if (lv2_obj::get_running_ppu(0) != worker || lv2_obj::get_running_ppu(1) != peer ||
+                            worker->next_ppu != peer || peer->next_ppu || peer->prio.load().all != peerPriority.all ||
+                            lv2_obj::ppu_state(worker, false, true) != std::pair{PPU_THREAD_STATUS_ONPROC, 0u} ||
+                            lv2_obj::ppu_state(peer, false, true) != std::pair{PPU_THREAD_STATUS_ONPROC, 1u})
+                            throw std::runtime_error("P49 initial two-worker queue order mismatch");
+                        ARMSX3StartupLog("P49 FIFO admission: executing worker1100 at position0, equal-priority peer1100 at position1");
+                        const u64 beforeChange = worker->syscall_history.index;
+                        worker->gpr[11] = 47; worker->gpr[3] = program.id;
+                        worker->gpr[4] = program.primaryPriority;
+                        sc(*worker, {scOpcode}, vm::_ptr<u32>(scAddress), nullptr);
+                        const auto& changed = worker->syscall_history.data[(worker->syscall_history.index - 1) % worker->syscall_history.data.size()];
+                        if (worker->gpr[3] || worker->cia != scAddress + 4 ||
+                            worker->syscall_history.index != beforeChange + 1 || changed.cia != scAddress ||
+                            !changed.func_name || std::strcmp(changed.func_name, "sys_ppu_thread_set_priority") || changed.error ||
+                            worker->current_function != savedFunction ||
+                            static_cast<s64>(worker->prio.load().prio) != program.primaryPriority ||
+                            static_cast<s64>(worker->prio.load().order) != order ||
+                            lv2_obj::g_priority_order_tag.load() != tag ||
+                            std::memcmp(bytes, beforeErrors.data(), beforeErrors.size()) ||
+                            std::memcmp(vm::get_super_ptr(program.dataAddress), beforeErrors.data(), beforeErrors.size()))
+                            throw std::runtime_error("P49 same-priority request changed priority/order state");
+                        if (lv2_obj::get_running_ppu(0) != worker || lv2_obj::get_running_ppu(1) != peer ||
+                            worker->next_ppu != peer || peer->next_ppu || peer->prio.load().all != peerPriority.all ||
+                            lv2_obj::ppu_state(worker, false, true) != std::pair{PPU_THREAD_STATUS_ONPROC, 0u} ||
+                            lv2_obj::ppu_state(peer, false, true) != std::pair{PPU_THREAD_STATUS_ONPROC, 1u})
+                            throw std::runtime_error("P49 same-priority request changed FIFO admission order");
+                        ARMSX3StartupLog("P49 same-priority SC47 preserves original FIFO order");
+                        worker->cia = savedCIA; worker->gpr[3] = savedR3; worker->gpr[11] = savedR11;
+                        worker->gpr[4] = program.dataAddress + 40;
+                        if (savedR4 != program.argvAddress)
+                            throw std::runtime_error("P49 priority calls lost the queued argument pointer");
+                        worker->gpr[6] = program.dataAddress + 32;
+                        worker->gpr[10] = program.dataAddress + 176;
+                        const s64 clockBefore = epochSeconds();
+                        const u64 timebaseBefore = get_timebased_time();
+                        const int result = armsx3_ios_ppu_call_bounded(worker, program.begin, program.end,
+                            program.dataAddress + 32, program.returnAddress, 122);
+                        const u64 timebaseAfter = get_timebased_time();
+                        const s64 clockAfter = epochSeconds();
+                        const auto& last = worker->syscall_history.data[(worker->syscall_history.index - 1) % worker->syscall_history.data.size()];
+                        program.syscalls = worker->syscall_history.index == historyStart + 29 &&
+                            last.cia == scAddress && last.func_name &&
+                            !std::strcmp(last.func_name, "sys_ppu_thread_get_join_state") && !last.error &&
+                            worker->current_function == savedFunction &&
+                            vm::read32(program.dataAddress + 40) == program.primaryPriority &&
+                            vm::read32(program.dataAddress + 44) == 0 &&
+                            vm::read64(program.dataAddress + 48) == 0 &&
+                            vm::read32(program.dataAddress + 56) == u32(program.joinable) &&
+                            vm::read32(program.dataAddress + 60) == 0;
+                        const auto& firstYield = worker->syscall_history.data[(historyStart + 11) % worker->syscall_history.data.size()];
+                        const auto& tailYield = worker->syscall_history.data[(historyStart + 12) % worker->syscall_history.data.size()];
+                        program.syscalls = program.syscalls && result == 122 &&
+                            vm::read32(program.dataAddress + 24) == u32(CELL_CANCEL) &&
+                            vm::read32(program.dataAddress + 28) == u32(CELL_CANCEL) &&
+                            firstYield.cia == program.begin + 100 && tailYield.cia == program.begin + 112 &&
+                            firstYield.func_name && tailYield.func_name &&
+                            !std::strcmp(firstYield.func_name, "sys_ppu_thread_yield") &&
+                            !std::strcmp(tailYield.func_name, "sys_ppu_thread_yield") &&
+                            firstYield.error == u64(CELL_CANCEL) && tailYield.error == u64(CELL_CANCEL);
+                        const u32 frame = program.initialStack - 128;
+                        program.clockSeconds = vm::read64(frame + 32);
+                        program.clockNanoseconds = vm::read64(frame + 40);
+                        const auto& clockEvent = worker->syscall_history.data[(historyStart + 13) % worker->syscall_history.data.size()];
+                        const auto& frequencyEvent = worker->syscall_history.data[(historyStart + 14) % worker->syscall_history.data.size()];
+                        program.syscalls = program.syscalls && s64(program.clockSeconds) >= std::min(clockBefore, clockAfter) - 1 &&
+                            s64(program.clockSeconds) <= std::max(clockBefore, clockAfter) + 1 && program.clockNanoseconds < 1000000000ull &&
+                            vm::read64(frame + 48) == 0 && vm::read64(frame + 56) == 80000000ull &&
+                            clockEvent.cia == program.begin + 132 && clockEvent.func_name &&
+                            !std::strcmp(clockEvent.func_name, "sys_time_get_current_time") && !clockEvent.error &&
+                            frequencyEvent.cia == program.begin + 144 && frequencyEvent.func_name &&
+                            !std::strcmp(frequencyEvent.func_name, "sys_time_get_timebase_frequency") && frequencyEvent.error == 80000000ull;
+                        program.timebaseFirst = vm::read64(frame + 64);
+                        program.timebaseUpper = vm::read64(frame + 72);
+                        program.timebaseLast = vm::read64(frame + 80);
+                        if (timebaseAfter < timebaseBefore || program.timebaseFirst < timebaseBefore ||
+                            program.timebaseLast < program.timebaseFirst || program.timebaseLast > timebaseAfter ||
+                            program.timebaseUpper < (program.timebaseFirst >> 32) ||
+                            program.timebaseUpper > (program.timebaseLast >> 32) || program.timebaseUpper > 0xffffffffull)
+                            throw std::runtime_error("P49 MFTB full/upper/full values escaped core clock brackets");
+                        ARMSX3StartupLog("P49 guest MFTB: full64/upper32/full64 reads are ordered and bracketed by core timebase");
+                        program.allocatedAddress = vm::read32(frame + 88);
+                        const auto& allocationEvent = worker->syscall_history.data[(historyStart + 16) % worker->syscall_history.data.size()];
+                        const auto& freeEvent = worker->syscall_history.data[(historyStart + 21) % worker->syscall_history.data.size()];
+                        const auto& doubleFreeEvent = worker->syscall_history.data[(historyStart + 22) % worker->syscall_history.data.size()];
+                        program.syscalls = program.syscalls && program.allocatedAddress && !(program.allocatedAddress & 0xfffffu) &&
+                            !vm::check_addr(program.allocatedAddress) && !vm::check_addr(program.allocatedAddress + 0xffffcu) && vm::read32(frame + 92) == 0 &&
+                            vm::read32(frame + 100) == 0 && vm::read32(frame + 104) == u32(CELL_EINVAL) &&
+                            vm::read32(frame + 96) == 0x12345678u && vm::read32(frame + 108) == 0x89abcdefu &&
+                            vm::read32(frame + 112) == 0x12u && vm::read32(frame + 116) == 0x89abu &&
+                            allocationEvent.cia == program.begin + 208 && allocationEvent.func_name &&
+                            !std::strcmp(allocationEvent.func_name, "sys_memory_allocate") && !allocationEvent.error &&
+                            freeEvent.cia == program.begin + 376 && freeEvent.func_name &&
+                            !std::strcmp(freeEvent.func_name, "sys_memory_free") && !freeEvent.error &&
+                            doubleFreeEvent.cia == program.begin + 392 && doubleFreeEvent.func_name &&
+                            !std::strcmp(doubleFreeEvent.func_name, "sys_memory_free") && doubleFreeEvent.error == u64(s64(s32(CELL_EINVAL)));
+                        for (const auto& snapshot : std::array<std::array<u32, 4>, 3>{{
+                            {384, 408, 15, 184}, {392, 412, 20, 360}, {400, 416, 24, 428}}}) {
+                            const auto& event = worker->syscall_history.data[(historyStart + snapshot[2]) % worker->syscall_history.data.size()];
+                            const u32 available = snapshot[0] == 392 ? 0u : 0x100000u;
+                            program.syscalls = program.syscalls && vm::read32(program.dataAddress + snapshot[0]) == 0x100000u &&
+                                vm::read32(program.dataAddress + snapshot[0] + 4) == available &&
+                                vm::read32(program.dataAddress + snapshot[1]) == 0 && event.cia == program.begin + snapshot[3] &&
+                                event.func_name && !std::strcmp(event.func_name, "sys_memory_get_user_memory_size") && !event.error;
+                        }
+                        const auto& livePageEvent = worker->syscall_history.data[(historyStart + 17) % worker->syscall_history.data.size()];
+                        const auto& freedPageEvent = worker->syscall_history.data[(historyStart + 23) % worker->syscall_history.data.size()];
+                        program.syscalls = program.syscalls &&
+                            vm::read64(program.dataAddress + 448) == 0x40000ull &&
+                            vm::read64(program.dataAddress + 456) == 0xfull &&
+                            vm::read32(program.dataAddress + 464) == 0x100000u &&
+                            vm::read32(program.dataAddress + 468) == 0 && vm::read32(program.dataAddress + 472) == 0 &&
+                            vm::read64(program.dataAddress + 480) == 0 && vm::read64(program.dataAddress + 488) == 0 &&
+                            vm::read32(program.dataAddress + 496) == 0 && vm::read32(program.dataAddress + 500) == 0 &&
+                            vm::read32(program.dataAddress + 504) == u32(CELL_EINVAL) &&
+                            livePageEvent.cia == program.begin + 300 && livePageEvent.func_name &&
+                            !std::strcmp(livePageEvent.func_name, "sys_memory_get_page_attribute") && !livePageEvent.error &&
+                            freedPageEvent.cia == program.begin + 412 && freedPageEvent.func_name &&
+                            !std::strcmp(freedPageEvent.func_name, "sys_memory_get_page_attribute") &&
+                            freedPageEvent.error == u64(s64(s32(CELL_EINVAL)));
+                        for (const auto& invalid : std::array<std::array<u32, 3>, 2>{{{508, 18, 320}, {512, 19, 344}}}) {
+                            const auto& event = worker->syscall_history.data[(historyStart + invalid[1]) % worker->syscall_history.data.size()];
+                            program.syscalls = program.syscalls && vm::read32(program.dataAddress + invalid[0]) == u32(CELL_EFAULT) &&
+                                event.cia == program.begin + invalid[2] && event.func_name &&
+                                !std::strcmp(event.func_name, "sys_memory_get_page_attribute") && event.error == u64(s64(s32(CELL_EFAULT)));
+                        }
+                        program.syscalls = program.syscalls && vm::read64(program.peerStackAddress + 0xfff8) == 0x5aa55aa5deadbeefull;
+                        const auto& pidEvent = worker->syscall_history.data[(historyStart + 25) % worker->syscall_history.data.size()];
+                        const auto& sdkEvent = worker->syscall_history.data[(historyStart + 26) % worker->syscall_history.data.size()];
+                        program.syscalls = program.syscalls && vm::read32(program.dataAddress + 544) == 1 &&
+                            vm::read32(program.dataAddress + 548) == program.sdkVersion && vm::read32(program.dataAddress + 552) == 0 &&
+                            pidEvent.cia == program.begin + 440 && pidEvent.func_name &&
+                            !std::strcmp(pidEvent.func_name, "sys_process_getpid") && pidEvent.error == 1 &&
+                            sdkEvent.cia == program.begin + 456 && sdkEvent.func_name &&
+                            !std::strcmp(sdkEvent.func_name, "sys_process_get_sdk_version") && !sdkEvent.error &&
+                            g_ps3_process_info.sdk_ver == program.sdkVersion;
+                        if (!program.syscalls)
+                            throw std::runtime_error("P49 loaded guest process SDK/page attributes/time/memory/yield outputs/history mismatch");
+                        ARMSX3StartupLog("P49 guest page attributes: live1MiB allocation reports attribute40000/accessf/page100000/pad0/status0; freed address returns EINVAL with untouched24-byte output; all four SC351 PCs/history/results verified; live-page null output and partially mapped output return EFAULT, peer-tail sentinel unchanged");
+                        ARMSX3StartupLog("P49 guest process: SC1 returned current production PID1; SC25 with that PID returned the loaded ELF SDK00360001 and status0; exact outputs/service names/history PCs verified");
+                        ARMSX3StartupLog("P49 guest memory stats: total1MiB, available1MiB before allocation,0 while allocated,1MiB after free; all three SC352 PCs/results verified");
+                        ARMSX3StartupLog("P49 guest heap: STW/LWZ at first and last words returned12345678/89abcdef, LBZ/LHZ confirmed big-endian12/89ab, free unmapped allocation and double-free returned EINVAL; all service PCs/results checked");
+                        ARMSX3StartupLog("P49 guest timing: current seconds/nanoseconds in worker frame, status0, timebase80000000, null-second/no-write and null-nanosecond/partial-write errors verified");
+                        if (lv2_obj::get_running_ppu(0) != peer || lv2_obj::get_running_ppu(1) != worker ||
+                            peer->next_ppu != worker || worker->next_ppu || peer->prio.load().all != peerPriority.all ||
+                            lv2_obj::ppu_state(worker, false, true) != std::pair{PPU_THREAD_STATUS_ONPROC, 1u} ||
+                            lv2_obj::ppu_state(peer, false, true) != std::pair{PPU_THREAD_STATUS_ONPROC, 0u})
+                            throw std::runtime_error("P49 guest yield did not rotate the equal-priority FIFO queue");
+                        ARMSX3StartupLog("P49 guest yields: FIFO rotated to peer0/worker1, tail yield kept order, both return CELL_CANCEL without context switch");
+                        // A same-priority self request must preserve yielded FIFO
+                        // order. Query through SC48, preserving guest continuation.
+                        const auto guestCIA = worker->cia;
+                        const auto guestR3 = worker->gpr[3], guestR4 = worker->gpr[4], guestR11 = worker->gpr[11];
+                        const auto beforeRestore = worker->syscall_history.index;
+                        worker->gpr[11] = 47; worker->gpr[3] = program.id;
+                        worker->gpr[4] = program.primaryPriority;
+                        sc(*worker, {scOpcode}, vm::_ptr<u32>(scAddress), nullptr);
+                        const auto& restored = worker->syscall_history.data[(worker->syscall_history.index - 1) % worker->syscall_history.data.size()];
+                        if (worker->gpr[3] || worker->cia != scAddress + 4 ||
+                            worker->syscall_history.index != beforeRestore + 1 || restored.cia != scAddress ||
+                            !restored.func_name || std::strcmp(restored.func_name, "sys_ppu_thread_set_priority") || restored.error ||
+                            worker->current_function != savedFunction ||
+                            static_cast<s64>(worker->prio.load().prio) != program.primaryPriority ||
+                            static_cast<s64>(worker->prio.load().order) != order ||
+                            lv2_obj::g_priority_order_tag.load() != tag)
+                            throw std::runtime_error("P49 post-yield priority/order preservation failed");
+                        if (lv2_obj::get_running_ppu(0) != peer || lv2_obj::get_running_ppu(1) != worker ||
+                            peer->next_ppu != worker || worker->next_ppu || peer->prio.load().all != peerPriority.all ||
+                            lv2_obj::ppu_state(worker, false, true) != std::pair{PPU_THREAD_STATUS_ONPROC, 1u} ||
+                            lv2_obj::ppu_state(peer, false, true) != std::pair{PPU_THREAD_STATUS_ONPROC, 0u})
+                            throw std::runtime_error("P49 same-priority request changed yielded FIFO order");
+
+                        worker->gpr[11] = 48; worker->gpr[3] = program.id;
+                        worker->gpr[4] = program.dataAddress + 40;
+                        sc(*worker, {scOpcode}, vm::_ptr<u32>(scAddress), nullptr);
+                        const auto& queried = worker->syscall_history.data[(worker->syscall_history.index - 1) % worker->syscall_history.data.size()];
+                        program.syscalls = program.syscalls && !worker->gpr[3] && worker->cia == scAddress + 4 &&
+                            worker->syscall_history.index == historyStart + 31 && queried.cia == scAddress &&
+                            queried.func_name && !std::strcmp(queried.func_name, "sys_ppu_thread_get_priority") && !queried.error &&
+                            worker->current_function == savedFunction && vm::read32(program.dataAddress + 40) == program.primaryPriority;
+                        if (!program.syscalls)
+                            throw std::runtime_error("P49 post-yield priority query/history mismatch");
+                        ARMSX3StartupLog("P49 same-priority SC47 preserves yielded FIFO order; SC48 confirms1100");
+                        worker->cia = guestCIA; worker->gpr[3] = guestR3; worker->gpr[4] = guestR4; worker->gpr[11] = guestR11;
+                        return result;
+                    };
+                    auto* peer = program.peer;
+                    if (!peer || lv2_obj::get_running_ppu(0) || worker->next_ppu || peer->next_ppu)
+                        throw std::runtime_error("P49 requires an empty scheduler before pair admission");
+                    const auto originalPeerPriority = peer->prio.load();
+                    const u64 originalPeerStartTime = peer->start_time;
+                    const auto peerCIA = peer->cia; const auto peerLR = peer->lr;
+                    const auto peerFunction = peer->current_function;
+                    const auto peerSyscallHistory = peer->syscall_history.index;
+                    std::array<u64, 32> peerRegisters;
+                    std::memcpy(peerRegisters.data(), peer->gpr, sizeof(peer->gpr));
+                    const auto originalPriority = worker->prio.load();
+                    const u64 originalTag = lv2_obj::g_priority_order_tag.load();
+                    const u64 originalStartTime = worker->start_time;
+                    char scopeLog[180];
+                    std::snprintf(scopeLog, sizeof(scopeLog), "P49 scheduler pair: worker=0x%x priority=%lld start=%llu slots=%u",
+                        worker->id, static_cast<long long>(originalPriority.prio),
+                        static_cast<unsigned long long>(originalStartTime), static_cast<unsigned>(g_cfg.core.ppu_threads + 0u));
+                    ARMSX3StartupLog(scopeLog);
+                    struct MemoryCall { ppu_thread* peer; int (*execute)(ppu_thread*, void*); void* user; u32 sdk; } memoryCall{peer, performSyscalls, &program, program.sdkVersion};
+                    const auto underMemory = +[](ppu_thread* context, void* user) -> int {
+                        auto& call = *static_cast<MemoryCall*>(user);
+                        const auto underSDK = +[](ppu_thread* context, void* user) -> int {
+                            auto& call = *static_cast<MemoryCall*>(user);
+                            return armsx3_ios_ppu_probe_scheduler_process_sdk_and_call(context, call.peer, call.execute, call.user);
+                        };
+                        return armsx3_ios_process_sdk_probe_and_call(context, call.sdk, underSDK, user);
+                    };
+                    const u32 previousSDK = g_ps3_process_info.sdk_ver;
+                    const int result = armsx3_ios_memory_stats_probe_and_call(worker, underMemory, &memoryCall);
+                    if (g_ps3_process_info.sdk_ver != previousSDK)
+                        throw std::runtime_error("P49 scoped process SDK was not restored");
+                    ARMSX3StartupLog("P49 process SDK scope restored the previous global SDK value");
+                    std::snprintf(scopeLog, sizeof(scopeLog), "P49 scheduler pair returned %d", result);
+                    ARMSX3StartupLog(scopeLog);
+                    // Production fast_call retains interrupt_thread_executing.
+                    // Once unqueued, ppu_state reports SLEEP for that worker;
+                    // a worker rejected before the call still reports STOP.
+                    const auto expectedStatus = worker->interrupt_thread_executing ? PPU_THREAD_STATUS_SLEEP : PPU_THREAD_STATUS_STOP;
+                    const auto schedulerState = lv2_obj::ppu_state(worker, false, true);
+                    const auto peerState = lv2_obj::ppu_state(peer, false, true);
+                    std::snprintf(scopeLog, sizeof(scopeLog), "P49 scheduler cleanup: status=%u expected=%u position=%u fast_call=%u",
+                        static_cast<unsigned>(schedulerState.first), static_cast<unsigned>(expectedStatus), schedulerState.second,
+                        static_cast<unsigned>(worker->interrupt_thread_executing));
+                    ARMSX3StartupLog(scopeLog);
+                    if (worker->prio.load().all != originalPriority.all || lv2_obj::g_priority_order_tag.load() != originalTag ||
+                        worker->start_time != originalStartTime ||
+                        lv2_obj::get_running_ppu(0) || worker->next_ppu ||
+                        schedulerState != std::pair{expectedStatus, 0u}) {
+                        ARMSX3StartupLog("P49 diagnostic scheduler removal/priority/order counter restoration failed");
+                        throw std::runtime_error("P49 diagnostic scheduler removal/priority/order counter restoration failed");
+                    }
+                    if (peer->prio.load().all != originalPeerPriority.all || peer->start_time != originalPeerStartTime ||
+                        peer->next_ppu || peerState != std::pair{PPU_THREAD_STATUS_STOP, 0u} || peer->interrupt_thread_executing ||
+                        peer->cia != peerCIA || peer->lr != peerLR || peer->current_function != peerFunction ||
+                        peer->syscall_history.index != peerSyscallHistory ||
+                        std::memcmp(peerRegisters.data(), peer->gpr, sizeof(peer->gpr))) {
+                        ARMSX3StartupLog("P49 retained peer state/registers changed or remained queued");
+                        throw std::runtime_error("P49 retained peer state/registers changed or remained queued");
+                    }
+                    ARMSX3StartupLog("P49 peer cleanup: STOP, registers/priority/timestamp unchanged, no guest execution");
+                    if (worker->gpr[13] != pool + 0x7060 ||
+                        std::memcmp(vm::base(pool), expected.data(), expected.size()) ||
+                        std::memcmp(vm::get_super_ptr(pool), expected.data(), expected.size()))
+                        throw std::runtime_error("P49 linked guest execution changed TLS image/BSS/aliases");
+                    program.tlsMemory = true;
+                    return result;
+                };
+                // Invalid TLS image sizes must be rejected before allocation.
+                if (armsx3_ios_ppu_probe_tls_and_call(&context, program.dataAddress + 128, 10, 64, callWithTLS, &program) != -1 ||
+                    context.gpr[13] || vm::check_addr(0x50000)) {
+                    program.result = -97; context.state += cpu_flag::exit;
+                    program.completed.store(true, std::memory_order_release); return;
+                }
+                program.result = armsx3_ios_ppu_probe_tls_and_call(&context,
+                    u32(context.gpr[8]), u32(context.gpr[9]), u32(context.gpr[10]), callWithTLS, &program);
+                if (context.gpr[13] || vm::check_addr(0x50000)) program.result = -96;
+                context.state += cpu_flag::exit; program.completed.store(true, std::memory_order_release);
+            };
+            worker->cmd_list({
+                {ppu_cmd::set_args, 8}, u64{Emu.argv.size()}, u64{argv}, u64{envp}, u64{Emu.envp.size()},
+                u64{worker->id}, u64{program.tlsImage}, u64{program.tlsFileSize}, u64{program.tlsMemorySize},
+                {ppu_cmd::set_gpr, 11}, u64{program.entryOPD},
+                {ppu_cmd::set_gpr, 12}, u64{program.mallocPageSize},
+                {ppu_cmd::ptr_call, 0}, std::bit_cast<u64>(execute)});
+            const u32 address = program.begin;
+            worker->cia = address + 0x900; worker->lr = address + 0x904;
+            worker->gpr[2] = 0x13579;
+            worker->gpr[30] = u64(reinterpret_cast<uintptr_t>(&program));
+            worker->state -= cpu_flag::stop + cpu_flag::exit + cpu_flag::suspend + cpu_flag::memory + cpu_flag::wait;
+            ARMSX3StartupLog("P49 BEFORE real loaded guest yields and priority/join calls, equal-priority two-worker FIFO queue and TLS read");
+            *worker = thread_state::created;
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+            while (!program.completed.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline)
+                std::this_thread::yield();
+            if (!program.completed.load(std::memory_order_acquire))
+                throw std::runtime_error("P49 linked guest execution deadline exceeded");
+            (*worker)();
+            if (!program.tls || !program.abi || !program.tlsMemory || program.result != 122 || !program.syscalls || worker->gpr[3] != 42 ||
+                worker->gpr[8] != program.tlsImage || worker->gpr[9] != program.dataAddress + 32 ||
+                worker->gpr[4] != program.dataAddress + 40 || worker->gpr[7] != program.id ||
+                static_cast<s64>(worker->prio.load().prio) != program.primaryPriority || worker->gpr[11] != 46 || worker->gpr[12] != program.begin + 96 ||
+                worker->gpr[2] != 0x13579 || worker->gpr[1] != program.initialStack ||
+                worker->gpr[13] || worker->cia != address + 0x900 || worker->lr != address + 0x904 || worker->state & cpu_flag::ret)
+            {
+                char error[220];
+                std::snprintf(error, sizeof(error), "P49 TLS-linked execution mismatch (wrapper result %d, worker TLS %d, entry ABI %d, TLS memory %d, syscalls %d)",
+                    program.result, program.tls, program.abi, program.tlsMemory, program.syscalls);
+                ARMSX3StartupLog(error);
+                throw std::runtime_error(error);
+            }
+            return 0;
+        };
+        const auto expect32 = [](std::vector<u8>& bytes, u32 offset, u32 value) {
+            const be_t<u32> word = value; std::memcpy(bytes.data() + offset, &word, sizeof(word));
+        };
+        const auto expect64 = [](std::vector<u8>& bytes, u32 offset, u64 value) {
+            const be_t<u64> word = value; std::memcpy(bytes.data() + offset, &word, sizeof(word));
+        };
+        // Build expected bytes independently of the production packer.
+        const std::array<u64, 8> pointers{stackAddress + 0x7f80, stackAddress + 0x7f90,
+            stackAddress + 0x7fa0, 0, stackAddress + 0x7fc0, stackAddress + 0x7fd0, 0, 0};
+        for (u32 i = 0; i < pointers.size(); ++i) expect64(expectedStack, 0x7f40 + i * 8, pointers[i]);
+        std::memcpy(expectedStack.data() + 0x7f80, "probe", 6);
+        std::memcpy(expectedStack.data() + 0x7f90, "123456789012345", 16);
+        std::memcpy(expectedStack.data() + 0x7fa0, "1234567890123456", 17);
+        std::memcpy(expectedStack.data() + 0x7fc0, "LANG=C", 7);
+        expectedStack[0x7fd0] = 0;
+        for (u32 i = 0; i < 17; ++i) expectedStack[0x7fef + i] = u8(0xa0 + i);
+        // The production parameter handler itself rejects bad magic before linking.
+        vm::write32(dataAddress + 260, 0);
+        if (armsx3_ios_ppu_link_probe_image_and_call(&module, &elf.progs[2], executeLinked, &program) != -6)
+            throw std::runtime_error("P49 production PRX parameter handler accepted bad magic");
+        vm::write32(dataAddress + 260, control[1]);
+        if (std::memcmp(data, expectedData.data(), 0x10000))
+            throw std::runtime_error("P49 rejected PRX parameters mutated guest image");
+        ARMSX3StartupLog("P49 PASS: executable PRX parameter handler rejects bad magic before linking");
+        expect32(expectedData, 24, u32(CELL_CANCEL)); expect32(expectedData, 28, u32(CELL_CANCEL));
+        expect64(expectedData, 32, 42); expect64(expectedStack, frameAddress - stackAddress, initialStack);
+        expect64(expectedStack, frameAddress - stackAddress + 16, program.returnAddress);
+        expect64(expectedStack, frameAddress - stackAddress + 24, dataAddress + 32);
+        expect32(expectedData, 40, processParameters[1]); expect32(expectedData, 44, 0);
+        expect64(expectedData, 48, 0); expect32(expectedData, 60, 0);
+        expect32(expectedData, 384, 0x100000u); expect32(expectedData, 388, 0x100000u);
+        expect32(expectedData, 392, 0x100000u); expect32(expectedData, 396, 0u);
+        expect64(expectedData, 448, 0x40000ull); expect64(expectedData, 456, 0xfull);
+        expect32(expectedData, 464, 0x100000u); expect32(expectedData, 468, 0); expect32(expectedData, 472, 0);
+        // Freed-page output remains all zero; only its status is published.
+        expect32(expectedData, 504, u32(CELL_EINVAL));
+        expect32(expectedData, 508, u32(CELL_EFAULT)); expect32(expectedData, 512, u32(CELL_EFAULT));
+        expect32(expectedData, 544, 1); expect32(expectedData, 548, processParameters[0]); expect32(expectedData, 552, 0);
+        expect32(expectedData, 400, 0x100000u); expect32(expectedData, 404, 0x100000u);
+        expect32(expectedData, 408, 0); expect32(expectedData, 412, 0); expect32(expectedData, 416, 0);
+        for (unsigned repeat = 0; repeat < 2; ++repeat) {
+            program.joinable = repeat == 0;
+            expect32(expectedData, 56, u32(program.joinable));
+            const int result = armsx3_ios_ppu_link_probe_image_and_call(&module, &elf.progs[2], executeLinked, &program);
+            if (result != 0) {
+                char error[160];
+                std::snprintf(error, sizeof(error), "P49 executable PRX parameter linkage failed (wrapper result %d, iteration %u)", result, repeat + 1);
+                throw std::runtime_error(error);
+            }
+            expect64(expectedStack, frameAddress - stackAddress + 32, program.clockSeconds);
+            expect64(expectedStack, frameAddress - stackAddress + 40, program.clockNanoseconds);
+            expect64(expectedStack, frameAddress - stackAddress + 48, 0);
+            expect64(expectedStack, frameAddress - stackAddress + 56, 80000000ull);
+            expect64(expectedStack, frameAddress - stackAddress + 64, program.timebaseFirst);
+            expect64(expectedStack, frameAddress - stackAddress + 72, program.timebaseUpper);
+            expect64(expectedStack, frameAddress - stackAddress + 80, program.timebaseLast);
+            expect32(expectedStack, frameAddress - stackAddress + 88, program.allocatedAddress);
+            expect32(expectedStack, frameAddress - stackAddress + 92, 0);
+            expect32(expectedStack, frameAddress - stackAddress + 100, 0);
+            expect32(expectedStack, frameAddress - stackAddress + 104, u32(CELL_EINVAL));
+            expect32(expectedStack, frameAddress - stackAddress + 96, 0x12345678u);
+            expect32(expectedStack, frameAddress - stackAddress + 108, 0x89abcdefu);
+            expect32(expectedStack, frameAddress - stackAddress + 112, 0x12u);
+            expect32(expectedStack, frameAddress - stackAddress + 116, 0x89abu);
+            for (u32 address = 0x50000; address < 0x90000; address += 0x1000)
+                if (vm::check_addr(address)) throw std::runtime_error("P49 TLS pool remains mapped after worker cleanup");
+            for (const auto& region : std::array<std::pair<u32, const std::vector<u8>*>, 4>{
+                std::pair{codeAddress, &expectedCode}, std::pair{dataAddress, &expectedData}, std::pair{stackAddress, &expectedStack}, std::pair{peerStackAddress, &expectedPeerStack}})
+                if (std::memcmp(vm::base(region.first), region.second->data(), 0x10000) ||
+                    std::memcmp(vm::get_super_ptr(region.first), region.second->data(), 0x10000))
+                    throw std::runtime_error("P49 loaded ELF/code/BSS/stack/import restoration or alias mismatch");
+        }
+        if (std::memcmp(table, tableBefore.data(), tableBefore.size()) ||
+            std::memcmp(vm::get_super_ptr(tableAddress), tableBefore.data(), tableBefore.size()))
+            throw std::runtime_error("P49 registration mutated HLE descriptors/aliases");
+        for (u32 i = 0; i < handlers.size(); ++i)
+            if (cache[i].fn != handlers[i]) throw std::runtime_error("P49 registration mutated HLE dispatch");
+        for (u32 offset = 0; offset < 0x10000; offset += 0x1000)
+            if (vm::check_addr(tableAddress + offset, vm::page_writable))
+                throw std::runtime_error("P49 HLE descriptor page became writable");
+        for (u32 i = 0; i < codeHandlers.size(); ++i)
+            if (pageCache[i].fn != codeHandlers[i]) throw std::runtime_error("P49 guest execution mutated decoded code cache");
+        if (armsx3_ios_live_cpu_threads() != live || cpu_thread::g_threads_created.load() != created + 4 ||
+            cpu_thread::g_threads_deleted.load() != deleted + 4)
+            throw std::runtime_error("P49 registration changed CPU thread counters");
+        tableCleanup.release();
+        if (vm::dealloc(tableAddress, vm::main) != 0x10000 || vm::check_addr(tableAddress))
+            throw std::runtime_error("P49 HLE table deallocation failed");
+        segmentCleanup.release();
+        for (u32 allocated : {peerStackAddress, stackAddress, dataAddress, codeAddress})
+            if (vm::dealloc(allocated, vm::main) != 0x10000 || vm::check_addr(allocated))
+                throw std::runtime_error("P49 guest deallocation failed");
+        module.segs.clear(); module.addr_to_seg_index.clear();
+        vm::close(); initialized = false;
+        ARMSX3StartupLog("P49 PASS: loaded guest SC1/SC25 return PID1 and ELF SDK00360001/status0 with exact history/outputs and restored global SDK; loaded guest SC351 rejects null and partially mapped outputs with EFAULT and preserves the peer-tail sentinel; confirms live1MiB page attribute40000/accessf/page100000/pad0/status0 and freed-page EINVAL without output mutation, exact struct/status/history and aliases verified; three loaded guest SC352 calls report total1MiB and available1MiB/0/1MiB before/during/after1MiB allocation, exact DATA snapshots/statuses/history and statistics-log state restoration verified; loaded guest first/last allocated word STW/LWZ and big-endian LBZ/LHZ results verified in exact worker stack, allocation-success guard precedes heap accesses; loaded guest SC348 1MiB-page allocation (flag0x400) and SC349 free/double-free, zero/misaligned allocation rejection, oversized2MiB request returns ENOMEM without publication/charge, and null-output internal cleanup, all memory binding PCs/results and exact stack publication verified; scoped container has no retained allocations/charges; loaded guest MFTB268 full64 / MFTB269 upper32 / MFTB268 full64 reads are ordered inside host core timebase brackets, exact big-endian stack outputs verified; loaded guest SC43 rotates executing worker behind equal-priority peer in production FIFO queue, second tail SC43 keeps order, both return CELL_CANCEL because two slots avoid a context switch, same-priority SC47 preserves initial/yielded order and SC48 confirms1100, both yield and current-time/frequency history PCs/results, current-time null-output publication behavior, loaded guest seconds/nanoseconds/status0/frequency80000000 and thirty-two service counts/thirty-one history entries verified, priorities/order counter/timestamps and unexecuted peer preserved, TLS result42 and exact ELF/stack/TLS aliases with repeated cleanup; peer execution/scheduler start/context switching/full TLS HLE/firmware/RSX/game boot remain untested");
+        return 0;
+    }
+    catch (const std::exception& error) { ARMSX3StartupLog(error.what()); if (initialized) vm::close(); return -1; }
+}

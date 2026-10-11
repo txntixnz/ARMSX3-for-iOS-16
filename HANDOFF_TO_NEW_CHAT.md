@@ -2836,3 +2836,80 @@ Download ARMSX3_iOS16_INSTALL_THIS_IPA, install TrollStore, run all47tests
 and send startup log. No P49 until phone P48 PASS. Actual peer execution/
 context switches/scheduler start/global process/full TLS HLE/firmware/
 RSX/game boot remain untested. No images for startup-log work.
+
+
+## 2026-10-11 — build68 phone PASS; build69 adds P49 process SDK queries
+
+Phone ARMSX3-startup-20261011-133226-499-3719.txt, PID3719, build68:
+all47 AUTO PASS P2-P48 and final all-diagnostics PASS, no AUTO FAIL.
+P48 returns115 twice, null/partially mapped page outputs EFAULT, peer-tail
+sentinel unchanged, all earlier live/freed/heap/stats/FIFO/clock/TLS cleanup
+checks pass. Game boot remains untested.
+
+Build69 adds armsx3_core_test_process_sdk/UI P49 Guest process PID and ELF
+SDK. Complete1291554-byte build68 Bridge remains an exact prefix. P49 adds
+loaded guest SC1 sys_process_getpid and SC25 sys_process_get_sdk_version
+after the final memory report and before priority query. SC1 result stays
+in r3 for the subsequent SC25 PID argument; outputs at DATA+544 PID1,
++548 parsed ELF SDK00360001, +552 SDK query status0. Exact service table
+names, guest SC PCs440/456 and recorded history25/26 verified. The SDK
+value enters Program from processParameters[0], the production ELF parser
+output, then reaches a stopped-worker metadata scope during execution.
+These test current upstream behavior: process_getpid has a TODO and
+returns1, process_get_sdk_version ignores PID and reads the global SDK.
+This does not implement a real process registry or full process startup.
+
+New iOS-only armsx3_ios_process_sdk_probe_and_call in sys_process.cpp
+publishes only the fixture SDK00360001. Guards stopped emulator/current
+worker/static decoder/exact stack and entry/expected SDK, rejects nested
+scopes, saves previous global sdk_ver, restores it and its active flag on
+normal/error/throw exits. Callback SDK mutation returns-3 before RAII
+restoration. Production process handlers/bindings remain unchanged.
+Scope ordering: TLS -> memory statistics -> process SDK -> stopped pair
+scheduler -> exact callback. Bridge snapshots SDK before entering and
+checks restoration afterward. Other process fields are not changed.
+
+Fixture121words/484bytes, callee97words/388bytes,122successsteps inclHLE;
+allocation failure106host steps skips16heap accesses. CODE600..7e4 inside
+800, unchanged352-byte DATA300..460 and TLS/process metadata. SHA1
+4c9d73c848817ee4a40eb2aafdd50d4686e23a70. Old memory SC PCs/history
+unchanged; new PID25/440, SDK26/456, priority27/476, callerjoin28/60,
+post no-op priority29, final query30. Policy9 requires1x1,25x1 and retains
+policy8 counts:32service calls/31histories. Ring minimum31. Prior policies
+0-8 retain exact counts and existing accepted fixture sizes remain valid.
+
+0046-ios-guest-process-sdk-probe.patch touches private iOS loader max/
+allowlist (adds484), diagnostic policy9/new scheduler_process_sdk scope
+and declaration, sys_process.cpp iOS metadata wrapper/conditional Apple
+header plus system_config include. Production process/VM/memory/scheduler
+algorithms are unchanged. Includes sys_process.h only at the new Bridge
+append. The isolated diagnostic1MiB memory container is not a game limit.
+
+Validation passed: test_p49_fixture.py independently encodes seven added
+words, PID-in-r3/SC25 ABI, hash/bounds122steps, service PCs/history/layout,
+parsed SDK propagation/restoration; transitively P43-P48 fixture checks;
+CI now invokes it prepatch. test_p49_loader.py exact pre/post0046 wrapper
+reproduces prior484rejection, all10accepted sizes, neighbors/malformed
+TLS/process metadata and complete output/allocation rollback.
+test_p49_process.py extracts exact Program/performSyscalls/callWithTLS,
+production process_getpid/sys_process_getpid/process_get_sdk_version/
+sys_process_get_sdk_version and SDK wrapper plus all earlier service,
+IDM/allocator/clock/MFTB/scheduler bodies. Locks/FXO/VM/atomics/SC transport/
+scalar guest execution remain host shims. Both joinability runs122steps,
+nondefault SDK restoration, PID argument/publication/history, wrong PID/
+SDK/status rejection, positive/negative/throw/mutation/nested/10guard SDK
+scope cases, all10count policies/missing services, preceding page/heap/
+stats/TLS/FIFO/clock/registry/error/cleanup tests pass. Host CellError shim
+uses real enum u32 ABI; no production change needed for that harness fix.
+G++C++20 Werror ASAN/UBSAN detect_leaks=0. Original P48 integration also
+passes new policy code. All46patches check/apply/reverse/check against
+byte-exact pinned originals and final staging, restore original bytes;
+P43 pinned EOF regression passes. Workflow/plist/prefix/whitespace pass.
+No local Xcode SDK: native iOS compile/link/P49 phone execution pending.
+
+Baseline maindb25ea984906f0a5deaa1b3ba95328788dad38d1. Push build69 main;
+user observes Actions completion. Do not monitor Actions after push.
+Install ARMSX3_iOS16_INSTALL_THIS_IPA using TrollStore, run all48tests and
+send startup log. No P50 until phone P49 PASS. Actual peer execution/
+context switches/scheduler start/global process/full TLS HLE/firmware/
+RSX/game boot remain untested. No images for startup-log work.
