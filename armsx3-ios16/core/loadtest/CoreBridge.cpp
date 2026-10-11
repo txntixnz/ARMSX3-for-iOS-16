@@ -24041,3 +24041,816 @@ extern "C" __attribute__((visibility("default"))) int armsx3_core_test_full_line
     }
     catch (const std::exception& error) { ARMSX3StartupLog(error.what()); if (initialized) vm::close(); return -1; }
 }
+
+extern "C" __attribute__((visibility("default"))) int armsx3_core_test_reservation_line_targets()
+{
+    ARMSX3StartupLog("P64 BEFORE full-line cross-word store targets, outside-line rejection and cached reload");
+    bool initialized = false;
+    try
+    {
+        if (!Emu.IsStopped() || armsx3_ios_live_cpu_threads())
+            throw std::runtime_error("P64 requires stopped emulator and no live CPU workers");
+        struct Configuration
+        {
+            bool ppu = g_cfg.core.ppu_prof.get(), spu = g_cfg.core.spu_prof.get(), debug = g_cfg.core.spu_debug.get();
+            thread_scheduler_mode scheduler = g_cfg.core.thread_scheduler.get();
+            ppu_decoder_type decoder = g_cfg.core.ppu_decoder.get();
+            s32 reservations = g_cfg.core.ppu_128_reservations_loop_max_length;
+            bool rsxReservations = g_cfg.core.rsx_accurate_res_access.get();
+            Configuration() { g_cfg.core.ppu_prof.set(false); g_cfg.core.spu_prof.set(false);
+                g_cfg.core.spu_debug.set(false); g_cfg.core.thread_scheduler.set(thread_scheduler_mode::os);
+                g_cfg.core.ppu_decoder.set(ppu_decoder_type::_static);
+                g_cfg.core.ppu_128_reservations_loop_max_length.set(0);
+                g_cfg.core.rsx_accurate_res_access.set(false); }
+            ~Configuration() { g_cfg.core.ppu_prof.set(ppu); g_cfg.core.spu_prof.set(spu);
+                g_cfg.core.spu_debug.set(debug); g_cfg.core.thread_scheduler.set(scheduler);
+                g_cfg.core.ppu_decoder.set(decoder);
+                g_cfg.core.ppu_128_reservations_loop_max_length.set(reservations);
+                g_cfg.core.rsx_accurate_res_access.set(rsxReservations); }
+        } configuration;
+        if (g_cfg.core.ppu_threads + 0u != 2u || !g_fxo->is_init() ||
+            (!g_fxo->is_init<ppu_interpreter_rt>() && !g_fxo->init<ppu_interpreter_rt>()))
+            throw std::runtime_error("P64 requires two PPU slots and initialized core interpreter");
+        vm::init(); initialized = true;
+        if (!vm::reserve_map(vm::main, 0x10000, 0x80000))
+            throw std::runtime_error("P64 main memory block unavailable");
+        const std::array<u32, 4> addresses{0x10000, 0x20000, 0x30000, 0x40000};
+        for (u32 address : addresses)
+            if (vm::alloc(0x10000, vm::main, 0x10000) != address)
+                throw std::runtime_error("P64 isolated code/data/stack allocation failed");
+        const u32 codeAddress = addresses[0], dataAddress = addresses[1];
+        using namespace ppu_instructions;
+        using namespace ppu_instructions::implicts;
+        const u32 addPreviousTLS = (31u << 26) | (3u << 21) | (3u << 16) | (8u << 11) | (266u << 1);
+        // Caller at+0, framed callee at+64, leaf loop at+144. Each
+        // linked branch and BLR executes inside the bounded guest range.
+        const u32 addDouble = (63u << 26) | (3u << 21) | (1u << 16) | (2u << 11) | (21u << 1) | 1u;
+        const u32 xorVector = (4u << 26) | (3u << 21) | (1u << 16) | (2u << 11) | 0x4c4u;
+        const u32 addCarryRecord = (13u << 26) | (15u << 21) | (14u << 16) | 1u;
+        const u32 readConditions = (31u << 26) | (16u << 21) | (19u << 1);
+        const auto loadReserved = [](u32 rt, u32 rb) { return (31u << 26) | (rt << 21) | (rb << 11) | (20u << 1); };
+        const auto storeConditional = [](u32 rs, u32 rb) { return (31u << 26) | (rs << 21) | (rb << 11) | (150u << 1) | 1u; };
+        const auto readCR = [](u32 rt) { return (31u << 26) | (rt << 21) | (19u << 1); };
+        const auto loadWideReserved = [](u32 rt, u32 rb) { return (31u << 26) | (rt << 21) | (rb << 11) | (84u << 1); };
+        const auto storeWideConditional = [](u32 rs, u32 rb) { return (31u << 26) | (rs << 21) | (rb << 11) | (214u << 1) | 1u; };
+        const std::array<u32, 198> opcodes{
+            MFLR(0), STDU(1, 1, -128), STD(0, 1, 16), STD(2, 1, 24), B(48, false, true),
+            LD(2, 1, 24), STW(3, 6, 8), LD(0, 1, 16), ADDI(1, 1, 128), MTLR(0), ORI(3, 10, 0x100), B(152),
+            NOP(), NOP(), NOP(), NOP(),
+            MFLR(0), STDU(1, 1, -128), STD(0, 1, 16), STD(2, 1, 24), LI(2, 0x2468), B(60, false, true),
+            LWZ(7, 13, -0x7000), LWZ(8, 13, -0x6ff4), addPreviousTLS, STW(3, 13, -0x6ff4),
+            STW(7, 6, 0), STW(8, 6, 4), LD(2, 1, 24), LD(0, 1, 16), ADDI(1, 1, 128), MTLR(0), BLR(),
+            NOP(), NOP(), NOP(), LI(3, 0), MTCTR(4), ADDI(3, 3, 1), BC(16, 0, -4),
+            LFD(1, 6, 64), LFD(2, 6, 72), addDouble, STFD(3, 6, 16),
+            LVX(1, 6, 5), LVX(2, 6, 11), xorVector, STVX(3, 6, 12), BLR(),
+            addCarryRecord, CMPDI(7, 15, 0), readConditions, MFSPR(17, 32),
+            STW(16, 6, 48), STW(17, 6, 52), STW(15, 6, 56), BC(12, 30, 8),
+            LI(18, 0x1111), STW(18, 6, 60),
+            storeConditional(21, 19), readCR(22), STW(22, 6, 112),
+            loadReserved(20, 19), storeConditional(21, 19), readCR(23), STW(23, 6, 116),
+            storeConditional(21, 19), readCR(24), STW(24, 6, 120),
+            loadReserved(25, 19), storeConditional(26, 19), readCR(27), STW(27, 6, 124),
+            // Each load and conditional store below is in a separate dispatch.
+            // Both workers finish the cross-write slice before either retries.
+            loadReserved(28, 19), NOP(), storeConditional(21, 19), readCR(29), STW(29, 6, 0x2000),
+            loadReserved(28, 19), STW(26, 31, 0), storeConditional(26, 19), readCR(29), STW(29, 6, 0x2004),
+            loadReserved(28, 19), storeConditional(26, 19), readCR(29), STW(29, 6, 0x2008),
+            // Both loads complete before either competing conditional store.
+            // The winning path skips retry; the loser reloads and adds again.
+            LIS(5, 2), ORI(5, 5, 0x3000), loadReserved(28, 5), ADDI(28, 28, 1),
+            storeConditional(28, 5), readCR(29), STW(29, 6, 0x2010), BC(12, 2, 24),
+            loadReserved(28, 5), ADDI(28, 28, 1), storeConditional(28, 5), BC(4, 2, -12), NOP(),
+            readCR(29), STW(29, 6, 0x2014), LWZ(28, 5, 0), STW(28, 6, 0x2018),
+            // An independent reservation line tests both winner roles. Both
+            // loads precede either store; only the store slices are ordered.
+            ORI(5, 5, 0x80), loadReserved(28, 5), ADDI(28, 28, 1), storeConditional(28, 5),
+            readCR(29), STW(29, 6, 0x2020), BC(12, 2, 48),
+            // Pause this fresh retry before the winner's ordinary guest STW.
+            // Its failed MFCR output is checked before the loop overwrites it.
+            loadReserved(28, 5), ADDI(28, 28, 1), storeConditional(28, 5),
+            readCR(29), STW(29, 6, 0x2024), BC(4, 2, -20), NOP(), B(52),
+            NOP(), NOP(), NOP(),
+            LWZ(28, 5, 0), ADDI(28, 28, 1), STW(28, 5, 0),
+            NOP(), NOP(), NOP(), NOP(), NOP(), NOP(),
+            readCR(29), STW(29, 6, 0x2028), LWZ(28, 5, 0), STW(28, 6, 0x202c),
+            // A fresh, aligned 128-byte line holds a full 64-bit counter.
+            // Initial low bits fffffffe force a carry into the high word.
+            ADDI(5, 5, 0x80), loadWideReserved(28, 5), ADDI(28, 28, 1), storeWideConditional(28, 5),
+            readCR(29), STW(29, 6, 0x2030), BC(12, 2, 24),
+            loadWideReserved(28, 5), ADDI(28, 28, 1), storeWideConditional(28, 5), BC(4, 2, -12), NOP(),
+            readCR(29), STW(29, 6, 0x2034), LD(28, 5, 0), STD(28, 6, 0x2038),
+            // The preceding successful store consumed the reservation. Both
+            // attempts below must reject even though the value equals memory.
+            storeWideConditional(28, 5), readCR(29), STW(29, 6, 0x2040),
+            // Each worker reserves its own whole line. The peer mutates a
+            // different aligned 8-byte word, leaving the reserved word intact.
+            ADDI(5, 19, 0x3000), ADDI(31, 31, 0x3040), loadWideReserved(28, 5), NOP(),
+            STW(26, 31, 0), storeWideConditional(28, 5), readCR(29), STW(29, 6, 0x2044),
+            loadWideReserved(28, 5), ADDI(28, 28, 1), storeWideConditional(28, 5),
+            readCR(29), STW(29, 6, 0x2048), LD(28, 5, 0), STD(28, 6, 0x2050),
+            storeWideConditional(28, 5), readCR(29), STW(29, 6, 0x2058),
+            // A reservation loaded at line+8 permits a store at line+16 in
+            // full128 mode. The two words initially contain different values.
+            ADDI(5, 5, 0x1008), loadWideReserved(28, 5), ADDI(28, 28, 1), ADDI(5, 5, 8),
+            storeWideConditional(28, 5), readCR(29), STW(29, 6, 0x205c), LD(28, 5, 0), STD(28, 6, 0x2060),
+            // Reload the newly written word with the cached line timestamp;
+            // moving the store target to a different line must still reject.
+            loadWideReserved(28, 5), ADDI(28, 28, 1), ADDI(5, 5, 0x80),
+            storeWideConditional(28, 5), readCR(29), STW(29, 6, 0x2068),
+            ADDI(5, 5, -0x80), loadWideReserved(28, 5), ADDI(28, 28, 1),
+            storeWideConditional(28, 5), readCR(29), STW(29, 6, 0x206c), LD(28, 5, 0), STD(28, 6, 0x2070),
+            storeWideConditional(28, 5), readCR(29), STW(29, 6, 0x2078)};
+        std::memcpy(vm::base(dataAddress + 0x80), "iOSProbe", 9);
+        auto* code = reinterpret_cast<be_t<u32>*>(vm::base(codeAddress));
+        for (u32 i = 0; i < opcodes.size(); ++i) code[i] = opcodes[i];
+        const auto* bytes = static_cast<const u8*>(vm::base(codeAddress));
+        const std::vector<u8> expectedCode(bytes, bytes + 0x10000);
+        struct SegmentCacheCleanup {
+            u8* pointer; bool active = false;
+            void release() { if (active) { utils::memory_decommit(pointer, 0x8000); active = false; } }
+            ~SegmentCacheCleanup() { release(); }
+        } segmentCleanup{vm::g_exec_addr + vm::g_exec_addr_seg_offset + (codeAddress >> 1)};
+        segmentCleanup.active = true;
+        ppu_register_range(codeAddress, sizeof(opcodes));
+        ppu_register_function_at(codeAddress, sizeof(opcodes), nullptr);
+        auto& interpreter = g_fxo->get<ppu_interpreter_rt>();
+        const auto* cache = reinterpret_cast<const ppu_intrp_func*>(vm::g_exec_addr + u64(codeAddress) * 2);
+        if (!vm::check_addr(codeAddress, vm::page_executable, 0x10000))
+            throw std::runtime_error("P64 executable registration failed");
+        for (u32 i = 0; i < opcodes.size(); ++i)
+            if (!cache[i].fn || cache[i].fn != interpreter.decode(opcodes[i]))
+                throw std::runtime_error("P64 shared guest code was not eagerly decoded");
+        std::array<std::vector<u8>, 2> expectedStacks;
+        for (u32 i = 0; i < 2; ++i) {
+            std::memset(vm::base(addresses[2 + i]), 0xa5, 0x10000);
+            const auto* stack = static_cast<const u8*>(vm::base(addresses[2 + i]));
+            expectedStacks[i].assign(stack, stack + 0x10000);
+        }
+        struct Gate { std::atomic<u32> released{0}; std::atomic<bool> cancel{false}; };
+        struct Job {
+            u32 begin = 0, end = 0, budget = 0, count = 0, output = 0, round = 0, slice = 0;
+            int result = -99; bool tls = false, clean = false, resumed = false, reservationClean = false;
+            std::array<u64, 15> registers{};
+            std::array<u64, 35> continuation{};
+            std::array<u32, 4> status{};
+            std::array<u64, 32> floating{};
+            std::array<u8, 512> vectors{};
+            std::array<u8, 48> selectedVectors{};
+            u32 reservationAddress = 0, reservationCached = 0;
+            u64 reservationTime = 0; bool fullReservation = false;
+            std::array<u8, 128> reservationData{};
+            std::atomic<u32> ready{0}, completed{0}, exitAck{0};
+        };
+        struct Program {
+            Gate gate; std::array<Job, 2> jobs; std::vector<u8>* expectedData = nullptr;
+            std::array<std::vector<u8>, 2>* expectedStacks = nullptr;
+            u64 created = 0, deleted = 0;
+            int result = -99; u32 batches = 0, slices = 0; bool tlsMemory = false, restored = false;
+            std::array<u32, 2> totals{};
+            std::atomic<bool> completed{false};
+        };
+        const auto runGuest = +[](ppu_thread& context, Job& job) {
+            job.tls = get_current_cpu_thread() == &context && thread_ctrl::get_current() != nullptr;
+            const auto status = [&context] {
+                return std::array<u32, 4>{context.cr.pack(),
+                    (u32(context.xer.so) << 31) | (u32(context.xer.ov) << 30) |
+                    (u32(context.xer.ca) << 29) | context.xer.cnt,
+                    context.fpscr.bits.pack(), context.vrsave};
+            };
+            const auto snapshot = [&context] {
+                std::array<u64, 35> values{};
+                for (u32 i = 0; i < 32; ++i) values[i] = context.gpr[i];
+                values[32] = context.ctr; values[33] = context.lr; values[34] = context.cia;
+                return values;
+            };
+            // A new transaction initializes its inputs once. Every later queue
+            // callback continues the exact paused context without register writes.
+            job.resumed = !job.slice || (snapshot() == job.continuation && status() == job.status &&
+                context.raddr == job.reservationAddress && context.rtime == job.reservationTime &&
+                context.res_cached == job.reservationCached && context.use_full_rdata == job.fullReservation &&
+                !std::memcmp(context.rdata, job.reservationData.data(), sizeof(context.rdata)) &&
+                !std::memcmp(context.fpr, job.floating.data(), sizeof(context.fpr)) &&
+                !std::memcmp(context.vr, job.vectors.data(), sizeof(context.vr)));
+            if (!job.resumed) { job.result = -8; return; }
+            if (!job.slice) {
+                const u32 transaction = job.round / 115, worker = (job.output >> 7) & 1u;
+                context.cr.unpack(0x8a6c5e79u ^ (transaction << 8) ^ (worker << 12));
+                context.fpscr.bits.unpack(0x13579bdfu ^ (transaction << 20) ^ (worker << 24));
+                context.xer.so = !worker; context.xer.ov = (transaction & 1u) != 0;
+                context.xer.ca = worker != 0; context.xer.cnt = u8(0x15 + transaction + worker);
+                context.vrsave = 0x5aa50000u | (transaction << 8) | worker;
+                context.gpr[14] = worker ? 7u + transaction : ~u64{0};
+                context.gpr[15] = 0xdead0015; context.gpr[16] = 0xdead0016;
+                context.gpr[17] = 0xdead0017; context.gpr[18] = 0x2222;
+                if (context.raddr) { job.result = -9; return; }
+                context.gpr[19] = 0x21000 + transaction * 0x100 + worker * 0x80;
+                context.gpr[20] = 0xdead0020; context.gpr[21] = 0xa1b20000u + transaction * 0x100 + worker * 0x10;
+                context.gpr[22] = 0xdead0022; context.gpr[23] = 0xdead0023; context.gpr[24] = 0xdead0024;
+                context.gpr[25] = 0xdead0025; context.gpr[26] = 0xc3d40000u + transaction * 0x100 + worker * 0x10;
+                context.gpr[27] = 0xdead0027;
+                context.gpr[28] = 0xdead0028; context.gpr[29] = 0xdead0029;
+                context.gpr[31] = 0x21000 + transaction * 0x100 + (1u - worker) * 0x80;
+                context.gpr[0] = 0xfedc0000; context.gpr[2] = 0x13579000; context.gpr[3] = 0; context.gpr[4] = job.count;
+                context.gpr[5] = 80; context.gpr[6] = job.output; context.gpr[11] = 96; context.gpr[12] = 32;
+                for (auto& value : context.fpr) value = 7.0;
+                std::memset(context.vr, 0x3c, sizeof(context.vr));
+                context.gpr[7] = 0x76540000; context.gpr[8] = 0x87650000;
+                context.gpr[9] = 0x98760000; context.gpr[10] = 0xa9870000;
+                context.lr = 0x12340000; context.ctr = 0; context.cia = job.begin;
+            }
+            try { job.result = armsx3_ios_ppu_exec_bounded(&context, job.begin, job.end, job.budget); }
+            catch (const std::exception&) { job.result = -7; }
+            job.registers = {context.gpr[1], context.gpr[2], context.gpr[3], context.gpr[4], context.gpr[6],
+                context.gpr[7], context.gpr[8], context.gpr[9], context.gpr[10], context.gpr[13], context.ctr, context.cia,
+                context.lr, context.gpr[30], context.gpr[0]};
+            job.continuation = snapshot(); job.status = status();
+            const bool reserved = job.slice == 32 || job.slice == 33 || job.slice == 36 || job.slice == 37 || job.slice == 40;
+            const u32 transaction = job.round / 115, worker = (job.output >> 7) & 1u;
+            const bool orderedReserved = job.slice == 53 || job.slice == 54 ||
+                (worker != transaction % 2 && (job.slice == 57 || job.slice == 61 || job.slice == 62));
+            const bool fullReserved = job.slice == 80 || job.slice == 81 || job.slice == 82 || job.slice == 85 || job.slice == 86;
+            const u32 crossAddress = 0x25000u + transaction * 0x100 + worker * 0x80;
+            const bool crossLoadReserved = job.slice == 94 || job.slice == 95 || job.slice == 96;
+            const bool crossTargetReserved = job.slice == 101 || job.slice == 102 || job.slice == 103 || job.slice == 107 || job.slice == 108;
+            const u32 expectedReservation = crossLoadReserved ? crossAddress + 8u : crossTargetReserved ? crossAddress + 16u :
+                fullReserved ? 0x24000u + transaction * 0x100 + worker * 0x80 :
+                job.slice == 69 || job.slice == 70 ? 0x23100u : orderedReserved ? 0x23080u :
+                job.slice == 44 || job.slice == 45 ? 0x23000u : reserved ? u32(context.gpr[19]) : 0u;
+            job.reservationClean = context.raddr == expectedReservation;
+            job.reservationAddress = context.raddr; job.reservationTime = context.rtime;
+            job.reservationCached = context.res_cached; job.fullReservation = context.use_full_rdata;
+            std::memcpy(job.reservationData.data(), context.rdata, sizeof(context.rdata));
+            std::memcpy(job.floating.data(), context.fpr, sizeof(context.fpr));
+            std::memcpy(job.vectors.data(), context.vr, sizeof(context.vr));
+            for (u32 i = 0; i < 3; ++i) {
+                const be_t<v128> value = context.vr[i + 1];
+                std::memcpy(job.selectedVectors.data() + i * 16, &value, sizeof(value));
+            }
+            job.clean = !context.syscall_history.index && !context.interrupt_thread_executing && !(context.state & cpu_flag::exit);
+        };
+        auto* data = static_cast<u8*>(vm::base(dataAddress));
+        std::memset(data, 0xa5, 0x10000); std::memcpy(data + 0x80, "iOSProbe", 9);
+        for (u32 transaction = 0; transaction < 3; ++transaction)
+            for (u32 i = 0; i < 2; ++i) {
+                const u32 offset = 0x200 + transaction * 0x100 + i * 0x80;
+                const std::array<be_t<u64>, 2> inputs{
+                    std::bit_cast<u64>(1.5 + transaction * 0.5 + i * 2.0),
+                    std::bit_cast<u64>(2.25 + transaction * 0.25 + i * 4.0)};
+                std::memcpy(data + offset + 64, inputs.data(), sizeof(inputs));
+                const be_t<u32> initial = 0x11223300u + transaction * 0x10 + i;
+                std::memcpy(data + 0x1000 + transaction * 0x100 + i * 0x80, &initial, sizeof(initial));
+                for (u32 byte = 0; byte < 16; ++byte) {
+                    data[offset + 80 + byte] = u8(0x10 + transaction * 17 + i * 53 + byte * 3);
+                    data[offset + 96 + byte] = u8(0xe1 - transaction * 11 - i * 29 - byte * 5);
+                }
+            }
+        const be_t<u32> sharedInitial = 0x44556600u;
+        std::memcpy(data + 0x3000, &sharedInitial, sizeof(sharedInitial));
+        const be_t<u32> orderedInitial = 0x44557700u;
+        std::memcpy(data + 0x3080, &orderedInitial, sizeof(orderedInitial));
+        const be_t<u64> wideInitial = 0x55667788fffffffeull;
+        std::memcpy(data + 0x3100, &wideInitial, sizeof(wideInitial));
+        for (u32 transaction = 0; transaction < 3; ++transaction)
+            for (u32 i = 0; i < 2; ++i) {
+                const be_t<u64> value = 0x66778899aabbcc00ull + transaction * 0x100 + i * 0x10;
+                std::memcpy(data + 0x4000 + transaction * 0x100 + i * 0x80, &value, sizeof(value));
+            }
+        for (u32 transaction = 0; transaction < 3; ++transaction)
+            for (u32 i = 0; i < 2; ++i) {
+                const std::array<be_t<u64>, 2> values{
+                    0x778899aabbccdd00ull + transaction * 0x100 + i * 0x10,
+                    0x8899aabbccdde000ull + transaction * 0x100 + i * 0x10};
+                std::memcpy(data + 0x5008 + transaction * 0x100 + i * 0x80, values.data(), sizeof(values));
+            }
+        std::vector<u8> expectedData(data, data + 0x10000);
+        const u64 live = armsx3_ios_live_cpu_threads();
+        const auto created = cpu_thread::g_threads_created.load(), deleted = cpu_thread::g_threads_deleted.load();
+        Program program; program.expectedData = &expectedData; program.expectedStacks = &expectedStacks; program.created = created; program.deleted = deleted;
+        for (auto& job : program.jobs) { job.begin = codeAddress; job.end = codeAddress + sizeof(opcodes); }
+        {
+            // Callback storage remains alive until every stop/join guard has run.
+            struct Callback { Program* program; decltype(runGuest) runner; } callback{&program, runGuest};
+            std::unique_ptr<named_thread<ppu_thread>> owner;
+            bool launched = false, joined = false;
+            struct StopOwner {
+                Program& program; decltype(owner)& slot; bool& started; bool& finished;
+                ~StopOwner() {
+                    program.gate.cancel.store(true, std::memory_order_release);
+                    if (!slot) return;
+                    slot->state += cpu_flag::exit; slot->state.notify_one();
+                    slot->cmd_notify.store(1); slot->cmd_notify.notify_one();
+                    if (!started) { *slot = thread_state::created; started = true; }
+                    if (!finished) { (*slot)(); finished = true; }
+                }
+            } stopOwner{program, owner, launched, joined};
+            {
+                struct ConstructionID { u32 previous = id_manager::g_id;
+                    explicit ConstructionID(u32 id) { id_manager::g_id = id; }
+                    ~ConstructionID() { id_manager::g_id = previous; } } constructionID{ppu_thread::id_base};
+                const ppu_thread_params params{static_cast<vm::addr_t>(addresses[2]), 0x8000, 0, {}, 0, 0};
+                owner = std::make_unique<named_thread<ppu_thread>>(stx::launch_retainer{}, params, "iOS resumed TLS owner", 1000);
+            }
+            const ppu_intrp_func_t executeOwner = +[](ppu_thread& context, ppu_opcode_t, be_t<u32>*, ppu_intrp_func*) {
+                auto& callback = *reinterpret_cast<Callback*>(context.gpr[30]); auto& program = *callback.program;
+                const auto callWithTLS = +[](ppu_thread* owner, u32 pool, void* user) -> int {
+                    auto& callback = *static_cast<Callback*>(user); auto& program = *callback.program;
+                    if (pool != 0x50000 || owner->gpr[13] != pool + 0x7060)
+                        throw std::runtime_error("P64 production main TLS slot mismatch");
+                    std::unique_ptr<named_thread<ppu_thread>> peer;
+                    bool launched = false, joined = false; u32 peerTLS = 0;
+                    struct PeerCleanup {
+                        ppu_thread& owner; Program& program; decltype(peer)& slot;
+                        bool& started; bool& finished; u32 pool; u32& tls;
+                        void join() {
+                            vm::temporary_unlock(owner);
+                            if (slot && !finished) {
+                                slot->state += cpu_flag::exit; slot->state.notify_one();
+                                slot->cmd_notify.store(1); slot->cmd_notify.notify_one();
+                                if (!started) { *slot = thread_state::created; started = true; }
+                                (*slot)(); finished = true;
+                            }
+                        }
+                        ~PeerCleanup() {
+                            program.gate.cancel.store(true, std::memory_order_release);
+                            join();
+                            if (tls) armsx3_ios_ppu_probe_free_peer_tls(&owner, pool, tls);
+                        }
+                    } cleanup{*owner, program, peer, launched, joined, pool, peerTLS};
+                    peerTLS = armsx3_ios_ppu_probe_alloc_peer_tls(owner, pool);
+                    if (peerTLS != pool + 0x70d0 || armsx3_ios_ppu_probe_alloc_peer_tls(owner, pool))
+                        throw std::runtime_error("P64 real peer TLS allocation or duplicate guard failed");
+                    {
+                        struct ConstructionID { u32 previous = id_manager::g_id;
+                            explicit ConstructionID(u32 id) { id_manager::g_id = id; }
+                            ~ConstructionID() { id_manager::g_id = previous; } } constructionID{ppu_thread::id_base + 1};
+                        const ppu_thread_params params{static_cast<vm::addr_t>(0x40000), 0x8000, peerTLS, {}, 0, 0};
+                        peer = std::make_unique<named_thread<ppu_thread>>(stx::launch_retainer{}, params, "iOS resumed TLS peer", 1000);
+                    }
+                    if (peer->id == owner->id || peer->gpr[13] != peerTLS)
+                        throw std::runtime_error("P64 persistent peer constructor TLS register/ID mismatch");
+                    const ppu_intrp_func_t executePeer = +[](ppu_thread& context, ppu_opcode_t, be_t<u32>*, ppu_intrp_func*) {
+                        auto& callback = *reinterpret_cast<Callback*>(context.gpr[30]);
+                        auto& program = *callback.program; auto& job = program.jobs[1]; const u32 round = job.round;
+                        job.ready.store(round + 1, std::memory_order_release);
+                        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+                        while (program.gate.released.load(std::memory_order_acquire) < round + 1 &&
+                            !program.gate.cancel.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline)
+                            std::this_thread::yield();
+                        if (program.gate.released.load(std::memory_order_acquire) < round + 1 || program.gate.cancel.load(std::memory_order_acquire)) job.result = -6;
+                        else callback.runner(context, job);
+                        vm::temporary_unlock(context);
+                        // The callback performs no Program/guest-memory access after
+                        // this publication, and returns to the real command queue.
+                        job.completed.store(round + 1, std::memory_order_release);
+                    };
+                    const ppu_intrp_func_t exitPeer = +[](ppu_thread& context, ppu_opcode_t, be_t<u32>*, ppu_intrp_func*) {
+                        auto& callback = *reinterpret_cast<Callback*>(context.gpr[30]);
+                        context.state += cpu_flag::exit;
+                        callback.program->jobs[1].exitAck.fetch_add(1, std::memory_order_release);
+                    };
+                    peer->gpr[30] = u64(reinterpret_cast<uintptr_t>(&callback)); peer->cia = program.jobs[1].begin;
+                    peer->state -= cpu_flag::stop + cpu_flag::exit + cpu_flag::suspend + cpu_flag::memory + cpu_flag::wait;
+                    u64 waits = armsx3_ios_ppu_command_waits();
+                    *peer = thread_state::created; launched = true;
+                    const auto waitForQueue = [&] {
+                        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+                        while (armsx3_ios_ppu_command_waits() == waits && std::chrono::steady_clock::now() < deadline)
+                            std::this_thread::yield();
+                        if (armsx3_ios_ppu_command_waits() == waits || armsx3_ios_live_cpu_threads() != 2 ||
+                            cpu_thread::g_threads_created.load() != program.created + 2 || cpu_thread::g_threads_deleted.load() != program.deleted)
+                            throw std::runtime_error("P64 peer queue wait or unchanged owner/peer lifecycle mismatch");
+                        waits = armsx3_ios_ppu_command_waits();
+                    };
+                    waitForQueue();
+                    if (armsx3_ios_ppu_probe_free_peer_tls(owner, pool, peerTLS) != -1 ||
+                        armsx3_ios_ppu_probe_alloc_peer_tls(owner, pool))
+                        throw std::runtime_error("P64 active peer TLS allocation/free guards failed");
+                    std::vector<u8> expectedPool(0x40000, 0);
+                    for (u32 i = 0; i < 3; ++i) std::memcpy(expectedPool.data() + 0x60 + i * 0x70, "iOSProbe", 9);
+                    for (u32 transaction = 0; transaction < 3; ++transaction)
+                    {
+                        const auto previous = program.totals;
+                        std::array<u64, 2> crossTimes{};
+                        std::array<bool, 2> won{false, false};
+                        const u32 orderedWinner = transaction % 2, wideWinner = 1u - orderedWinner;
+                        for (u32 slice = 0; slice < 115; ++slice)
+                        {
+                            // Both guest contexts are paused and the peer queue is empty.
+                            // Mode changes precede command publication; no worker runs
+                            // a reservation instruction concurrently with this write.
+                            if (slice == 0) g_cfg.core.ppu_128_reservations_loop_max_length.set(0);
+                            if (slice == 79) g_cfg.core.ppu_128_reservations_loop_max_length.set(-1);
+                            const u32 round = transaction * 115 + slice;
+                            for (u32 i = 0; i < program.jobs.size(); ++i) {
+                                auto& job = program.jobs[i]; job.round = round; job.slice = slice;
+                                job.count = 17 + transaction * 3 + i * 14;
+                                job.output = 0x20200 + transaction * 0x100 + i * 0x80;
+                                const std::array<u32, 115> budgets{4, 7, 3, 5, job.count * 2 - 6, 2, 1, 1, 2, 1, 1, 3, 2, 2, 5, 3, 2, 2, 1, 1, 2, 3, 1, i ? 2u : 1u, 1, 2, 2, 2, 1, 2, 2, 2,
+                                    1, 1, 1, 2, 1, 1, 1, 2, 1, 1, 2,
+                                    2, 1, 1, 1, 2, won[i] ? 1u : 6u, 2, 1, 1,
+                                    1, 1, 1, 1, 2, i == orderedWinner ? 1u : 3u,
+                                    i == orderedWinner ? 3u : 1u, i == orderedWinner ? 1u : 2u,
+                                    1, 1, 1, 1, i == orderedWinner ? 1u : 5u, 2, 1, 1,
+                                    1, 1, 1, 1, 2, i == wideWinner ? 1u : 6u, 2, 1, 1, 1, 2,
+                                    2, 1, 1, 1, 1, 2, 1, 1, 1, 2, 1, 1, 1, 2,
+                                    1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 2, 1, 1, 1, 2};
+                                job.budget = budgets[slice];
+                            }
+                            peer->cmd_list({{ppu_cmd::ptr_call, 0}, std::bit_cast<u64>(executePeer)});
+                            peer->cmd_notify.store(1); peer->cmd_notify.notify_one();
+                            const auto readyDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+                            while (program.jobs[1].ready.load(std::memory_order_acquire) < round + 1 && std::chrono::steady_clock::now() < readyDeadline)
+                                std::this_thread::yield();
+                            if (program.jobs[1].ready.load(std::memory_order_acquire) != round + 1 || armsx3_ios_live_cpu_threads() != 2)
+                                throw std::runtime_error("P64 retained peer did not reach the next continuation gate");
+                            // These three slices order native guest stores, without editing
+                            // registers, reservations, guest memory, or store results.
+                            const bool orderedStore = slice == 55 || slice == 58 || slice == 71;
+                            const u32 firstWorker = slice == 71 ? wideWinner : orderedWinner;
+                            const bool ownerFirst = orderedStore && firstWorker == 0;
+                            const bool peerFirst = orderedStore && firstWorker == 1;
+                            if (ownerFirst) {
+                                callback.runner(*owner, program.jobs[0]);
+                                vm::temporary_unlock(*owner);
+                            }
+                            program.gate.released.store(round + 1, std::memory_order_release);
+                            if (!orderedStore) {
+                                callback.runner(*owner, program.jobs[0]);
+                                vm::temporary_unlock(*owner);
+                            }
+                            const auto finishDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+                            while (program.jobs[1].completed.load(std::memory_order_acquire) < round + 1 && std::chrono::steady_clock::now() < finishDeadline)
+                                std::this_thread::yield();
+                            if (program.jobs[1].completed.load(std::memory_order_acquire) != round + 1)
+                                throw std::runtime_error("P64 retained peer continuation deadline/count mismatch");
+                            waitForQueue();
+                            if (peerFirst) {
+                                callback.runner(*owner, program.jobs[0]);
+                                vm::temporary_unlock(*owner);
+                            }
+                            if (slice == 94)
+                                for (u32 i = 0; i < 2; ++i) crossTimes[i] = program.jobs[i].reservationTime;
+                            if (slice == 71) {
+                                for (u32 i = 0; i < 2; ++i)
+                                    if (bool(program.jobs[i].status[0] & 0x20000000u) != (i == wideWinner))
+                                        throw std::runtime_error("P64 wide competition must have designated winner and rejected loser");
+                            }
+                            if (slice >= 71) {
+                                const be_t<u64> value = 0x55667788fffffffeull + transaction * 2 + (slice >= 73 ? 2u : 1u);
+                                std::memcpy(program.expectedData->data() + 0x3100, &value, sizeof(value));
+                            }
+                            if (slice == 55) {
+                                for (u32 i = 0; i < 2; ++i)
+                                    if (bool(program.jobs[i].status[0] & 0x20000000u) != (i == orderedWinner))
+                                        throw std::runtime_error("P64 ordered competition winner/loser mismatch");
+                            }
+                            if (slice >= 55) {
+                                const be_t<u32> value = 0x44557700u + transaction * 3 +
+                                    (slice >= 63 ? 3u : slice >= 58 ? 2u : 1u);
+                                std::memcpy(program.expectedData->data() + 0x3080, &value, sizeof(value));
+                            }
+                            if (slice == 46) {
+                                for (u32 i = 0; i < 2; ++i) won[i] = (program.jobs[i].status[0] & 0x20000000u) != 0;
+                                if (won[0] == won[1])
+                                    throw std::runtime_error("P64 competing stores must have exactly one winner and one loser");
+                            }
+                            if (slice >= 46) {
+                                const be_t<u32> value = 0x44556600u + transaction * 2 + (slice >= 48 ? 2u : 1u);
+                                std::memcpy(program.expectedData->data() + 0x3000, &value, sizeof(value));
+                            }
+                            for (u32 i = 0; i < program.jobs.size(); ++i)
+                            {
+                                const auto& job = program.jobs[i];
+                                const u32 total = previous[i] + job.count;
+                                const u32 initialSP = 0x30000u + i * 0x10000u + 0x8000u - ppu_stack_start_offset;
+                                const u32 sp = initialSP - (slice < 1 || (slice >= 14 && slice < 16) ? 128u : slice < 16 ? 256u : 0u);
+                                const u32 lr = slice < 1 || slice >= 16 ? 0x12340000u : slice < 14 ? job.begin + 88 : job.begin + 20;
+                                const std::array<u32, 115> offsets{16, 144, 156, 152, 160, 168, 172, 176, 184, 188, 192, 96, 104, 112, 20, 32, 40, 196, 200, 204, 212, 224, i ? 228u : 232u, 236, 240, 248, 256, 264, 268, 276, 284, 292,
+                                    296, 300, 304, 312, 316, 320, 324, 332, 336, 340, 348, 356, 360, 364, 368, 376, 400, 408, 412, 416,
+                                    420, 424, 428, 432, 440, i == orderedWinner ? 488u : 452u,
+                                    i == orderedWinner ? 500u : 456u, i == orderedWinner ? 504u : 464u,
+                                    i == orderedWinner ? 508u : 444u, i == orderedWinner ? 512u : 448u,
+                                    i == orderedWinner ? 516u : 452u, i == orderedWinner ? 520u : 456u,
+                                    524, 532, 536, 540, 544, 548, 552, 556, 564, 588, 596, 600, 604, 608, 616, 624, 628, 632, 636, 640, 648, 652, 656, 660, 668, 672, 676, 680, 688,
+                                    692, 696, 700, 704, 708, 716, 720, 724, 728, 732, 736, 740, 748, 752, 756, 760, 764, 772, 776, 780, 784, 792};
+                                const std::array<u64, 15> expected{sp,
+                                    slice < 1 || slice >= 14 ? 0x13579000u : 0x2468u,
+                                    slice < 2 ? 0u : slice == 2 ? 1u : slice == 3 ? 3u : slice < 12 ? job.count : total,
+                                    job.count, job.output, slice < 11 ? 0x76540000u : 0x694f5350u,
+                                    slice < 11 ? 0x87650000u : previous[i], 0x98760000u,
+                                    slice < 17 ? 0xa9870000u : (total | 0x100u), 0x57060u + i * 0x70u,
+                                    slice == 2 ? job.count : slice == 3 ? job.count - 3 : 0,
+                                    job.begin + offsets[slice], lr, u64(reinterpret_cast<uintptr_t>(&callback)),
+                                    slice < 1 || slice >= 15 ? 0x12340000u : job.begin + 20};
+                                if (!job.tls || !job.clean || !job.resumed || !job.reservationClean || job.registers != expected ||
+                                    job.result != (slice < 114 ? -2 : 2) || job.exitAck.load())
+                                    throw std::runtime_error("P64 resumed SIMD call/SP/rTOC/LR/registers/PC/result mismatch");
+                                const double left = 1.5 + transaction * 0.5 + i * 2.0;
+                                const double right = 2.25 + transaction * 0.25 + i * 4.0;
+                                const double sum = left + right;
+                                for (u32 reg = 0; reg < 32; ++reg) {
+                                    const double value = reg == 1 && slice >= 5 ? left :
+                                        reg == 2 && slice >= 5 ? right : reg == 3 && slice >= 6 ? sum : 7.0;
+                                    if (job.floating[reg] != std::bit_cast<u64>(value))
+                                        throw std::runtime_error("P64 loaded/computed/resumed FPR or untouched floating register differs");
+                                }
+                                const u32 offset = job.output - 0x20000u;
+                                std::array<u8, 16> vectorResult{};
+                                for (u32 byte = 0; byte < 16; ++byte) {
+                                    const u8 a = (*program.expectedData)[offset + 80 + byte];
+                                    const u8 b = (*program.expectedData)[offset + 96 + byte];
+                                    vectorResult[byte] = a ^ b;
+                                    if (job.selectedVectors[byte] != (slice >= 8 ? a : 0x3c) ||
+                                        job.selectedVectors[16 + byte] != (slice >= 8 ? b : 0x3c) ||
+                                        job.selectedVectors[32 + byte] != (slice >= 9 ? u8(a ^ b) : 0x3c))
+                                        throw std::runtime_error("P64 loaded/computed vector lanes or paused VXOR value differs");
+                                }
+                                for (u32 reg = 0; reg < 32; ++reg)
+                                    if (reg < 1 || reg > 3)
+                                        for (u32 byte = 0; byte < 16; ++byte)
+                                            if (job.vectors[reg * 16 + byte] != 0x3c)
+                                                throw std::runtime_error("P64 untouched vector register canary differs");
+                                if (slice >= 7) {
+                                    const be_t<u64> value = std::bit_cast<u64>(sum);
+                                    std::memcpy(program.expectedData->data() + offset + 16, &value, sizeof(value));
+                                }
+                                if (slice >= 10)
+                                    std::memcpy(program.expectedData->data() + offset + 32, vectorResult.data(), vectorResult.size());
+                                const auto writeExpectedStack = [&](u32 address, u64 word) {
+                                    const be_t<u64> value = word;
+                                    std::memcpy((*program.expectedStacks)[i].data() + address - (0x30000u + i * 0x10000u), &value, sizeof(value));
+                                };
+                                writeExpectedStack(initialSP - 128, initialSP);
+                                writeExpectedStack(initialSP - 128 + 16, 0x12340000);
+                                writeExpectedStack(initialSP - 128 + 24, 0x13579000);
+                                if (slice >= 1) {
+                                    writeExpectedStack(initialSP - 256, initialSP - 128);
+                                    writeExpectedStack(initialSP - 256 + 16, job.begin + 20);
+                                    writeExpectedStack(initialSP - 256 + 24, 0x13579000);
+                                }
+                                if (slice >= 12) {
+                                    const be_t<u32> value = total;
+                                    std::memcpy(expectedPool.data() + 0x6c + i * 0x70, &value, sizeof(value));
+                                }
+                                if (slice >= 13) {
+                                    const std::array<be_t<u32>, 2> words{0x694f5350u, previous[i]};
+                                    std::memcpy(program.expectedData->data() + job.output - 0x20000u, words.data(), sizeof(words));
+                                }
+                                if (slice >= 15) {
+                                    const be_t<u32> word = total;
+                                    std::memcpy(program.expectedData->data() + job.output - 0x20000u + 8, &word, sizeof(word));
+                                }
+                                const u32 condition = i ? 4u : 3u;
+                                u32 cr = 0x8a6c5e79u ^ (transaction << 8) ^ (i << 12);
+                                if (slice >= 6) cr = (cr & ~0x0f000000u) | 0x04000000u;
+                                if (slice >= 18) cr = (cr & ~0xf0000000u) | (condition << 28);
+                                if (slice >= 19) cr = (cr & ~0xfu) | condition;
+                                const u32 readbackCR = cr;
+                                if (slice >= 24) {
+                                    const bool success = slice >= 46 && slice < 48 ? won[i] :
+                                        slice == 26 || slice == 27 || (slice >= 30 && slice < 38) || slice >= 41;
+                                    const bool orderedSuccess = slice >= 55 ? i == orderedWinner || slice >= 63 : success;
+                                    const bool wideSuccess = slice >= 77 ? false : slice >= 71 && slice < 73 ? i == wideWinner :
+                                        slice >= 73 ? true : orderedSuccess;
+                                    const bool fullSuccess = slice >= 79 ? slice >= 87 && slice < 91 : wideSuccess;
+                                    const bool crossSuccess = slice >= 93 ? (slice >= 97 && slice < 104) || (slice >= 109 && slice < 113) : fullSuccess;
+                                    const u32 field = (crossSuccess ? 2u : 0u) | (i ? 0u : 1u);
+                                    cr = (cr & ~0xf0000000u) | (field << 28);
+                                }
+                                const u32 xer = (i ? 0u : 0x80000000u) | ((transaction & 1u) << 30) |
+                                    ((slice >= 18 ? !i : bool(i)) ? 0x20000000u : 0u) | (0x15 + transaction + i);
+                                u32 fpscr = 0x13579bdfu ^ (transaction << 20) ^ (i << 24);
+                                if (slice >= 6) fpscr = (fpscr & ~0xf000u) | 0x4000u;
+                                const std::array<u32, 4> expectedStatus{cr, xer, fpscr, 0x5aa50000u | (transaction << 8) | i};
+                                const std::array<u64, 5> expectedExtra{i ? 7u + transaction : ~u64{0},
+                                    slice >= 18 ? (i ? 8u + transaction : 0u) : 0xdead0015u,
+                                    slice >= 20 ? readbackCR : 0xdead0016u, slice >= 20 ? xer : 0xdead0017u,
+                                    slice >= 23 && i ? 0x1111u : 0x2222u};
+                                if (job.status != expectedStatus ||
+                                    !std::equal(expectedExtra.begin(), expectedExtra.end(), job.continuation.begin() + 14))
+                                    throw std::runtime_error("P64 CR/XER/FPSCR/VRSAVE or condition/carry/readback registers differ");
+                                if (slice >= 21) {
+                                    const std::array<be_t<u32>, 3> words{readbackCR, xer, i ? 8u + transaction : 0u};
+                                    std::memcpy(program.expectedData->data() + offset + 48, words.data(), sizeof(words));
+                                }
+                                const u32 atomicAddress = 0x21000 + transaction * 0x100 + i * 0x80;
+                                const u32 initialWord = 0x11223300u + transaction * 0x10 + i;
+                                const u32 firstWord = 0xa1b20000u + transaction * 0x100 + i * 0x10;
+                                const u32 secondWord = 0xc3d40000u + transaction * 0x100 + i * 0x10;
+                                const u32 failedCR = (readbackCR & ~0xf0000000u) | ((i ? 0u : 1u) << 28);
+                                const u32 successCR = failedCR | 0x20000000u;
+                                const std::array<u64, 9> expectedAtomic{atomicAddress,
+                                    slice >= 26 ? initialWord : 0xdead0020u, firstWord,
+                                    slice >= 25 ? failedCR : 0xdead0022u, slice >= 27 ? successCR : 0xdead0023u,
+                                    slice >= 29 ? failedCR : 0xdead0024u, slice >= 30 ? firstWord : 0xdead0025u,
+                                    secondWord, slice >= 31 ? successCR : 0xdead0027u};
+                                if (!std::equal(expectedAtomic.begin(), expectedAtomic.end(), job.continuation.begin() + 19))
+                                    throw std::runtime_error("P64 reserved loads or invalid/success/consumed/recovered CR readbacks differ");
+                                if (slice >= 26) {
+                                    const u32 peerWord = 0xc3d40000u + transaction * 0x100 + (1u - i) * 0x10;
+                                    const be_t<u32> value = slice >= 41 ? secondWord : slice >= 37 ? peerWord :
+                                        slice >= 34 ? firstWord : slice >= 30 ? secondWord : firstWord;
+                                    std::memcpy(program.expectedData->data() + atomicAddress - 0x20000u, &value, sizeof(value));
+                                }
+                                const u32 peerWord = 0xc3d40000u + transaction * 0x100 + (1u - i) * 0x10;
+                                const u32 raceInitial = 0x44556600u + transaction * 2;
+                                const u32 raceCR = won[i] ? successCR : failedCR;
+                                const bool orderedWon = i == orderedWinner;
+                                const u32 orderedBase = 0x44557700u + transaction * 3;
+                                const u64 orderedValue = slice >= 66 ? orderedBase + 3u :
+                                    orderedWon ? (slice >= 58 ? orderedBase + 2u : slice >= 54 ? orderedBase + 1u : orderedBase) :
+                                    slice >= 62 ? orderedBase + 3u : slice >= 57 ? orderedBase + 2u :
+                                    slice >= 54 ? orderedBase + 1u : orderedBase;
+                                const u64 wideBase = 0x55667788fffffffeull + transaction * 2;
+                                const bool wideWon = i == wideWinner;
+                                const u64 wideValue = slice >= 75 || (slice >= 73 && !wideWon) ? wideBase + 2u :
+                                    slice >= 70 ? wideBase + 1u : wideBase;
+                                const u32 fullAddress = 0x24000u + transaction * 0x100 + i * 0x80;
+                                const u64 fullInitial = 0x66778899aabbcc00ull + transaction * 0x100 + i * 0x10;
+                                const u32 crossAddress = 0x25000u + transaction * 0x100 + i * 0x80;
+                                const u64 crossLoad = 0x778899aabbccdd00ull + transaction * 0x100 + i * 0x10;
+                                const u64 crossTarget = 0x8899aabbccdde000ull + transaction * 0x100 + i * 0x10;
+                                const u64 crossValue = crossLoad + (slice >= 108 ? 2u : slice == 107 ? 1u :
+                                    slice >= 102 ? 2u : slice >= 95 ? 1u : 0u);
+                                const std::array<u64, 2> expectedPaused{
+                                    slice >= 94 ? crossValue : slice >= 80 ? fullInitial + (slice >= 86 ? 1u : 0u) : slice >= 69 ? wideValue : slice >= 53 ? orderedValue : slice >= 50 ? raceInitial + 2u : slice >= 48 && !won[i] ? raceInitial + 2u :
+                                    slice >= 45 ? raceInitial + 1u : slice >= 44 ? raceInitial :
+                                    slice >= 40 ? peerWord : slice >= 36 ? firstWord : slice >= 32 ? secondWord : 0xdead0028u,
+                                    slice >= 114 ? failedCR : slice >= 110 ? successCR : slice >= 105 ? failedCR : slice >= 98 ? successCR :
+                                    slice >= 92 ? failedCR : slice >= 88 ? successCR : slice >= 84 ? failedCR : slice >= 78 ? failedCR : slice >= 74 ? successCR : slice >= 72 ? (wideWon ? successCR : failedCR) :
+                                    slice >= 56 ? (orderedWon || slice >= 64 ? successCR : failedCR) : slice >= 49 ? successCR : slice >= 47 ? raceCR : slice >= 42 ? successCR :
+                                    slice >= 39 ? failedCR : slice >= 35 ? successCR : 0xdead0029u};
+                                if (!std::equal(expectedPaused.begin(), expectedPaused.end(), job.continuation.begin() + 28) ||
+                                    job.continuation[31] != (slice >= 79 ? 0x24040u : 0x21000u) + transaction * 0x100 + (1u - i) * 0x80 ||
+                                    job.continuation[5] != (slice >= 93 ? crossAddress + (slice >= 103 && slice < 106 ? 0x90u : slice >= 96 ? 16u : 8u) :
+                                        slice >= 79 ? fullAddress : slice >= 68 ? 0x23100u : slice >= 52 ? 0x23080u : slice >= 43 ? 0x23000u : 80u))
+                                    throw std::runtime_error("P64 paused reserved load/CR readback/peer address differs");
+                                for (u32 step = 0; step < 3; ++step) {
+                                    const std::array<u32, 3> when{35, 39, 42};
+                                    if (slice >= when[step]) {
+                                        const be_t<u32> value = step == 1 ? failedCR : successCR;
+                                        std::memcpy(program.expectedData->data() + offset + 0x2000 + step * 4, &value, sizeof(value));
+                                    }
+                                }
+                                for (u32 step = 0; step < 3; ++step) {
+                                    const std::array<u32, 3> when{47, 49, 51};
+                                    if (slice >= when[step]) {
+                                        const be_t<u32> value = step == 0 ? raceCR : step == 1 ? successCR : raceInitial + 2u;
+                                        std::memcpy(program.expectedData->data() + offset + 0x2010 + step * 4, &value, sizeof(value));
+                                    }
+                                }
+                                const auto orderedOutput = [&](u32 displacement, u32 value) {
+                                    const be_t<u32> word = value;
+                                    std::memcpy(program.expectedData->data() + offset + displacement, &word, sizeof(word));
+                                };
+                                if (slice >= 56) orderedOutput(0x2020, orderedWon ? successCR : failedCR);
+                                if (!orderedWon && slice >= 59) orderedOutput(0x2024, slice >= 64 ? successCR : failedCR);
+                                if (slice >= 65) orderedOutput(0x2028, successCR);
+                                if (slice >= 67) orderedOutput(0x202c, orderedBase + 3u);
+                                if (slice >= 72) orderedOutput(0x2030, wideWon ? successCR : failedCR);
+                                if (slice >= 74) orderedOutput(0x2034, successCR);
+                                if (slice >= 76) {
+                                    const be_t<u64> word = wideBase + 2u;
+                                    std::memcpy(program.expectedData->data() + offset + 0x2038, &word, sizeof(word));
+                                }
+                                if (slice >= 78) orderedOutput(0x2040, failedCR);
+                                if (slice >= 82) {
+                                    const be_t<u32> peerValue = 0xc3d40000u + transaction * 0x100 + (1u - i) * 0x10;
+                                    std::memcpy(program.expectedData->data() + fullAddress - 0x20000u + 0x40, &peerValue, sizeof(peerValue));
+                                }
+                                if (slice >= 87) {
+                                    const be_t<u64> word = fullInitial + 1u;
+                                    std::memcpy(program.expectedData->data() + fullAddress - 0x20000u, &word, sizeof(word));
+                                }
+                                if (slice >= 80 && slice < 94) {
+                                    // Assert that native LDARX captured the entire line,
+                                    // including bytes the other worker subsequently wrote.
+                                    std::array<u8, 128> captured{}; captured.fill(0xa5);
+                                    const be_t<u64> word = fullInitial;
+                                    std::memcpy(captured.data(), &word, sizeof(word));
+                                    if (slice >= 85) {
+                                        const be_t<u32> peerValue = 0xc3d40000u + transaction * 0x100 + (1u - i) * 0x10;
+                                        std::memcpy(captured.data() + 0x40, &peerValue, sizeof(peerValue));
+                                    }
+                                    if (!job.fullReservation || job.reservationData != captured)
+                                        throw std::runtime_error("P64 native full128 reservation snapshot or peer-neighbor reload differs");
+                                }
+                                if (slice >= 84) orderedOutput(0x2044, failedCR);
+                                if (slice >= 88) orderedOutput(0x2048, successCR);
+                                if (slice >= 90) {
+                                    const be_t<u64> word = fullInitial + 1u;
+                                    std::memcpy(program.expectedData->data() + offset + 0x2050, &word, sizeof(word));
+                                }
+                                if (slice >= 92) orderedOutput(0x2058, failedCR);
+                                if (slice >= 97) {
+                                    const be_t<u64> word = crossLoad + (slice >= 109 ? 2u : 1u);
+                                    std::memcpy(program.expectedData->data() + crossAddress - 0x20000u + 16, &word, sizeof(word));
+                                }
+                                if (slice >= 94) {
+                                    const u64 expectedTime = crossTimes[i] + (slice >= 109 ? 256u : slice >= 97 ? 128u : 0u);
+                                    const u32 expectedCached = slice >= 113 ? 0u : slice >= 109 ? crossAddress + 16u :
+                                        slice >= 104 ? 0u : slice >= 97 ? crossAddress + 8u : 0u;
+                                    if (job.reservationTime != expectedTime || job.reservationCached != expectedCached)
+                                        throw std::runtime_error("P64 cross-word success/cached reload/failure/fresh reservation timestamp differs");
+                                    std::array<u8, 128> captured{}; captured.fill(0xa5);
+                                    const std::array<be_t<u64>, 2> words{crossLoad, slice >= 101 ? crossLoad + 1u : crossTarget};
+                                    std::memcpy(captured.data() + 8, words.data(), sizeof(words));
+                                    if (!job.fullReservation || job.reservationData != captured)
+                                        throw std::runtime_error("P64 cross-word full128 snapshot/cached timestamp reload differs");
+                                }
+                                if (slice >= 98) orderedOutput(0x205c, successCR);
+                                if (slice >= 100) {
+                                    const be_t<u64> word = crossLoad + 1u;
+                                    std::memcpy(program.expectedData->data() + offset + 0x2060, &word, sizeof(word));
+                                }
+                                if (slice >= 105) orderedOutput(0x2068, failedCR);
+                                if (slice >= 110) orderedOutput(0x206c, successCR);
+                                if (slice >= 112) {
+                                    const be_t<u64> word = crossLoad + 2u;
+                                    std::memcpy(program.expectedData->data() + offset + 0x2070, &word, sizeof(word));
+                                }
+                                if (slice >= 114) orderedOutput(0x2078, failedCR);
+                                const std::array<u32, 4> storeSlices{25, 27, 29, 31};
+                                for (u32 step = 0; step < 4; ++step)
+                                    if (slice >= storeSlices[step]) {
+                                        const be_t<u32> value = step & 1u ? successCR : failedCR;
+                                        std::memcpy(program.expectedData->data() + offset + 112 + step * 4, &value, sizeof(value));
+                                    }
+                                if (slice >= 23) {
+                                    const be_t<u32> word = i ? 0x1111u : 0x2222u;
+                                    std::memcpy(program.expectedData->data() + offset + 60, &word, sizeof(word));
+                                    if (slice == 114) program.totals[i] = total;
+                                }
+                            }
+                            if (std::memcmp(vm::base(pool), expectedPool.data(), expectedPool.size()) ||
+                                std::memcmp(vm::get_super_ptr(pool), expectedPool.data(), expectedPool.size()) || owner->gpr[13] != pool + 0x7060 ||
+                                std::memcmp(vm::base(0x20000), program.expectedData->data(), 0x10000) ||
+                                std::memcmp(vm::get_super_ptr(0x20000), program.expectedData->data(), 0x10000))
+                                throw std::runtime_error("P64 resumed call TLS/partial outputs/full aliases differ");
+                            for (u32 i = 0; i < 2; ++i)
+                                if (std::memcmp(vm::base(0x30000u + i * 0x10000u), (*program.expectedStacks)[i].data(), 0x10000) ||
+                                    std::memcmp(vm::get_super_ptr(0x30000u + i * 0x10000u), (*program.expectedStacks)[i].data(), 0x10000))
+                                    throw std::runtime_error("P64 nested saved LR/rTOC/backchains or full stack guards/aliases differ");
+                            ++program.slices;
+                        }
+                        ++program.batches;
+                        char message[384];
+                        std::snprintf(message, sizeof(message), "P64 PASS: transaction=%u 115 slices per worker, shared winner=%u ordered winner=%u wide winner=%u, full128 cross-word success/outside rejection/cached reload/fresh recovery, shared=%08x ordered=%08x wide=%016llx, results=%d/%d previous=%u/%u totals=%u/%u",
+                            transaction + 1, won[0] ? 0u : 1u, orderedWinner, wideWinner,
+                            0x44556600u + (transaction + 1) * 2, 0x44557700u + (transaction + 1) * 3,
+                            static_cast<unsigned long long>(0x55667788fffffffeull + (transaction + 1) * 2),
+                            program.jobs[0].result, program.jobs[1].result, previous[0], previous[1], program.totals[0], program.totals[1]);
+                        ARMSX3StartupLog(message);
+                    }
+                    peer->cmd_list({{ppu_cmd::ptr_call, 0}, std::bit_cast<u64>(exitPeer)});
+                    peer->cmd_notify.store(1); peer->cmd_notify.notify_one();
+                    vm::temporary_unlock(*owner);
+                    (*peer)(); joined = true;
+                    if (program.jobs[1].exitAck.load(std::memory_order_acquire) != 1 || peer->gpr[13] != peerTLS ||
+                        armsx3_ios_ppu_probe_free_peer_tls(owner, pool, peerTLS) != 0 ||
+                        armsx3_ios_ppu_probe_free_peer_tls(owner, pool, peerTLS) != -1)
+                        throw std::runtime_error("P64 queued peer exit/retained TLS/join/release mismatch");
+                    peerTLS = 0; program.tlsMemory = true;
+                    return program.jobs[0].result;
+                };
+                program.result = armsx3_ios_ppu_probe_tls_and_call(&context, 0x20080, 9, 64, callWithTLS, &callback);
+                program.restored = !context.gpr[13] && !vm::check_addr(0x50000);
+                context.state += cpu_flag::exit;
+                program.completed.store(true, std::memory_order_release);
+            };
+            owner->gpr[30] = u64(reinterpret_cast<uintptr_t>(&callback)); owner->cia = codeAddress;
+            owner->cmd_list({{ppu_cmd::ptr_call, 0}, std::bit_cast<u64>(executeOwner)});
+            owner->state -= cpu_flag::stop + cpu_flag::exit + cpu_flag::suspend + cpu_flag::memory + cpu_flag::wait;
+            *owner = thread_state::created; launched = true;
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(8);
+            while (!program.completed.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline)
+                std::this_thread::yield();
+            if (!program.completed.load(std::memory_order_acquire)) throw std::runtime_error("P64 persistent owned TLS deadline exceeded");
+            (*owner)(); joined = true;
+            if (!program.tlsMemory || !program.restored || program.result != 2 || program.batches != 3 || program.slices != 345 ||
+                program.totals != std::array<u32, 2>{60, 102})
+                throw std::runtime_error("P64 resumed TLS callback/final totals/pool release mismatch");
+        }
+        for (u32 address = 0x50000; address < 0x90000; address += 0x1000)
+            if (vm::check_addr(address)) throw std::runtime_error("P64 TLS pool remains mapped after persistent pair cleanup");
+        for (const auto& region : std::array<std::pair<u32, const std::vector<u8>*>, 4>{
+            std::pair{codeAddress, &expectedCode}, std::pair{dataAddress, &expectedData},
+            std::pair{addresses[2], &expectedStacks[0]}, std::pair{addresses[3], &expectedStacks[1]}})
+            if (std::memcmp(vm::base(region.first), region.second->data(), 0x10000) ||
+                std::memcmp(vm::get_super_ptr(region.first), region.second->data(), 0x10000))
+                throw std::runtime_error("P64 full persistent guest code/data/stack guard or alias mismatch");
+        for (u32 i = 0; i < opcodes.size(); ++i)
+            if (cache[i].fn != interpreter.decode(opcodes[i])) throw std::runtime_error("P64 shared code cache changed");
+        if (armsx3_ios_live_cpu_threads() != live || cpu_thread::g_threads_created.load() != created + 2 ||
+            cpu_thread::g_threads_deleted.load() != deleted + 2)
+            throw std::runtime_error("P64 persistent owner/peer CPU lifecycle counters did not balance");
+        segmentCleanup.release();
+        for (u32 address : addresses)
+            if (vm::dealloc(address, vm::main) != 0x10000 || vm::check_addr(address))
+                throw std::runtime_error("P64 persistent guest deallocation failed");
+        vm::close(); initialized = false;
+        ARMSX3StartupLog("P64 PASS: two persistent native PPU workers/production TLS slots execute six transactions through 690 dispatches/684 pauses; all P63 cases retained, native full128 reservations loaded at line+8 survive paused address change and permit six STDCX stores to different aligned64-bit word at line+16, original load word unchanged and complete line snapshots preserved, cached same-line reload sees successful target word with correct reservation timestamp, six stores retargeted to outside line reject without any target/peer/neighbor write, six fresh same-target reload/add/STDCX recoveries succeed and consumed stores reject, full MFCR/LD/STD outputs/context/reservation snapshots/DATA/TLS totals60/102/stacks/aliases/cache/joins/cleanup/settings restore PASS; mixed-width reservations/ABA/arbitrary contention/LV2 scheduling/renderer/firmware/game boot remain untested");
+        return 0;
+    }
+    catch (const std::exception& error) { ARMSX3StartupLog(error.what()); if (initialized) vm::close(); return -1; }
+}

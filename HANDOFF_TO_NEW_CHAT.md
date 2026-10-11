@@ -4360,3 +4360,116 @@ TrollStore, run all62 diagnostics and send startup log. No P64 until native
 P63 PASS. Arbitrary contention/ABA/full-line cross-address stores/LV2
 scheduling/firmware/RSX/game boot remain untested. Preserve remote script
 100755 modes as earlier publishing note; verify remote tree+seven changes.
+
+## 2026-10-12 checkpoint: Build83 native PASS → Build84/P64 reservation target granularity
+
+User uploaded ARMSX3-startup-20261011-225939-495-7174.txt (“Here you go”).
+Read scratch attachment. Build83 confirmed; all62 diagnostics P2–P63 AUTO
+PASS plus final all-stage PASS, no FAIL. P63 starts1791759576.980462 and
+ends9576.991993 (~11.5ms). All three93-slice transaction pairs results2/2,
+totals17/31→37/65→60/102, shared44556606/ordered44557709/wide
+5566778900000004. Full128 snapshots, six peer line+64 stale rejections,
+six fresh paused full-line recoveries and six consumed rejections native
+PASS. This now proves native full-line operation/range-lock path with
+RSX reservation access disabled in stopped diagnostic. Renderer/game untested.
+
+Build84 appends armsx3_core_test_reservation_line_targets, P64 UI, plist84,
+CI test_p64_fixture.py and two new tests. Original Build83 bridge prefix
+1874705 bytes SHA256
+85f7ddca129f07fb3cbfd809278c59c6aaa09d786c31f52bd2bc2a65fc1df8fa
+frozen exactly. Prior P2–P63/47patches/pinned core unchanged.63 UI stages
+P2–P64. All P63 cases retained inside P64; full reservation mode persists
+through added tail. Reservation max_length and stopped-core RSX reservation
+access saved/restored by same RAII; no persistent settings changed.
+
+Native ppu_store_reservation source explicitly permits different aligned
+8-byte target if load/store addresses share aligned128-byte line and
+use_full_rdata is true; outside-line address rejects and clears raddr/
+res_cached before target writes. Success stores res_cached=original raddr
+and advances rtime128. Cached same-line reload keeps rtime; native full
+load copies updated128bytes. Primary CPUThread.h/.cpp inspected: full-store
+test_stopped/check_state calls cpu_sleep only for suspend, not wait alone;
+ppu.cpu_sleep clears reservation but true LV2 suspend not part of this test.
+No core patch changes or host substitution in native bridge.
+
+Guest extends688→792bytes/198words, SHA1
+4ed65229c225767011ec8e1ab6ec7dbe64031c77. Six aligned lines25000/25080/
+25100/25180/25200/25280; seeded once with line+8 load word
+778899aabbccdd00 +transaction100+worker10 and DISTINCT line+16 target word
+8899aabbccdde000 +transaction100+worker10. Each worker LDARX at line+8,
+paused ADDI r28+1 and paused r5 address change to line+16; STDCX MUST
+succeed in full128 mode. Original load word unchanged, target becomes load+1.
+Next LDARX at line+16 uses cached same-line timestamp and sees written word.
+ADD r28+1, then move r5 by128 OUTSIDE reserved line; STDCX MUST fail and
+preserve all target/peer/canary memory. Some outside targets lie in peer or
+next-transaction lines, others untouched guard; all valid mapped addresses.
+Restore r5, fresh paused LDARX/add/STDCX succeeds to load+2; consumed store
+then fails. Both full64-bit outputs and four guest MFCR outputs checked.
+
+New relative PCs:
+688 ADDI r5,r5,1008;692 LDARX r28,r5;696 ADDI r28,r28,1;
+700 ADDI r5,r5,8;704 STDCX r28,r5 (same line, different word success);
+708 MFCR r29;712 STW r29,r6,205c;716 LD r28,r5;720 STD r28,r6,2060;
+724 LDARX r28,r5 (cached reload);728 ADDI r28,r28,1;
+732 ADDI r5,r5,80;736 STDCX r28,r5 (outside line failure);
+740 MFCR r29;744 STW r29,r6,2068;748 ADDI r5,r5,-80;
+752 LDARX r28,r5;756 ADDI r28,r28,1;760 STDCX r28,r5 (fresh recovery);
+764 MFCR r29;768 STW r29,r6,206c;772 LD r28,r5;776 STD r28,r6,2070;
+780 STDCX r28,r5 (consumed failure);784 MFCR r29;788 STW r29,r6,2078;
+end792. New slices93..114 budgets1/1/1/1/1/2/1/1/1/1/1/1/2/1/1/1/1/2/
+1/1/1/2. Exact PC table, full GPR/CR/raddr and untouched registers verified.
+At94/95/96 raddr is line+8 even after r5 changes; at101/102/103/107/108
+raddr is line+16 even while r5 temporarily targets outside line. Full128
+snapshot remains original until cached reload101, then contains targetload+1
+through end (successful store does not modify snapshot). All128 bytes checked.
+Capture actual initial reservationTime at94 (do NOT assume native counter0);
+require same time94..96, +128 at97..108, +256 at109..114. res_cached must
+be original loadaddr+8 at97..103, zero104..108, target+16 at109..112, zero
+113..114. Thus native success/cached reload timestamp behavior checked
+explicitly, beyond merely preserving arbitrary snapshot fields.
+
+115slices/worker/transaction=690dispatches/684pauses/1374instructions.
+90reserved loads/120conditional stores/60successes/60failures/138MFCR;
+wide-only39LDARX/57STDCX/24successes/33failures. New cross-target-only18
+loads/24stores/12successes/12failures.225integer stores=20132-bit+24wide
+outputs, separate36stack stores.345peerjobs+exit+owner=347pubs/callbacks.
+Exactlytwo persistent workers/constructions/joins, TLS60/102, full DATA/
+TLS/stacks/aliases/code/cache/guards preserved. Each new load word has no
+stores; each target exactlytwo successful stores; all outside attempts
+have no memory effects. No mixed-width, ABA, arbitrary contention, true LV2
+scheduling, RSX, firmware or game boot claimed.
+
+Validation PASS:
+- test_p64_fixture.py chains P43–P63/all frozen prefixes throughBuild83;
+  independently encodes198 literal words and models690slices/684stops/
+  1374instructions. Full-line address-granularity model, scalar reservation
+  timestamp/cached-address model, all128-byte snapshots, exact field/CR/PC/
+  budget/readback/memory/guard/stack/TLS and operation counts verified.
+- test_p64_pair.py exact P64 plus production exec_task/bounded/TLS bodies;
+  CPU/VM/queue/reservation/instruction handlers remain HOST SHIMS. Added
+  explicit full-line retargeting and cached timestamp scalar rules matching
+  inspected primary core. G++C++20 Wall/Wextra/Werror pthread ASAN+UBSAN
+  detect_leaks0 PASS:8runs/16retained workers/5520slices;347pubs/callbacks and
+  all counters exact. Faults2..145 detected, all5allocation/setup/exact TLS
+  guard negatives balanced cleanup/config restoration. New131..145 catch
+  incorrectly requiring exact same address, allowing outside-line store,
+  writing load word instead of target, omitted timestamp advance/wrong
+  cached source address/stale reload timestamp/bad cached value/full snapshot,
+  writing on outside failure or retaining cache, refused fresh recovery,
+  bad finalSTD/CR/consumed store/neighbor corruption. Each new fault must
+  actually reach the added target phase; fault132 bypass of full comparison
+  is scoped to new outside attempt, preventing an earlier P63 failure from
+  masking lack of target-phase coverage. All fault hooks asserted installed.
+- Build83 all62 native diagnostics verified. Exact Build83 prefix,63unique
+  UI/export stages/plist84/iOS16.0/47unchangedpatches/Python syntax/git
+  whitespace checks PASS. Scratch p64-fixture-check.log/p64-host-check.log
+  hold results. Native P64 compilation CI; phone execution still pending.
+
+Remote baseline main9ac672f754e6307dc957585549d6ef44abd6cc09,
+tree7e8a86cec151178a33c950f7adbb07f22f52ece2. Standing continuation and
+native P63 PASS authorize Build84 push. DO NOT monitor/query Actions after
+push; user reports outcome. Install ARMSX3_iOS16_INSTALL_THIS_IPA via
+TrollStore, run all63 diagnostics and send startup log. No P65 until native
+P64 PASS. After that, prioritize integrating guest synchronization/scheduler
+behavior over adding equivalent atomic fixtures. Preserve remote script
+100755 baseline modes; verify remote baseline tree+only seven intended files.
