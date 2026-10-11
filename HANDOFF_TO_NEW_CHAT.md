@@ -2913,3 +2913,80 @@ Install ARMSX3_iOS16_INSTALL_THIS_IPA using TrollStore, run all48tests and
 send startup log. No P50 until phone P49 PASS. Actual peer execution/
 context switches/scheduler start/global process/full TLS HLE/firmware/
 RSX/game boot remain untested. No images for startup-log work.
+
+
+## 2026-10-11 — build69 phone PASS; build70 adds P50 active PPU pair
+
+Phone ARMSX3-startup-20261011-140319-543-3866.txt, PID3866, build69:
+all48 AUTO PASS P2-P49, final all-diagnostics PASS, no AUTO FAIL. P49
+returns122 twice, SC1 PID1/SC25 ELF SDK00360001/status0, previous SDK
+restored, all earlier checks/cleanup pass. Game boot remains untested.
+
+Build70 adds armsx3_core_test_active_ppu_pair/UI P50 Two active PPU workers
+and budget isolation. Complete1372215-byte build69 Bridge stays exact
+prefix. This is a separate paired-execution diagnostic, not a continuation
+of P39-P49's unexecuted scheduler peer. It creates and actually launches
+two named PPU CPU command workers per round, with distinct IDs, separate
+64KiB stack blocks30000/40000 (constructor uses32KiB), outputs DATA20100/
+20200, register sentinels and native CPU/thread_ctrl TLS identity checks.
+Requires stopped emulator, no live CPU workers, two configured PPU slots.
+Both callbacks publish ready and wait at a release gate; root checks both
+ready and exactly two live CPU workers before releasing. This establishes
+overlapping native worker lifetimes, not guaranteed simultaneous guest
+instruction execution on different physical cores. Both execute the same
+prepared guest code via existing production exec_task/exec_bounded helper.
+No LV2 scheduler admission, full process startup or context switching.
+
+Shared CODE10000 contains7words: LI r3,0; MTCTR r4; ADDI r3,r3,1;
+BC16,0,-4; STW r3,0(r6); LWZ r7,0(r6); ORI r8,r7,100. Note core macro
+ORI takes source first, destination second: ORI(7,8,100), encoded60e80100.
+Production range registration and eager function decoding occur before
+workers launch; no shared lazy-cache mutation. Success steps2*N+5, CIA
+CODE+28, ctr0, r3/r7=N,r8=N|100, big-endian outputN. Four rounds use
+counts17/31,20/34,23/37,26/40. Results39/67,-2/73,51/-2,57/85; round2
+limits primary, round3 limits peer to8instructions, other worker budget128.
+Limited worker has r3=3,ctr=N-3,CIA=CODE+8, untouched r7/r8/output. Global
+handler's existing ios_ppu_dispatch_probe is thread_local; no new scope,
+count policy, loader allowance or upstream patch. Existing46patches intact.
+
+Both programs use release/acquire ready/completion and cancellation gate,
+with2second deadlines. StopPair is declared before construction; cancels/
+releases gate, sets exit/notifies both workers, launches any retained but
+unstarted worker with exit set so CPU retirement balances, joins all
+unjoined workers before program/VM storage unwinds. Callback catches
+execution exceptions as-7, publishes completion and exits. Four complete
+64KiB CODE/DATA/stack blocks compared via normal/super aliases after joins;
+only successful4-byte outputs may differ from a5 DATA, stacks/code remain
+unchanged. Cache pointers verified unchanged. Each round creation/deletion
+counters +2 and live count restored. Segment cache released before VM
+allocations/deallocation/close; all configuration restored. P50 does not
+bootstrap guest TLS: it verifies host CPU thread-local identity and r13
+sentinel isolation, preserving prior P32-P49 guest TLS results separately.
+
+Validation passed: test_p50_fixture.py independently encodes all7words,
+ORI field order, executes scalar loop model for normal/limited outcomes,
+exact PCs/steps/registers/untouched output, checks gate/cleanup/alias/counter
+invariants. Transitively P43-P49 independent ELF fixture/hash tests preserved;
+CI now invokes this prepatch. test_p50_pair.py extracts exact full P50
+Bridge, production exec_task and exec_bounded bodies and actual thread_local
+probe declaration. p50_host_shims.cpp supplies host native std::threads,
+CPU flags/lifecycle/queue/VM/cache/FXO/decoder and seven scalar instruction
+operations; it does not compile native RPCS3 PPU handlers/CPU queue/VM.
+32host pairs (8complete phase repetitions) force interleaved fetches;
+check exact4pair logs/results, TLS/current worker, both budget isolations,
+registers/stacks/full aliases/cache/counters. Corrupt result/guard, queued
+publication failure with both unstarted workers constructed, active-gate
+cancellation, interpreter exception, all4allocation failures, stopped/
+slot/FXO guards verify join/close/config/ID/counters restored. Each shim
+worker checks its own dispatch TLS cleared at exit. G++C++20 Werror,
+ASAN/UBSAN detect_leaks=0 passed. Workflow/plist/prefix/whitespace pass.
+No source patch changed; prior full46patch-chain validation remains valid.
+No local Xcode SDK: native iOS compile/link and P50 phone run pending.
+
+Baseline mainc8719fb11188ca112eef0258dadc62a1d01f6ef4. Push build70 main;
+user observes Actions completion. Do not monitor Actions after push.
+Install ARMSX3_iOS16_INSTALL_THIS_IPA with TrollStore, run all49tests and
+send startup log. No P51 until phone P50 PASS. If P50 passes, two independent
+native workers' guest execution is newly confirmed, but LV2 scheduling/
+context switches/global process/full TLS HLE/firmware/RSX/game boot remain
+untested. Earlier P39-P49 scheduler peers remain unexecuted. No images.

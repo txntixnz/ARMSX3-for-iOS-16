@@ -17698,3 +17698,199 @@ extern "C" __attribute__((visibility("default"))) int armsx3_core_test_process_s
     }
     catch (const std::exception& error) { ARMSX3StartupLog(error.what()); if (initialized) vm::close(); return -1; }
 }
+
+// Two real CPU command workers share prepared, immutable guest code while
+// retaining separate registers, outputs, stacks and thread-local dispatch limits.
+extern "C" __attribute__((visibility("default"))) int armsx3_core_test_active_ppu_pair()
+{
+    ARMSX3StartupLog("P50 BEFORE two active PPU workers, shared guest code and independent instruction limits");
+    bool initialized = false;
+    try
+    {
+        if (!Emu.IsStopped() || armsx3_ios_live_cpu_threads())
+            throw std::runtime_error("P50 requires stopped emulator and no live CPU workers");
+        struct Configuration
+        {
+            bool ppu = g_cfg.core.ppu_prof.get(), spu = g_cfg.core.spu_prof.get(), debug = g_cfg.core.spu_debug.get();
+            thread_scheduler_mode scheduler = g_cfg.core.thread_scheduler.get();
+            ppu_decoder_type decoder = g_cfg.core.ppu_decoder.get();
+            Configuration() { g_cfg.core.ppu_prof.set(false); g_cfg.core.spu_prof.set(false);
+                g_cfg.core.spu_debug.set(false); g_cfg.core.thread_scheduler.set(thread_scheduler_mode::os);
+                g_cfg.core.ppu_decoder.set(ppu_decoder_type::_static); }
+            ~Configuration() { g_cfg.core.ppu_prof.set(ppu); g_cfg.core.spu_prof.set(spu);
+                g_cfg.core.spu_debug.set(debug); g_cfg.core.thread_scheduler.set(scheduler);
+                g_cfg.core.ppu_decoder.set(decoder); }
+        } configuration;
+        if (g_cfg.core.ppu_threads + 0u != 2u || !g_fxo->is_init() ||
+            (!g_fxo->is_init<ppu_interpreter_rt>() && !g_fxo->init<ppu_interpreter_rt>()))
+            throw std::runtime_error("P50 requires two PPU slots and initialized core interpreter");
+        vm::init(); initialized = true;
+        if (!vm::reserve_map(vm::main, 0x10000, 0x40000))
+            throw std::runtime_error("P50 main memory block unavailable");
+        const std::array<u32, 4> addresses{0x10000, 0x20000, 0x30000, 0x40000};
+        for (u32 address : addresses)
+            if (vm::alloc(0x10000, vm::main, 0x10000) != address)
+                throw std::runtime_error("P50 isolated code/data/stack allocation failed");
+        const u32 codeAddress = addresses[0], dataAddress = addresses[1];
+        using namespace ppu_instructions;
+        using namespace ppu_instructions::implicts;
+        const std::array<u32, 7> opcodes{LI(3, 0), MTCTR(4), ADDI(3, 3, 1), BC(16, 0, -4),
+            STW(3, 6, 0), LWZ(7, 6, 0), ORI(7, 8, 0x100)};
+        auto* code = reinterpret_cast<be_t<u32>*>(vm::base(codeAddress));
+        for (u32 i = 0; i < opcodes.size(); ++i) code[i] = opcodes[i];
+        const auto* bytes = static_cast<const u8*>(vm::base(codeAddress));
+        const std::vector<u8> expectedCode(bytes, bytes + 0x10000);
+        struct SegmentCacheCleanup {
+            u8* pointer; bool active = false;
+            void release() { if (active) { utils::memory_decommit(pointer, 0x8000); active = false; } }
+            ~SegmentCacheCleanup() { release(); }
+        } segmentCleanup{vm::g_exec_addr + vm::g_exec_addr_seg_offset + (codeAddress >> 1)};
+        segmentCleanup.active = true;
+        ppu_register_range(codeAddress, sizeof(opcodes));
+        ppu_register_function_at(codeAddress, sizeof(opcodes), nullptr);
+        auto& interpreter = g_fxo->get<ppu_interpreter_rt>();
+        const auto* cache = reinterpret_cast<const ppu_intrp_func*>(vm::g_exec_addr + u64(codeAddress) * 2);
+        if (!vm::check_addr(codeAddress, vm::page_executable, 0x10000))
+            throw std::runtime_error("P50 executable registration failed");
+        for (u32 i = 0; i < opcodes.size(); ++i)
+            if (!cache[i].fn || cache[i].fn != interpreter.decode(opcodes[i]))
+                throw std::runtime_error("P50 shared guest code was not eagerly decoded");
+        std::array<std::vector<u8>, 2> expectedStacks;
+        for (u32 i = 0; i < 2; ++i) {
+            const auto* stack = static_cast<const u8*>(vm::base(addresses[2 + i]));
+            expectedStacks[i].assign(stack, stack + 0x10000);
+        }
+        struct Gate { std::atomic<bool> go{false}, cancel{false}; };
+        struct Program {
+            u32 begin = 0, end = 0, budget = 0;
+            Gate* gate = nullptr;
+            int result = -99; bool tls = false;
+            std::atomic<bool> ready{false}, completed{false};
+        };
+        const ppu_intrp_func_t execute = +[](ppu_thread& context, ppu_opcode_t, be_t<u32>*, ppu_intrp_func*) {
+            auto& program = *reinterpret_cast<Program*>(context.gpr[30]);
+            program.tls = get_current_cpu_thread() == &context && thread_ctrl::get_current() != nullptr;
+            program.ready.store(true, std::memory_order_release);
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+            while (!program.gate->go.load(std::memory_order_acquire) &&
+                !program.gate->cancel.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline)
+                std::this_thread::yield();
+            if (!program.gate->go.load(std::memory_order_acquire) || program.gate->cancel.load(std::memory_order_acquire))
+                program.result = -6;
+            else {
+                try { program.result = armsx3_ios_ppu_exec_bounded(&context, program.begin, program.end, program.budget); }
+                catch (const std::exception&) { program.result = -7; }
+            }
+            context.state += cpu_flag::exit;
+            program.completed.store(true, std::memory_order_release);
+        };
+        for (u32 round = 0; round < 4; ++round)
+        {
+            auto* data = static_cast<u8*>(vm::base(dataAddress));
+            std::memset(data, 0xa5, 0x10000);
+            std::vector<u8> expectedData(0x10000, 0xa5);
+            const u64 live = armsx3_ios_live_cpu_threads();
+            const auto created = cpu_thread::g_threads_created.load(), deleted = cpu_thread::g_threads_deleted.load();
+            Gate gate;
+            std::array<Program, 2> programs;
+            {
+                std::array<std::unique_ptr<named_thread<ppu_thread>>, 2> workers;
+                std::array<bool, 2> launched{}, joined{};
+                struct StopPair {
+                    Gate& gate; decltype(workers)& slots; decltype(launched)& started; decltype(joined)& finished;
+                    ~StopPair() {
+                        gate.cancel.store(true, std::memory_order_release); gate.go.store(true, std::memory_order_release);
+                        for (u32 i = 0; i < slots.size(); ++i) if (slots[i]) {
+                            slots[i]->state += cpu_flag::exit; slots[i]->state.notify_one();
+                            slots[i]->cmd_notify.store(1); slots[i]->cmd_notify.notify_one();
+                            if (!started[i]) { *slots[i] = thread_state::created; started[i] = true; }
+                        }
+                        for (u32 i = 0; i < slots.size(); ++i) if (slots[i] && !finished[i]) {
+                            (*slots[i])(); finished[i] = true;
+                        }
+                    }
+                } stop{gate, workers, launched, joined};
+                for (u32 i = 0; i < workers.size(); ++i)
+                {
+                    const u32 count = 17 + round * 3 + i * 14;
+                    const bool limited = (round == 1 && i == 0) || (round == 2 && i == 1);
+                    auto& program = programs[i];
+                    program.begin = codeAddress; program.end = codeAddress + sizeof(opcodes);
+                    program.budget = limited ? 8u : 128u; program.gate = &gate;
+                    struct ConstructionID { u32 previous = id_manager::g_id;
+                        explicit ConstructionID(u32 id) { id_manager::g_id = id; }
+                        ~ConstructionID() { id_manager::g_id = previous; } } constructionID{ppu_thread::id_base + i};
+                    const ppu_thread_params params{static_cast<vm::addr_t>(addresses[2 + i]), 0x8000, 0, {}, 0, 0};
+                    workers[i] = std::make_unique<named_thread<ppu_thread>>(stx::launch_retainer{}, params, "iOS active PPU pair", 1000);
+                    auto& worker = *workers[i];
+                    worker.gpr[2] = 0x13579000 + i; worker.gpr[4] = count;
+                    worker.gpr[6] = dataAddress + 0x100 + i * 0x100;
+                    worker.gpr[7] = 0x76540000 + i; worker.gpr[8] = 0x87650000 + i;
+                    worker.gpr[13] = 0x24680000 + i; worker.gpr[30] = u64(reinterpret_cast<uintptr_t>(&program));
+                    worker.lr = 0x12340000 + i * 4; worker.ctr = 0; worker.cia = program.begin;
+                    worker.cmd_list({{ppu_cmd::ptr_call, 0}, std::bit_cast<u64>(execute)});
+                    worker.state -= cpu_flag::stop + cpu_flag::exit + cpu_flag::suspend + cpu_flag::memory + cpu_flag::wait;
+                }
+                if (workers[0]->id == workers[1]->id)
+                    throw std::runtime_error("P50 active workers have duplicate IDs");
+                for (u32 i = 0; i < workers.size(); ++i) { *workers[i] = thread_state::created; launched[i] = true; }
+                const auto readyDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+                while ((!programs[0].ready.load(std::memory_order_acquire) || !programs[1].ready.load(std::memory_order_acquire)) &&
+                    std::chrono::steady_clock::now() < readyDeadline) std::this_thread::yield();
+                if (!programs[0].ready.load(std::memory_order_acquire) || !programs[1].ready.load(std::memory_order_acquire) ||
+                    armsx3_ios_live_cpu_threads() != live + 2)
+                    throw std::runtime_error("P50 two workers did not reach the release gate while both live");
+                gate.go.store(true, std::memory_order_release);
+                const auto finishDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+                while ((!programs[0].completed.load(std::memory_order_acquire) || !programs[1].completed.load(std::memory_order_acquire)) &&
+                    std::chrono::steady_clock::now() < finishDeadline) std::this_thread::yield();
+                if (!programs[0].completed.load(std::memory_order_acquire) || !programs[1].completed.load(std::memory_order_acquire))
+                    throw std::runtime_error("P50 paired guest dispatch deadline exceeded");
+                for (u32 i = 0; i < workers.size(); ++i) { (*workers[i])(); joined[i] = true; }
+                for (u32 i = 0; i < workers.size(); ++i)
+                {
+                    const auto& program = programs[i]; const auto& worker = *workers[i];
+                    const u32 count = 17 + round * 3 + i * 14;
+                    const bool limited = program.budget == 8;
+                    if (!program.tls || program.result != (limited ? -2 : int(count * 2 + 5)) ||
+                        worker.gpr[3] != (limited ? 3u : count) || worker.gpr[4] != count ||
+                        worker.gpr[7] != (limited ? 0x76540000u + i : count) ||
+                        worker.gpr[8] != (limited ? 0x87650000u + i : (count | 0x100u)) ||
+                        worker.ctr != (limited ? count - 3 : 0) || worker.cia != (limited ? codeAddress + 8 : program.end) ||
+                        worker.gpr[1] != addresses[2 + i] + 0x8000 - ppu_stack_start_offset ||
+                        worker.gpr[2] != 0x13579000u + i || worker.gpr[6] != dataAddress + 0x100 + i * 0x100 ||
+                        worker.gpr[13] != 0x24680000u + i || worker.lr != 0x12340000u + i * 4 ||
+                        worker.syscall_history.index || worker.interrupt_thread_executing)
+                        throw std::runtime_error("P50 independent worker TLS/register/budget/result mismatch");
+                    if (!limited) {
+                        const be_t<u32> word = count;
+                        std::memcpy(expectedData.data() + 0x100 + i * 0x100, &word, sizeof(word));
+                    }
+                }
+            }
+            for (const auto& region : std::array<std::pair<u32, const std::vector<u8>*>, 4>{
+                std::pair{codeAddress, &expectedCode}, std::pair{dataAddress, &expectedData},
+                std::pair{addresses[2], &expectedStacks[0]}, std::pair{addresses[3], &expectedStacks[1]}})
+                if (std::memcmp(vm::base(region.first), region.second->data(), 0x10000) ||
+                    std::memcmp(vm::get_super_ptr(region.first), region.second->data(), 0x10000))
+                    throw std::runtime_error("P50 full code/data/stack guard or alias mismatch");
+            for (u32 i = 0; i < opcodes.size(); ++i)
+                if (cache[i].fn != interpreter.decode(opcodes[i])) throw std::runtime_error("P50 shared code cache changed");
+            if (armsx3_ios_live_cpu_threads() != live || cpu_thread::g_threads_created.load() != created + 2 ||
+                cpu_thread::g_threads_deleted.load() != deleted + 2)
+                throw std::runtime_error("P50 paired CPU lifecycle counters did not balance");
+            char message[160];
+            std::snprintf(message, sizeof(message), "P50 PASS: pair=%u both workers live at gate, results=%d/%d, independent CPU TLS/registers/limits/outputs, full aliases and two joins",
+                round + 1, programs[0].result, programs[1].result);
+            ARMSX3StartupLog(message);
+        }
+        segmentCleanup.release();
+        for (u32 address : addresses)
+            if (vm::dealloc(address, vm::main) != 0x10000 || vm::check_addr(address))
+                throw std::runtime_error("P50 paired guest deallocation failed");
+        vm::close(); initialized = false;
+        ARMSX3StartupLog("P50 PASS: four pairs/eight active native PPU workers execute shared prepared guest code; either worker's budget stop leaves the other completing normally; independent CPU TLS/registers, isolated outputs/stacks, full memory aliases/cache and lifecycle cleanup verified; LV2 scheduler admission/context switching/global process/full TLS HLE/firmware/RSX/game boot remain untested");
+        return 0;
+    }
+    catch (const std::exception& error) { ARMSX3StartupLog(error.what()); if (initialized) vm::close(); return -1; }
+}
