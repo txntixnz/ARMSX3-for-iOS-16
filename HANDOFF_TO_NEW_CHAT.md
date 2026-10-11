@@ -2217,3 +2217,42 @@ and phone validation. Do not monitor Actions after push: user reports result.
 Install ARMSX3_iOS16_INSTALL_THIS_IPA, run all39, send .txt/.ips if crash.
 Scheduler start, >2 runnable workers/suspend handoff, peer guest execution,
 real context switching, full TLS HLE, firmware/RSX/process/game boot untested.
+
+2026-10-11: build56 DEVICE FAIL at P40 loader guard; build57 correction
+------------------------------------------------------------------
+Uploaded ARMSX3-startup-20261011-012234-387-1207.txt, PID1207. All38 P2-P39
+pass again. P40 fails "malformed TLS program allocated memory or changed
+outputs" before successful segment loading or any guest yield execution.
+Root cause is diagnostic fixture size mismatch: P40 grew code from108 to136
+bytes, but process-image wrapper added in0029 still caps/requires108.
+Thus first malformed TLS case returns-2 at code-size gate, expected-5.
+No evidence of actual allocation/output mutation: the combined assertion's
+message covers those checks too. Host P40 callback test had bypassed loader;
+its passing result did not cover the outdated integration boundary.
+
+New0037-ios-yield-fixture-loader-size.patch changes ONLY iOS diagnostic
+armsx3_ios_ppu_load_probe_process_image_segments: max136 and exact accepted
+code sizes108 OR136. Data352, both private page locations/permissions/sizes,
+PRX/TLS/process metadata gates and production loader/rollback unchanged.
+Older segment/TLS wrappers still require their original108/296 fixtures.
+No Bridge/App/LV2/workflow/log-export changes. Info increments56->57.
+
+Reconstructed pinned PPUModule by applying all ten touching module patches
+0019-0026,0028,0029 in order. New0037 applies/reverses byte-exactly. Host
+regression compiles the actual old/new full process-image wrapper. Old136
+fixture reproduces-2 instead of-5; fixed108 and136 each pass four malformed
+TLS and three malformed process cases with no allocations/unchanged outputs,
+successful metadata publication, loader failure and bad loaded-size rollback.
+Reject0/104/112/132/140 code lengths, mismatched code bin and data351 before
+allocation. This regression uses host types, VM/sha/loader/parser substitutes;
+tests actual wrapper control flow, bounds, publication and RAII, not full
+production parser or segment-loader runtime. G++ C++20 Werror ASAN/UBSAN.
+Existing P40 exact callback/production scheduler/service regression and golden
+fixture hash0998aeffb1a30e1c3a947c500c5ee85179f94b2c remain valid.
+Persist standalone regression as armsx3-ios16/tests/test_p40_loader.py;
+accept module source arguments (before0037 then after0037) for future checks.
+
+Baseline main04b676c4cbed5736cdda681d03995e36e46c5ad2,
+tree1e93a561f69171ea04fc8584f70c64998460f842. Build57 pending Xcode/phone.
+Do not advance to P41 until P40 device passes. Do not monitor Actions.
+User installs ARMSX3_iOS16_INSTALL_THIS_IPA, reruns all39, sends log.

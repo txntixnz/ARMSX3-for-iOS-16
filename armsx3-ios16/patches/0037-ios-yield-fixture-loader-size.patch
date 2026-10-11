@@ -1,0 +1,17 @@
+--- a/rpcs3/Emu/Cell/PPUModule.cpp
++++ b/rpcs3/Emu/Cell/PPUModule.cpp
+@@ -2983,11 +2983,12 @@
+ 		const auto& prog = elf->progs[index];
+ 		const u32 address = 0x10000 + index * 0x10000;
+ 		if (prog.p_type != 1u || prog.p_vaddr != address || prog.p_memsz != 0x10000u ||
+-			prog.p_flags != (index ? 6u : 5u) || !prog.p_filesz || prog.p_filesz > (index ? 352u : 108u) ||
++			prog.p_flags != (index ? 6u : 5u) || !prog.p_filesz || prog.p_filesz > (index ? 352u : 136u) ||
+ 			prog.bin.size() != prog.p_filesz || vm::check_addr(address, vm::page_allocated, 1)) return -2;
+ 	}
+ 	const auto& control = elf->progs[2];
+-	if (elf->progs[0].p_filesz != 108u || elf->progs[1].p_filesz != 352u ||
++	// Accept only the original syscall fixture or the extended guest-yield fixture.
++	if ((elf->progs[0].p_filesz != 108u && elf->progs[0].p_filesz != 136u) || elf->progs[1].p_filesz != 352u ||
+ 		control.p_type != 0x60000002u || control.p_vaddr != 0x20100u || control.p_flags ||
+ 		control.p_filesz != 40u || control.p_memsz != 40u || control.bin.size() != 40u) return -2;
+ 	u32 address = 0, file = 0, memory = 0;
