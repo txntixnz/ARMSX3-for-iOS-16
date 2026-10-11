@@ -3713,3 +3713,115 @@ vector status/reservations/full architectural context nor real LV2 context
 switches. LV2 scheduling/full TLS HLE process mutex/global process/firmware/
 RSX/game boot remain UNTESTED. P39–P49 scheduler peer contexts remain
 unexecuted. No images requested/generated.
+
+## 2026-10-11 — build 78 / P58 guest reservation stores and recovery
+
+Newest device evidence upload/ARMSX3-startup-20261011-184558-532-5663.txt,
+build77 pid5663; attachment file_00000000ec348246bee5f6a04a4419af,
+Library libfile_0e63ecf663f88191a121fac38c997653. Scratch copy read as instructed.
+All56 P2–P57 AUTO PASS, final all-stages PASS/no AUTO FAIL. P57 native
+about0.0087sec: three results1/2 with totals17/31,37/65,60/102. Exact
+CR/XER/FPSCR/VRSAVE, FADD. FPCC/CR1, ADDIC. carry/CR0, CMPDI CR7,
+taken/not-taken branch and MFCR/MFSPR readbacks PASS over144dispatches/
+138pauses. All register/stack/aliases/cache/joins clean. P58 phone pending.
+
+Build78 adds armsx3_core_test_guest_reservation_stores; UI58 "Guest
+reservation stores and recovery",57diagnostics P2–P58. Plist78, CI fixture58.
+Appends41097bytes/515lines to exact entire1571741byte build77 Bridge prefix.
+No upstream sources or47patches changed. Native LWARX/STWCX interpreter
+handlers and production ppu_load_acquire_reservation/ppu_store_reservation
+helpers inspected directly in staged pinned core; actual CR0 store result
+and reservation clearing/success/failure paths confirmed. No local Xcode
+SDK/native compile. Host tests use explicit scalar reservation shims.
+
+Extends P57's exact guest program with fourteen atomic-tail instructions;
+73words/292bytes SHA1=7a92d9b84469c6c65b84c3814ff9a89614a1ca06.
+Native PPUOpcodes.h has no LWARX/STWCX/MFCR encoders. Small explicit manual
+X-form lambdas use main31, XO20 for LWARX, XO150/RC1 for STWCX., XO19 for
+MFCR. ra0 and indexedr19 address (rb19) for all reserved accesses. Independent
+fixture literal words plus exact lambda source/bit-field checks protect
+encodings. All prior native FP/vector/carry/branch/TLS/stack instructions
+and outputs retained.
+
+Each worker/transaction owns separate128byte-aligned reservation line:
+21000+transaction*100+worker*80, no contended addresses. Its initial word
+11223300+transaction*10+worker, neighbors/all other DATA bytesa5.
+r19address, r21firstWord=a1b20000+transaction*100+worker*10,
+r26secondWord=c3d40000+transaction*100+worker*10. New r20/r22/r23/r24/
+r25/r27 distinct dead00xx canaries until guest loads/readbacks change them.
+Only slice0 initializes these inputs. Initial context reservation must
+be absent (raddr0); each dispatch and every resume verifies raddr0.
+No reservation is deliberately carried across a pause or native queue wait.
+
+Atomic tail PCs:
+236 STWCX. r21,0,r19 without reservation (FAIL/no write),
+240 MFCR r22;244 STW r22,output112;
+248 LWARX r20,0,r19;252 STWCX. r21,0,r19 (SUCCESS firstWord);
+256 MFCR r23;260 STW r23,output116;
+264 STWCX. r21,0,r19 on consumed reservation (FAIL/no write),
+268 MFCR r24;272 STW r24,output120;
+276 LWARX r25,0,r19;280 STWCX. r26,0,r19 (SUCCESS secondWord);
+284 MFCR r27;288 STW r27,output124;end292.
+Each LWARX/STWCX pair runs together within ONE bounded dispatch; this first
+atomic phase tests missing/consumed rejection and fresh-pair recovery, not
+reservation persistence across pauses, invalidation by a peer or retry loops.
+STWCX CR0 LT/GT0, EQsuccess, SOretained: ownerSO1 gets nibble1failure/
+3success; peerSO0 gets0failure/2success. CR1/CR7/otherfields retain P57
+state. Guest MFCR readbacks preserve full packed CR at each result. Other
+XER/FPSCR/VRSAVE bits are unchanged. r20 loads initialWord; r25 firstWord.
+Checks full128byte lines/all DATA aliases, so native 64-bit backing-store
+neighbor preservation and big-endian word order are tested, not just a
+selected output. Old P57 r16 CR readback must stay unchanged as CR0 changes.
+
+32slices per worker/transaction =>192dispatches/186stops. P57's slice23
+budget changes to owner1/peer2 so both pause exactly at236 before tail.
+Next slices24..31 budgets1,2,2,2,1,2,2,4; offsets240,248,256,264,268,
+276,284,292. First31 return-2, finalboth2. Total705instructions, old621
+plus84 new. Perphase12 LWARX,24 STWCX (12successes/12failures),30MFCR
+(sixold+24new),66integeroutputstores (42old+24CR stores),12atomicword
+writes; old FP/vector/stack/TLS/call/branch counts retained. TLS totals
+17/31,37/65,60/102.96peerjobs+queuedexit+owner=98callbacks/queuepubs.
+Exactlytwo persistent native workers/constructions/joins. All production
+TLS slot guards, release/acquire job completion, real queue wait/lifecycle
+checks, peerjoin-before-free/ownerjoin-before-VMclose/cache cleanup and
+unwind/config/thread-local-ID restoration inherited unchanged.
+
+Validation PASS:
+- test_p58_fixture.py independently encodes73literalwords/manualX forms,
+  separate interleaved scalar reservation/context oracle covers192slices/
+  186stops/705instructions, missing/consumed/no-write vs twofresh successes,
+  exact CR/readback/register state, reserved values and neighboring bytes,
+  all full memory/TLS/stack images and prior P43–P57 fixtures/hashes.
+- test_p58_pair.py extracts exact entire P58 and production bounded helper/
+  exec_task plus real TLS globals/bootstrap/alloc/free/paired guard bodies.
+  Reuses unchanged p53_host_shims.cpp with explicit scalar host reservation/
+  FP/vector/condition instruction models. G++C++20 Wall/Wextra/Werror pthread
+  ASAN+UBSAN detect_leaks0: eightphases/16persistent host workers/1536slices
+  PASS; exact98queuepubs/callbacks,705steps,12load/24store/12success/12fail,
+  30MFCR/66outputstores and all prior operation/lifecycle counts PASS.
+  Faults2..60 cover inherited register/stack/FP/vector/queue/construct/TLS
+  failures plus illegal missing/consumed success, rejected valid pair,
+  corrupt reserved load, wrong endian/neighbor writes, reservation leak at
+  store and nextqueue callback, wrong CR0 SO/MFCR readback, lost first write,
+  wrong recovery write and write despitefailed store. Eachreturns-1 with
+  balanced joins/counts, cleared maps/probe/TLS globals and config/IDs.
+  Allocation1..5/stopped/PPUslots/FXO plus independently called exact TLS
+  null/wrong-current/pool/pointer/duplicate/live/double-free guards PASS.
+  Initial host harness fault10 wrote word1 at10100, now inside longer code
+  (previously unused CODE), causing shim's default assert abort. Updated
+  only shim invalid-op path to throw, allowing diagnostic's existing catch/
+  unwind validation; reruns pass. This is not a native-core behavior change.
+  Native CPU/VM/reservation/queue/flags/instruction handlers remain HOST SHIMS;
+  device/native P58 and reservation implementation are NOT locally proven.
+- Exact1571741byte prior Bridge prefix,57unique UI/exported stages/plist78/
+  CI fixture58/unchanged47patches/gitwhitespace PASS. Previous full47patch
+  check/apply/reverse/pinned-EOF byte identity remains applicable because no
+  upstream/patch changes. Scratch p58-host-check.log/p58-fixture-check.log.
+
+Baseline main46de03c658d71f5cedb3071f58ccedc8cb01ac7c. Push build78 main,
+user reports build completion; DO NOT query Actions afterpush. Install
+ARMSX3_iOS16_INSTALL_THIS_IPA in TrollStore, run all57diagnostics/sendlog.
+No P59 until native P58 PASS. Contested/shared reservations, cached reuse/
+peer invalidation/retry loops/reservation across pauses, true LV2 scheduling/
+context switching/full TLS HLE process mutex/global process/firmware/RSX/
+game boot remain UNTESTED. No unsolicited images.
