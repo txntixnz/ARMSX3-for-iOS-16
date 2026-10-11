@@ -3361,3 +3361,122 @@ admission/context switching/full TLS HLE process mutex/global process/
 firmware/RSX/game boot remain UNTESTED. P54 proves bounded diagnostic
 continuation; it does not exercise native LV2 scheduling. Earlier P39-P49
 scheduler peer contexts remain unexecuted. No images requested/generated.
+
+## 2026-10-11 — build 75 / P55 nested guest calls and paused stack frames
+
+Latest phone log: upload/ARMSX3-startup-20261011-162826-429-4869.txt
+(build 74, pid4869; Library libfile_a0c5f10729688191acaa7873ade45de0,
+attachment file_00000000f5d88210b7c7a6aa6f3d773d). All 53 P2–P54 AUTO PASS,
+final all-stages PASS, no AUTO FAIL. Native P54's six guest transactions
+resume across 54 bounded dispatches and 48 budget stops, including after
+TLS commit and before output. Same workers and slots survive, exact final
+totals 60/102, queue waits/exit, full aliases/cache and joins pass. P54
+native duration about 0.0025 sec. This authorizes the next milestone.
+
+P55/build75 adds armsx3_core_test_resumed_guest_calls and UI55 "Nested guest
+calls and paused stack frames". Now 54 diagnostics P2–P55. Plist75; CI
+prepatch invokes test_p55_fixture.py. Appends 364 lines / 28411 bytes to
+CoreBridge.cpp, preserving build74's entire 1473450-byte prefix. No changes
+to upstream sources or the existing 47 overlay patches.
+
+New guest code: 41 words / 164 bytes, golden SHA1
+9aadb16d728d2d8dc13b7ff5e7a5873bb533e4f6. Caller at CODE+0, framed callee
+at +64, loop leaf at +144. Calls use native B(displacement,false,true),
+returns use BLR; MFLR/STDU/STD/LD/ADDI/MTLR save and restore LR/rTOC and
+stack frames. Caller B at+16 links LR=CODE+20 and targets+64; callee B
+at+84 links LR=CODE+88 and targets+144. Main B at+44 targets END+164.
+All guest control flow stays in the diagnostic bounded range. ADD still
+uses the manual X-form (the core has no ADD encoder). Newly used native
+encoders confirmed present in staged PPUOpcodes.h; host encoder support
+is explicitly a shim, independent fixture checks all 41 literal words.
+
+Exactly two native workers and one real production TLS pool/slot pair
+persist for three paired transactions. Counts 17/31,20/34,23/37 and totals
+17/31,37/65,60/102. Each transaction has twelve bounded slices per worker:
+
+| Slice (zero-based) | Budget | CIA offset after | Expected boundary |
+| --- | --- | --- | --- |
+| 0 | 4 | 16 | Caller frame/backchain/LR/rTOC saved; SP-128 |
+| 1 | 7 | 144 | Callee frame saved; rTOC=0x2468; LR=CODE+88; SP-256 |
+| 2 | 3 | 156 | Leaf LI/MTCTR/ADDI; r3=1, CTR=N, next BC |
+| 3 | 5 | 152 | Leaf r3=3, CTR=N-3, next ADDI |
+| 4 | 2*N-6 | 160 | Loop complete; r3=N, CTR=0, leaf return pending |
+| 5 | 3 | 96 | Leaf BLR returns; TLS image and previous total read |
+| 6 | 2 | 104 | ADD and TLS commit; output still untouched |
+| 7 | 2 | 112 | Image/previous output words written; total still sentinel |
+| 8 | 5 | 20 | Callee reloads LR/rTOC and returns; SP-128 |
+| 9 | 3 | 32 | Caller total output written and original LR reloaded |
+| 10 | 2 | 40 | Initial SP/LR restored; final ORI pending |
+| 11 | 8 | 164 | ORI and end branch complete; positive result 2 |
+
+First eleven calls per transaction return -2, final returns 2. Thus 72
+bounded dispatches and 66 pauses per phase. Each guest transaction executes
+2*N+32 instructions, for 516 total; six TLS stores, 18 output-word stores,
+36 stack-word stores, 12 linked calls and 12 BLR returns. Cold inputs set
+once per transaction; all resumes compare all 32 GPRs+CTR/LR/CIA against
+prior snapshots before any write or dispatch. Caller stack pointer starts
+37f90/47f90; never reset by the runner, so guest code must restore it for
+later transactions. Expected 15 registers additionally include r0, exact
+SP/rTOC/LR during calls and restoration. No guest syscalls/interrupts/exit.
+
+Both entire 64KiB stack pages start with a5 canaries. Guest writes two
+128-byte frames each: first backchain=initial SP, saved LR=12340000 and
+rTOC=13579000; second backchain=initial SP-128, saved LR=CODE+20, saved
+rTOC=13579000. Expected stack images update only those six 64-bit words.
+Whole normal/super stack aliases checked at EVERY slice, along with entire
+TLS pool and DATA images, so saved return values, partial outputs, unused
+bytes and cross-worker writes are checked while calls are still paused.
+Callee deliberately changes r2 to2468 and restores it from its own stack;
+caller restores its saved r2 too. Final SP/LR/rTOC must match original.
+
+Existing owner/peer lifetime and cleanup from P54 retained. 36 notified
+peer jobs plus queued exit, one owner callback: 38 queue publications and
+callbacks, exactly two constructions/joins. Queue ordinal transaction*12+
+slice+1, growing empty-queue wait counter and live2/created+2/deleted
+baseline checked throughout. Completion release remains peer's last
+Program/memory access; owner acquire waits before mutation/readback.
+Final slices36/batches3/result2/totals60/102. Peer joins before real TLS
+slot free; bootstrap clears pool/map/globals and restores owner r13=0;
+owner joins before segment decommit, guest deallocations and VM close.
+Cancellation, callbacks-before-guards lifetime, unstarted-worker retirement,
+config restoration, allocation/free/duplicate/live/double-free guards retained.
+
+Validation passed:
+- test_p55_fixture.py independently encodes all 41 words and runs separate
+  interleaved scalar contexts with big-endian 32/64-bit shared memory and
+  retained stacks. Every paused PC/SP/LR/rTOC/CTR/register, partial TLS/
+  DATA/stack byte and exact slice step count checked. Counts 516 instructions,
+  66 stops,36 stack stores,6 TLS stores,18 output stores,12 calls/returns;
+  final60/102 and initial SP/LR/rTOC. Transitive P43–P54 fixture/hash checks
+  pass unchanged.
+- test_p55_pair.py extracts exact P55 phase, production bounded probe/
+  exec_task/helper and TLS globals/bootstrap/allocator/free/paired guards.
+  Reuses unchanged p53_host_shims.cpp with explicit P55 fault ordinal38,
+  64-bit big-endian stack words and fixture-specific scalar call/return/
+  stack instructions. G++ C++20 Wall/Wextra/Werror pthread ASAN+UBSAN,
+  ASAN_OPTIONS=detect_leaks=0 passed eight repetitions: 16 retained host
+  workers,576 slices, exact counters/logs and two joins per phase.
+  Injected saved LR/rTOC/backchain/stack guard corruption, bad LD/SP/
+  linked branch/BLR plus paused GPR31/CIA/CTR/r13 drift all detected.
+  Prior corrupt load/DATA/CODE/peer BSS/constructor r13, initial/midjob/
+  queued-exit publication failure, dropped job, gate cancellation,
+  instruction/constructor throw, all five allocations and stopped/PPU-slot/
+  FXO guards return -1 with balanced joins/counts, cleared maps/probe/TLS
+  globals and restored config/IDs. Exact independent null/wrong-current/
+  pool/pointer/duplicate/live/double-free TLS guards retained and passed.
+  Native CPU/flags/VM/queue/PPU operations are HOST SHIMS; this is not a
+  native iOS build or device result. Native P55 is pending the next phone log.
+- Entire prior 1473450-byte Bridge prefix, 54 unique UI/exported symbols,
+  plist75, YAML/CI fixture55, unchanged47patches and whitespace pass.
+  No upstream source/patch changed; prior full47patch-chain check/apply/
+  reverse/pinned EOF/byte identity validation remains applicable.
+  No local Xcode SDK; no claimed native iOS compile/link result.
+
+Baseline main731de7738dcf80fe7f12f2ef1a2990f5e0856293. Push build75 main;
+user observes build completion. DO NOT monitor Actions after push.
+Install ARMSX3_iOS16_INSTALL_THIS_IPA with TrollStore, run all54 diagnostics,
+and send startup log. No P56 until phone P55 PASS. Actual LV2 scheduling/
+context switches/full TLS HLE process mutex/global process/firmware/RSX/
+game boot remain UNTESTED. This phase proves bounded guest calls and stack
+continuation, not actual LV2 scheduling. P39–P49 scheduler peer contexts
+remain unexecuted. No images requested/generated.
