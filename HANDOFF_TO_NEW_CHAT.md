@@ -2586,3 +2586,12 @@ after push. User installs ARMSX3_iOS16_INSTALL_THIS_IPA, runs all42 stages,
 sends log. P44 waits for P43 device outcome. Heap memory read/write and other
 memory APIs, actual peer execution/context switch/schedulerstart, full TLS
 HLE/globalprocess/firmware/RSX/game boot untested.
+
+
+## 2026-10-11 — build61 patch-application failure corrected in build62
+
+Failed run38132792382, job114450405275 stopped at Apply iOS core patches, before compilation. Exact error: sys_memory.cpp:538 patch does not apply. The local source used for generating/testing0041 had an extra trailing blank line; the pinned Git source does not. Retrieved source as base64 and verified exact Git blob c3ac2a007c78791b3bbf3de81f78549dc5115f6d (13061bytes). Regenerated only sys_memory.cpp diff against that exact source. EOF blank is now an insertion, not nonexistent context. No P43 code or production service behavior changed. Build version62.
+
+Added tests/test_p43_patch.py: verifies pinned blob, applies/reverses corrected memory patch, checks unchanged production services, reconstructs and rejects the build61 mismatch. CI runs it before patch application. Complete0041 apply/check/reverse/check against all four before0041 sources passed with byte-exact output and restoration. P43 fixture, loader and full memory/scheduler callback host regressions passed (G++C++20, ASAN/UBSAN, leak detection disabled). Real PPU history capacity2048 exceeds P43 required22. No local Xcode SDK; compile/link/device P43 remain pending. Do not advance to P44 until this stage passes on phone.
+
+Push build62 correction to main. User observes workflow completion; do not monitor Actions after push. Download ARMSX3_iOS16_INSTALL_THIS_IPA when successful, install via TrollStore, run all42diagnostics and return phone log. Latest verified phone milestone remains build60 all41 P2–P42 PASS.
