@@ -53,6 +53,7 @@ static constexpr DiagnosticStage stages[] = {
     {45, "Guest available memory accounting", "armsx3_core_test_memory_stats"},
     {46, "Guest 1 MiB memory pages", "armsx3_core_test_memory_1m"},
     {47, "Guest live and freed page attributes", "armsx3_core_test_page_attributes"},
+    {48, "Guest page attribute output errors", "armsx3_core_test_page_attribute_errors"},
 };
 static constexpr NSUInteger stageCount = sizeof(stages) / sizeof(stages[0]);
 static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";

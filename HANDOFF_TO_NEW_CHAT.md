@@ -2764,3 +2764,75 @@ Download ARMSX3_iOS16_INSTALL_THIS_IPA, install TrollStore, run all46tests
 and send startup log. NoP48 until phoneP47 PASS. Actual peer execution/
 context switching/schedulerstart/global process/full TLS HLE/firmware/
 RSX/game boot remain untested. No image creation for startup-log work.
+
+
+## 2026-10-11 — build67 phone PASS; build68 adds P48 page-output errors
+
+Phone ARMSX3-startup-20261011-131211-382-2962.txt, PID2962, build67:
+all46 AUTO PASS P2-P47 and final all-diagnostics PASS, no AUTO FAIL.
+P47 returns104 in both iterations: live1MiB page attribute40000/accessf/
+page100000/pad0/status0; freed address EINVAL with untouched24-byte output.
+All allocation/statistics/endian/FIFO/clock/TLS/alias cleanup checks pass.
+Actual game boot remains untested.
+
+Build68 adds armsx3_core_test_page_attribute_errors/UI P48 Guest page
+attribute output errors. Complete1213640-byte build67 Bridge remains an
+exact prefix. P48 retains all P47 checks, adds two loaded guest SC351 calls
+on the live1MiB allocation immediately after its successful page query:
+null output pointer and output0x9fff8, the final eight mapped bytes of the
+retained peer's64KiB block, followed by an unmapped guard at0xa0000. Both
+must return sign-extended CELL_EFAULT, store statuses at DATA+508/+512,
+and have exact service names/history/SC PCs+320/+344. A preloaded aligned
+64-bit sentinel5aa55aa5deadbeef at0x9fff8 must remain unchanged, including
+the exact full peer-stack comparison. Mapping guard verifies readable8,
+unreadable24, unmapped0xa0000 before execution. The peer remains unexecuted.
+The current SC351 handler checks the complete24-byte output before writes;
+these guest tests verify rejection without partial publication on device.
+Current reported permission/access values are upstream TODOs, not a claim
+that PS3 permission emulation is complete.
+
+Fixture114words/456bytes, callee90words/360bytes,115steps including HLE.
+Allocation failure branch still skips16heap accesses,99host steps and no
+heap access; normal callback rejects outputs. ELF CODE600..7c8 inside800,
+unchanged352-byte DATA payload300..460/TLS/process metadata. SHA1
+acdc835b5c0163e1bd8f534e74aca9117e9d2184. SC PCs60,100,112,132,144,
+184,208,300,320,344,360,376,392,412,428,448. Stats before/during/after
+histories15/20/24 and PCs184/360/428; allocation16/208, live attr17/300,
+invalid outputs18/320 and19/344, free21/376, double-free22/392,
+freed attr23/412, guest priority25/448, caller join26/60, post no-op
+priority27, final query28. Policy8 requires351x4, thirty service calls/
+twenty-nine recorded histories. Prior policies0-7 preserve exact counts.
+
+0045-ios-guest-page-output-errors-probe.patch changes only private iOS
+fixture loader size allowlist/max (adds456), diagnostic count policy8,
+new stopped two-worker scheduler_page_attribute_errors scope/declaration
+cloned from passed P47 scope. Production memory/VM/SC351/scheduler service
+algorithms and bindings unchanged. Existing1MiB diagnostic container is
+isolated; it does not define future game RAM limits.
+
+Validation passed: test_p48_fixture.py independently checks inserted null/
+partial-output words, complete code hash, SC PCs, guard, history/status
+layout, sentinel,115steps and ELF bounds; transitively P43-P47 fixtures;
+CI now runs this prepatch. test_p48_loader.py extracts exact pre/post0045
+wrappers, reproduces old456 rejection, verifies all9accepted sizes,
+neighbor rejection, malformed metadata and allocation/output rollback.
+test_p48_memory.py extracts exact new Program/performSyscalls/callWithTLS,
+production page-attribute/allocation/free/stats/clock/MFTB/IDM/scheduler
+bodies. VM/FXO/locks/atomics/SC transport/scalar guest execution are host
+shims, not native PPU execution. Both joinability runs115steps, statuses/
+histories/sentinel,11page corruptions (includes wrong null success/error,
+partial-buffer success/write), all9count policies, missing services,
+heap/canaries, registry/statistics, ENOMEM99steps, TLS/FIFO/clock/cleanup
+regressions pass. G++C++20 Werror ASAN/UBSAN detect_leaks=0. Original P47
+host integration also passes new shared policy code. All45patches check/
+apply/reverse/check against byte-exact pinned originals, final source
+matches staging, originals restored; P43 pinned EOF regression passes.
+Workflow/plist/prefix/whitespace checks pass. No local Xcode SDK: full iOS
+compile/link and P48 phone run pending.
+
+Baseline main27d0883a15d2e008ac94ab556842f98413fd830a. Push build68 main;
+user observes Actions completion. Do not monitor Actions after push.
+Download ARMSX3_iOS16_INSTALL_THIS_IPA, install TrollStore, run all47tests
+and send startup log. No P49 until phone P48 PASS. Actual peer execution/
+context switches/scheduler start/global process/full TLS HLE/firmware/
+RSX/game boot remain untested. No images for startup-log work.

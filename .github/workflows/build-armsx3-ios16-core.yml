@@ -56,7 +56,7 @@ jobs:
           set -euo pipefail
           python3 armsx3-ios16/ios/scripts/audit-hook-consumers.py upstream-armsx3
           python3 armsx3-ios16/tests/test_p43_patch.py upstream-armsx3/rpcs3/Emu/Cell/lv2/sys_memory.cpp
-          python3 armsx3-ios16/tests/test_p47_fixture.py
+          python3 armsx3-ios16/tests/test_p48_fixture.py
           for patch in armsx3-ios16/patches/*.patch; do
             git -C upstream-armsx3 apply --check "../$patch"
             git -C upstream-armsx3 apply "../$patch"
