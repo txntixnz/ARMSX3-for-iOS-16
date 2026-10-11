@@ -3825,3 +3825,107 @@ No P59 until native P58 PASS. Contested/shared reservations, cached reuse/
 peer invalidation/retry loops/reservation across pauses, true LV2 scheduling/
 context switching/full TLS HLE process mutex/global process/firmware/RSX/
 game boot remain UNTESTED. No unsolicited images.
+
+## 2026-10-11 — build 79 / P59 paused reservations and ordered peer writes
+
+Device evidence: upload/ARMSX3-startup-20261011-200928-183-6039.txt,
+Build78 pid6039; Library libfile_ba001bc471bc8191b653d9b5bab0e4f9.
+Read the attached scratch copy as instructed. All57 P2–P58 AUTO PASS,
+final all-stages PASS, no AUTO FAIL. P58 completes about0.0050sec,
+three results2/2 and TLS totals17/31,37/65,60/102. Native missing/consumed
+reservation failures, two fresh-pair successes per worker/transaction,
+exact CR readbacks/word endian/neighbor bytes/192dispatches/186pauses,
+registers/stacks/TLS/aliases/cache/lifecycle cleanup PASS. Native P59 pending.
+
+Build79 appends armsx3_core_test_paused_reservations, UI P59 "Paused
+reservations and peer writes". All58 diagnostics P2–P59. Plist79;
+CI prepatch invokes test_p59_fixture.py, which invokes unchanged P58 and
+all prior fixture regressions. Entire1612838byte Build78 bridge prefix is
+identical; SHA256 c142e042108c4e2de18f0a60c0390a593e4a0b82b48de04b13f2d360993c9ead.
+No native-core source,47patches or pinned upstream commit changed.
+
+P59 retains P58's program and all FP/vector/status/nested stack/TLS,
+missing/consumed/reservation-recovery and lifecycle checks. Appends14words:
+87words/348bytes SHA1 ef4f7a161439689839125c7c60453d3fa6535949.
+Per worker/transaction own128byte-aligned line at21000+tx100+worker80;
+r31 points to the other worker's line. r28 is reserved-load result, r29
+full guest MFCR readback. Separate guarded extra outputs use original
+r6+2000/2004/2008, disjoint from original128byte output slots and atomics.
+
+Extra PCs/boundaries (each runs in its own bounded dispatch unless paired
+MFCR+STW):292 LWARX r28;296 NOP;300 STWCX r21 SUCCESS;304 MFCR r29,
+308 STW successCR;312 LWARX r28;316 STW r26 to peer line;320 STWCX r26
+FAIL/no-write;324 MFCR,328 STW failedCR;332 LWARX r28;336 STWCX r26
+SUCCESS recovery;340 MFCR,344 STW successCR;end348. Missing/consumed
+cases in the old tail still fail and both old fresh pairs still succeed.
+Original slice31 budget is now2 rather than4, preventing execution of new
+instructions before the pause at292. New slices32..42 budgets1,1,1,2,1,
+1,1,2,1,1,2;PCs296,300,304,312,316,320,324,332,336,340,348.
+
+Both workers finish each slice before either starts the next. Thus both
+LWARX loads at312 finish before the two peer guest STW writes at316,
+and both writes finish before the stale STWCX attempts at320. Each writes
+a distinct opposite-worker secondWord, so rejection is deterministic.
+After rejection, own memory contains the peer's different word; fresh
+LWARX at332 loads that word and the paused STWCX at336 restores own
+secondWord successfully. No simultaneous same-address conditional store
+race, same-value/ABA invalidation,128byte cross-word invalidation or retry
+loop is claimed. Peer callbacks return to the real empty command queue
+between every slice; owner stays inside its TLS bootstrap callback.
+
+At slices32/33/36/37/40, expect raddr=ownLine; all other boundaries raddr0.
+Before EVERY resume compare all previously checked architectural registers
+plus exact raddr/rtime/res_cached/use_full_rdata and all128 raw rdata bytes.
+No reservation/context reset after slice0. These fields may naturally
+change inside dispatch; their new snapshots are retained across pauses.
+Native ppu_load_acquire_reservation/ppu_store_reservation, PPUThread.h
+fields and ptr_call/cmd_get queue behavior inspected from pinned core.
+Command wait uses thread_ctrl::wait_on rather than ppu_thread::cpu_sleep;
+actual LV2 cpu_sleep DOES clear raddr, and this phase does NOT test LV2
+scheduling/context switches. No local Xcode SDK/native compile/result.
+
+43slices per worker/transaction=258dispatches/252budget stops/789guest
+instructions,30LWARX/42STWCX,24successes/18failures,48MFCR and90integer
+stores (includes6 ordinary cross-peer stores). Three transactions maintain
+TLS totals17/31,37/65,60/102.129peerjobs+queuedexit+owner callback=
+131publications/callbacks. Exactlytwo persistent native workers and two
+joins; peer joined before TLS free, owner joined before cache/VM cleanup.
+Full CODE/DATA/pool/two64KiB stacks and super aliases checked eachslice,
+including previous outputs, neighbor bytes and unused guard space.
+
+Validation PASS:
+- test_p59_fixture.py preserves exact frozen Build78 prefix and P43–P58
+  regression fixtures. Independently encodes87 literal words/manual X
+  forms and runs separate interleaved scalar contexts across258slices/
+  252stops/789instructions. Exact PCs/registers/FP/vector/status/stacks,
+  paused reservations, peer-induced stale failures and recovery, readbacks,
+  full memory/TLS images and all counts PASS. SHA1 above.
+- test_p59_pair.py extracts exact P59 plus real production exec_task/
+  bounded helper and TLS bootstrap/slot guard bodies from staged pinned
+  source with applicable unchanged patches. CPU/VM/reservations/queue/
+  instruction handlers are explicit HOST SHIMS, not native operations.
+  G++ C++20 Wall/Wextra/Werror pthread ASAN+UBSAN detect_leaks=0 PASS:
+  eight full phases/16persistent host workers/2064slices, exact131callbacks/
+  queue publications and operation counts per phase. Faults2..74 plus all
+  five allocations/stopped/PPU-slot/FXO and independently called exact TLS
+  null/wrong-current/pool/pointer/duplicate/live/double-free guards PASS.
+  New faults detect lost paused reservation, rtime/res_cached/full-mode/
+  rdata drift, illegal stale success/rejected unmodified paused success,
+  corrupt reload/readback/paused GPR, dropped peer store/neighbor corruption,
+  premature write and lost fresh reservation. Balanced joins/counts,
+  cleared TLS maps/probe/globals and restored config/IDs on every failure.
+- Build78 native57/57 verified; baseline exact-P58 host check also PASS.
+  All58 unique UI/export symbols, plist79/iOS16.0, unchanged47patches and
+  pinned core, git whitespace and Python syntax checks PASS. Applicable
+  native PPU/TLS patch subset applied with --check. Prior full47patch-chain
+  identity remains valid because no upstream/patch content changed.
+  Scratch p58-baseline-check.log,p59-fixture-check.log,p59-host-check.log.
+
+Baseline main70291ebcf244f363a5e8967a995d2056ebfafa83. Push Build79 main;
+standing user continuation authorizes next incremental build and push.
+DO NOT monitor/query Actions after push. User reports workflow completion.
+Install ARMSX3_iOS16_INSTALL_THIS_IPA through TrollStore, run all58
+diagnostics, export startup log. No P60 until native phone P59 PASS.
+Actual LV2 scheduling, full TLS HLE/process mutex/global process setup,
+firmware/RSX/game boot remain UNTESTED; earlier P39–P49 scheduler peer
+contexts remain unexecuted. No unsolicited pictures.
