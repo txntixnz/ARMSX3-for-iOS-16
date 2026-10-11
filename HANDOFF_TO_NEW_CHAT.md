@@ -4247,3 +4247,116 @@ core/package-loadtest.sh and ios/scripts/build-probe.sh, while remote has
 match remote unless those baseline mode differences are accounted for.
 Verify every published blob against local git hash-object and entire remote
 new tree against baseline+only intended seven files, including modes.
+
+## 2026-10-12 checkpoint: Build82 native PASS → Build83/P63 full128 reservations
+
+User uploaded ARMSX3-startup-20261011-223554-848-7031.txt and said
+“Lets goo 🔥”. Read scratch attachment. Build82 confirmed, all61 stages
+P2–P62 AUTO PASS plus final all-stage PASS, no FAIL. Native P62 wide winner
+roles1/0/1, carry/retry/consumed rejection all PASS; wide values
+5566778900000000/00000002/00000004, results2/2 and totals17/31→37/65→
+60/102. Starts1791758152.550745/ends8152.559961 (~9.2ms). Old shared
+44556606/ordered44557709 and all prior diagnostics passed. Device now
+proves native LDARX/STDCX full64-bit values and low32 carry. Game untested.
+
+Build83 appends only armsx3_core_test_full_line_reservations, adds P63 UI,
+plist83 and new P63 fixture/host tests, advances CI to test_p63_fixture.py.
+Original Build82 prefix1813469 bytes SHA256
+65072fde8fba57cc220d55c846aa7faff85947efa3b949bfbb33258b4be704e2
+frozen exactly. All prior P2–P62/47patches/pinned core unchanged;62 UI
+stages P2–P63. No image requested/created. Native primary source inspected:
+ppu_load_acquire_reservation<u64> copies full128 bytes when max<0, full
+store path uses reservation counter/range writer lock/cmp_rdata; previous
+full-line snapshots are not rewritten by a successful/failed conditional
+store. system_config.h pinned cfg::_int<-1,14> max_length0 (-1 alwaysfull).
+RSX/Core/RSXReservationLock.hpp uses a renderer only if
+rsx_accurate_res_access is enabled (defaultfalse). Stopped diagnostic has
+no renderer, so P63 RAII explicitly saves/disables/restores that bool along
+with saving/restoring reservation max_length. Renderer path is NOT tested.
+
+P63 runs all prior P62 cases with max_length0. Both retained contexts are
+paused and peer has returned to empty queue when controller changes mode:
+slice0 sets0; slice79 sets-1 BEFORE publishing the next peer command.
+No concurrent reservation instruction/config mutation, no context/rdata/
+memory/store-result edits by controller. Full mode held through last slice,
+then reset0 for next transaction; RAII restores original value after joins
+and cleanup, including exceptions. This is a diagnostic-local mode change,
+not a new persistent user setting or change to earlier diagnostic functions.
+
+Guest extends616→688bytes/172words, SHA1
+9bcdec2fa30c214770cb17737e1ae96bb3c674f1. Separate six aligned128-byte
+lines24000/24080/24100/24180/24200/24280, seeded once before workers with
+66778899aabbcc00 +transaction100+worker10. Each worker loads full64-bit
+word at its OWN line base then NOPs in another dispatch. Peer ordinary STW
+writes its r26 into line+64: different aligned8-byte word, original target
+word unchanged. Both writes finish before either stale STDCX. Each stale
+STDCX uses original value EQUAL to target memory and MUST reject. Full
+128-byte snapshot compared explicitly at each boundary: initial 64-bit
+word, untouched a5 guards and still-old peer-neighbor bytes remain in rdata.
+Fresh LDARX reload incorporates peer's line+64 mutation; paused ADDI then
+STDCX succeeds, target initial+1. Snapshot remains pre-success target value
+as native source specifies. Both final LD/STD publish full64-bit output.
+Consumed STDCX then rejects; initial-failure/success/consumed MFCR stored.
+
+New relative PCs:
+616 ADDI r5,r19,3000;620 ADDI r31,r31,3040;
+624 LDARX r28,r5;628 NOP;632 STW r26,r31,0 (peer line+64);
+636 STDCX r28,r5 (stale mustfail);640 MFCR r29;644 STW r29,r6,2044;
+648 LDARX r28,r5;652 ADDI r28,r28,1;656 STDCX r28,r5 (fresh success);
+660 MFCR r29;664 STW r29,r6,2048;668 LD r28,r5;
+672 STD r28,r6,2050;676 STDCX r28,r5 (consumed fail);
+680 MFCR r29;684 STW r29,r6,2058;end688.
+New slices79..92 budgets2/1/1/1/1/2/1/1/1/2/1/1/1/2, PCs
+624/628/632/636/640/648/652/656/660/668/672/676/680/688. Full raddr
+ownline at80/81/82/85/86; other new boundaries zero. use_full_rdata MUST
+be true and all128rdata bytes match independently built captured line at
+EVERY slice80..92, including stale and fresh snapshots. All context/status/
+reservation fields preserved before every resume; full DATA/TLS/stacks/
+aliases/code/cache/guards and old outputs verified at every boundary.
+
+93slices/worker/transaction=558dispatches/552pauses/1218instructions.
+Total72reserved loads/96conditional stores/48successes/48failures/114MFCR;
+wide-only21LDARX/33STDCX/12successes/21failures. Full-only12loads/18stores/
+6fresh successes/6stale failures/6consumed failures.189integer guest stores
+=17732-bit+12wide outputs, separate36stack stores.279peerjobs+exit+owner
+=281pubs/callbacks; exactly2retained workers/constructions/joins, TLS60/102.
+Prior shared/wide results intact; each new line has one neighbor mutation
+and one successful target increment; all other a5 guard bytes are
+covered by whole64KiB DATA comparison. No cross-word conditional-store
+address change, ABA, arbitrary contention or LV2 context switch claimed.
+
+Validation PASS:
+- test_p63_fixture.py chains P43–P62 and all frozen prefixes throughBuild82;
+  independently encodes172 literal words and models558slices/552stops/
+  1218instructions. New full-line model captures128bytes, compares all128
+  for stores, verifies exact stale/fresh captured buffers (before/after peer
+  mutation), unchanged target on rejection, fresh increment/consumed failure,
+  every CR/PC/budget/output/neighbor/full memory/stack/TLS and operation count.
+- test_p63_pair.py extracts exact P63 plus unchanged production exec_task,
+  bounded helper and TLS bootstrap/slot guard bodies. CPU/VM/queue/instruction/
+  reservation operations including full-line comparison remain HOST SHIMS;
+  native range writer lock/RSX lock not executed locally. Full128 scalar
+  model uses memcmp; config model starts max3/RSXtrue and asserts3/true
+  restored after EVERY full success/negative/setup/guard run, proving save/
+  restore rather than fixed defaults. G++C++20 Wall/Wextra/Werror pthread
+  ASAN+UBSAN detect_leaks0 PASS:8runs/16retained host workers/4464slices;
+  all281pubs/callbacks and operation counts. Faults2..130 detected with
+  balanced cleanup; all5allocation/setup/exact TLS guard negatives retained.
+  New116..130 catch ignored full comparison, disabled full mode/8-byte-only
+  snapshot, skipped/wrong peer neighbor store, refused fresh success, stale
+  failed-store write, retained/damaged reservation data, changed guard,
+  wrong finalSTD/consumed result/MFCR/truncated addition. Assert every new
+  fault installed, including != checks used to disable full comparison.
+- Build82 all61 native diagnostics confirmed. Exact Build82 prefix,62unique
+  UI/export stages, plist83/iOS16.0, unchanged47patches, Python syntax and
+  git whitespace checks PASS. Scratch p63-fixture-check.log and
+  p63-host-check.log hold results. Native compilation CI and phone P63 await.
+
+Remote baseline main7f63c65eadb45998adaf04d97febe27e80a32c4e,
+tree3040d38e17bc89efd9fcc3d85e6790315cbc4e43. Standing user continuation
+and native P62 PASS authorize Build83 push. DO NOT monitor/query Actions
+after push; user reports result. Install ARMSX3_iOS16_INSTALL_THIS_IPA via
+TrollStore, run all62 diagnostics and send startup log. No P64 until native
+P63 PASS. Arbitrary contention/ABA/full-line cross-address stores/LV2
+scheduling/firmware/RSX/game boot remain untested. Preserve remote script
+100755 modes as earlier publishing note; verify remote tree+seven changes.
