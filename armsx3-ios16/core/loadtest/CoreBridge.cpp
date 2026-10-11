@@ -17894,3 +17894,231 @@ extern "C" __attribute__((visibility("default"))) int armsx3_core_test_active_pp
     }
     catch (const std::exception& error) { ARMSX3StartupLog(error.what()); if (initialized) vm::close(); return -1; }
 }
+
+extern "C" __attribute__((visibility("default"))) int armsx3_core_test_persistent_ppu_pair()
+{
+    ARMSX3StartupLog("P51 BEFORE two persistent PPU workers, notified jobs and budget-stop recovery");
+    bool initialized = false;
+    try
+    {
+        if (!Emu.IsStopped() || armsx3_ios_live_cpu_threads())
+            throw std::runtime_error("P51 requires stopped emulator and no live CPU workers");
+        struct Configuration
+        {
+            bool ppu = g_cfg.core.ppu_prof.get(), spu = g_cfg.core.spu_prof.get(), debug = g_cfg.core.spu_debug.get();
+            thread_scheduler_mode scheduler = g_cfg.core.thread_scheduler.get();
+            ppu_decoder_type decoder = g_cfg.core.ppu_decoder.get();
+            Configuration() { g_cfg.core.ppu_prof.set(false); g_cfg.core.spu_prof.set(false);
+                g_cfg.core.spu_debug.set(false); g_cfg.core.thread_scheduler.set(thread_scheduler_mode::os);
+                g_cfg.core.ppu_decoder.set(ppu_decoder_type::_static); }
+            ~Configuration() { g_cfg.core.ppu_prof.set(ppu); g_cfg.core.spu_prof.set(spu);
+                g_cfg.core.spu_debug.set(debug); g_cfg.core.thread_scheduler.set(scheduler);
+                g_cfg.core.ppu_decoder.set(decoder); }
+        } configuration;
+        if (g_cfg.core.ppu_threads + 0u != 2u || !g_fxo->is_init() ||
+            (!g_fxo->is_init<ppu_interpreter_rt>() && !g_fxo->init<ppu_interpreter_rt>()))
+            throw std::runtime_error("P51 requires two PPU slots and initialized core interpreter");
+        vm::init(); initialized = true;
+        if (!vm::reserve_map(vm::main, 0x10000, 0x40000))
+            throw std::runtime_error("P51 main memory block unavailable");
+        const std::array<u32, 4> addresses{0x10000, 0x20000, 0x30000, 0x40000};
+        for (u32 address : addresses)
+            if (vm::alloc(0x10000, vm::main, 0x10000) != address)
+                throw std::runtime_error("P51 isolated code/data/stack allocation failed");
+        const u32 codeAddress = addresses[0], dataAddress = addresses[1];
+        using namespace ppu_instructions;
+        using namespace ppu_instructions::implicts;
+        const std::array<u32, 7> opcodes{LI(3, 0), MTCTR(4), ADDI(3, 3, 1), BC(16, 0, -4),
+            STW(3, 6, 0), LWZ(7, 6, 0), ORI(7, 8, 0x100)};
+        auto* code = reinterpret_cast<be_t<u32>*>(vm::base(codeAddress));
+        for (u32 i = 0; i < opcodes.size(); ++i) code[i] = opcodes[i];
+        const auto* bytes = static_cast<const u8*>(vm::base(codeAddress));
+        const std::vector<u8> expectedCode(bytes, bytes + 0x10000);
+        struct SegmentCacheCleanup {
+            u8* pointer; bool active = false;
+            void release() { if (active) { utils::memory_decommit(pointer, 0x8000); active = false; } }
+            ~SegmentCacheCleanup() { release(); }
+        } segmentCleanup{vm::g_exec_addr + vm::g_exec_addr_seg_offset + (codeAddress >> 1)};
+        segmentCleanup.active = true;
+        ppu_register_range(codeAddress, sizeof(opcodes));
+        ppu_register_function_at(codeAddress, sizeof(opcodes), nullptr);
+        auto& interpreter = g_fxo->get<ppu_interpreter_rt>();
+        const auto* cache = reinterpret_cast<const ppu_intrp_func*>(vm::g_exec_addr + u64(codeAddress) * 2);
+        if (!vm::check_addr(codeAddress, vm::page_executable, 0x10000))
+            throw std::runtime_error("P51 executable registration failed");
+        for (u32 i = 0; i < opcodes.size(); ++i)
+            if (!cache[i].fn || cache[i].fn != interpreter.decode(opcodes[i]))
+                throw std::runtime_error("P51 shared guest code was not eagerly decoded");
+        std::array<std::vector<u8>, 2> expectedStacks;
+        for (u32 i = 0; i < 2; ++i) {
+            const auto* stack = static_cast<const u8*>(vm::base(addresses[2 + i]));
+            expectedStacks[i].assign(stack, stack + 0x10000);
+        }
+        struct Gate { std::atomic<u32> released{0}; std::atomic<bool> cancel{false}; } gate;
+        struct Program {
+            u32 begin = 0, end = 0, budget = 0, count = 0, round = 0, index = 0, output = 0;
+            Gate* gate = nullptr;
+            int result = -99; bool tls = false, clean = false;
+            std::array<u64, 13> registers{};
+            std::atomic<u32> ready{0}, completed{0}, exitAck{0};
+        };
+        std::array<Program, 2> programs;
+        const ppu_intrp_func_t execute = +[](ppu_thread& context, ppu_opcode_t, be_t<u32>*, ppu_intrp_func*) {
+            auto& program = *reinterpret_cast<Program*>(context.gpr[30]);
+            const u32 round = program.round, i = program.index;
+            program.tls = get_current_cpu_thread() == &context && thread_ctrl::get_current() != nullptr;
+            context.gpr[2] = 0x13579000 + i; context.gpr[4] = program.count;
+            context.gpr[6] = program.output; context.gpr[7] = 0x76540000 + i;
+            context.gpr[8] = 0x87650000 + i; context.gpr[13] = 0x24680000 + i;
+            context.lr = 0x12340000 + i * 4; context.ctr = 0; context.cia = program.begin;
+            program.ready.store(round + 1, std::memory_order_release);
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+            while (program.gate->released.load(std::memory_order_acquire) < round + 1 &&
+                !program.gate->cancel.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline)
+                std::this_thread::yield();
+            if (program.gate->released.load(std::memory_order_acquire) < round + 1 || program.gate->cancel.load(std::memory_order_acquire))
+                program.result = -6;
+            else {
+                try { program.result = armsx3_ios_ppu_exec_bounded(&context, program.begin, program.end, program.budget); }
+                catch (const std::exception&) { program.result = -7; }
+            }
+            program.registers = {context.gpr[1], context.gpr[2], context.gpr[3], context.gpr[4],
+                context.gpr[6], context.gpr[7], context.gpr[8], context.gpr[13], context.lr,
+                context.ctr, context.cia, context.gpr[30], context.id};
+            program.clean = !context.syscall_history.index && !context.interrupt_thread_executing &&
+                !(context.state & cpu_flag::exit);
+            // No further Program or guest-memory access after publication. The host
+            // reads snapshots; only the worker touches its live PPU registers.
+            program.completed.store(round + 1, std::memory_order_release);
+        };
+        const ppu_intrp_func_t exit = +[](ppu_thread& context, ppu_opcode_t, be_t<u32>*, ppu_intrp_func*) {
+            auto& program = *reinterpret_cast<Program*>(context.gpr[30]);
+            context.state += cpu_flag::exit;
+            program.exitAck.fetch_add(1, std::memory_order_release);
+        };
+        const u64 live = armsx3_ios_live_cpu_threads();
+        const auto created = cpu_thread::g_threads_created.load(), deleted = cpu_thread::g_threads_deleted.load();
+        auto* data = static_cast<u8*>(vm::base(dataAddress));
+        std::memset(data, 0xa5, 0x10000);
+        std::vector<u8> expectedData(0x10000, 0xa5);
+        {
+            std::array<std::unique_ptr<named_thread<ppu_thread>>, 2> workers;
+            std::array<bool, 2> launched{}, joined{};
+            struct StopPair {
+                Gate& gate; decltype(workers)& slots; decltype(launched)& started; decltype(joined)& finished;
+                ~StopPair() {
+                    gate.cancel.store(true, std::memory_order_release);
+                    for (u32 i = 0; i < slots.size(); ++i) if (slots[i]) {
+                        slots[i]->state += cpu_flag::exit; slots[i]->state.notify_one();
+                        slots[i]->cmd_notify.store(1); slots[i]->cmd_notify.notify_one();
+                        if (!started[i]) { *slots[i] = thread_state::created; started[i] = true; }
+                    }
+                    for (u32 i = 0; i < slots.size(); ++i) if (slots[i] && !finished[i]) {
+                        (*slots[i])(); finished[i] = true;
+                    }
+                }
+            } stop{gate, workers, launched, joined};
+            for (u32 i = 0; i < workers.size(); ++i)
+            {
+                auto& program = programs[i];
+                program.begin = codeAddress; program.end = codeAddress + sizeof(opcodes);
+                program.index = i; program.gate = &gate;
+                struct ConstructionID { u32 previous = id_manager::g_id;
+                    explicit ConstructionID(u32 id) { id_manager::g_id = id; }
+                    ~ConstructionID() { id_manager::g_id = previous; } } constructionID{ppu_thread::id_base + i};
+                const ppu_thread_params params{static_cast<vm::addr_t>(addresses[2 + i]), 0x8000, 0, {}, 0, 0};
+                workers[i] = std::make_unique<named_thread<ppu_thread>>(stx::launch_retainer{}, params, "iOS persistent PPU pair", 1000);
+                workers[i]->gpr[30] = u64(reinterpret_cast<uintptr_t>(&program));
+                workers[i]->cia = codeAddress;
+                workers[i]->state -= cpu_flag::stop + cpu_flag::exit + cpu_flag::suspend + cpu_flag::memory + cpu_flag::wait;
+            }
+            if (workers[0]->id == workers[1]->id)
+                throw std::runtime_error("P51 persistent workers have duplicate IDs");
+            u64 waits = armsx3_ios_ppu_command_waits();
+            for (u32 i = 0; i < workers.size(); ++i) { *workers[i] = thread_state::created; launched[i] = true; }
+            const auto waitForQueues = [&] {
+                const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+                while (armsx3_ios_ppu_command_waits() < waits + 2 && std::chrono::steady_clock::now() < deadline)
+                    std::this_thread::yield();
+                if (armsx3_ios_ppu_command_waits() < waits + 2 || armsx3_ios_live_cpu_threads() != live + 2 ||
+                    cpu_thread::g_threads_created.load() != created + 2 || cpu_thread::g_threads_deleted.load() != deleted)
+                    throw std::runtime_error("P51 persistent queue wait activity or unchanged worker lifecycle mismatch");
+                waits = armsx3_ios_ppu_command_waits();
+            };
+            waitForQueues();
+            for (u32 round = 0; round < 8; ++round)
+            {
+                // Inputs are republished only after the preceding release/acquire
+                // completion; the real command queue publishes the next callback.
+                for (u32 i = 0; i < workers.size(); ++i) {
+                    auto& program = programs[i];
+                    program.round = round; program.count = 17 + round * 3 + i * 14;
+                    program.budget = ((round % 4 == 1 && i == 0) || (round % 4 == 2 && i == 1)) ? 8u : 128u;
+                    program.output = dataAddress + 0x100 + round * 0x20 + i * 4;
+                    workers[i]->cmd_list({{ppu_cmd::ptr_call, 0}, std::bit_cast<u64>(execute)});
+                    workers[i]->cmd_notify.store(1); workers[i]->cmd_notify.notify_one();
+                }
+                const auto readyDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+                while ((programs[0].ready.load(std::memory_order_acquire) < round + 1 || programs[1].ready.load(std::memory_order_acquire) < round + 1) &&
+                    std::chrono::steady_clock::now() < readyDeadline) std::this_thread::yield();
+                if (programs[0].ready.load(std::memory_order_acquire) != round + 1 || programs[1].ready.load(std::memory_order_acquire) != round + 1 ||
+                    armsx3_ios_live_cpu_threads() != live + 2)
+                    throw std::runtime_error("P51 both persistent workers did not reach the next job gate");
+                gate.released.store(round + 1, std::memory_order_release);
+                const auto finishDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+                while ((programs[0].completed.load(std::memory_order_acquire) < round + 1 || programs[1].completed.load(std::memory_order_acquire) < round + 1) &&
+                    std::chrono::steady_clock::now() < finishDeadline) std::this_thread::yield();
+                if (programs[0].completed.load(std::memory_order_acquire) != round + 1 || programs[1].completed.load(std::memory_order_acquire) != round + 1)
+                    throw std::runtime_error("P51 notified job completion deadline or count mismatch");
+                waitForQueues();
+                for (u32 i = 0; i < workers.size(); ++i)
+                {
+                    const auto& program = programs[i]; const u32 count = program.count;
+                    const bool limited = program.budget == 8;
+                    const std::array<u64, 13> expected{addresses[2 + i] + 0x8000 - ppu_stack_start_offset,
+                        0x13579000u + i, limited ? 3u : count, count, program.output,
+                        limited ? 0x76540000u + i : count, limited ? 0x87650000u + i : (count | 0x100u),
+                        0x24680000u + i, 0x12340000u + i * 4, limited ? count - 3 : 0,
+                        limited ? codeAddress + 8 : program.end, u64(reinterpret_cast<uintptr_t>(&program)), workers[i]->id};
+                    if (!program.tls || !program.clean || program.registers != expected ||
+                        program.result != (limited ? -2 : int(count * 2 + 5)) || program.exitAck.load())
+                        throw std::runtime_error("P51 reused worker TLS/register snapshot/budget/recovery mismatch");
+                    if (!limited) {
+                        const be_t<u32> word = count;
+                        std::memcpy(expectedData.data() + program.output - dataAddress, &word, sizeof(word));
+                    }
+                }
+                for (const auto& region : std::array<std::pair<u32, const std::vector<u8>*>, 4>{
+                    std::pair{codeAddress, &expectedCode}, std::pair{dataAddress, &expectedData},
+                    std::pair{addresses[2], &expectedStacks[0]}, std::pair{addresses[3], &expectedStacks[1]}})
+                    if (std::memcmp(vm::base(region.first), region.second->data(), 0x10000) ||
+                        std::memcmp(vm::get_super_ptr(region.first), region.second->data(), 0x10000))
+                        throw std::runtime_error("P51 accumulated outputs/full code/data/stack guard or alias mismatch");
+                for (u32 i = 0; i < opcodes.size(); ++i)
+                    if (cache[i].fn != interpreter.decode(opcodes[i])) throw std::runtime_error("P51 shared code cache changed");
+                char message[192];
+                std::snprintf(message, sizeof(message), "P51 PASS: batch=%u same two live workers, results=%d/%d, notified queues, isolated limits and retained outputs, CPU TLS/register snapshots and full aliases",
+                    round + 1, programs[0].result, programs[1].result);
+                ARMSX3StartupLog(message);
+            }
+            for (u32 i = 0; i < workers.size(); ++i) {
+                workers[i]->cmd_list({{ppu_cmd::ptr_call, 0}, std::bit_cast<u64>(exit)});
+                workers[i]->cmd_notify.store(1); workers[i]->cmd_notify.notify_one();
+            }
+            for (u32 i = 0; i < workers.size(); ++i) { (*workers[i])(); joined[i] = true; }
+            if (programs[0].exitAck.load(std::memory_order_acquire) != 1 || programs[1].exitAck.load(std::memory_order_acquire) != 1)
+                throw std::runtime_error("P51 queued exits did not execute exactly once per worker");
+        }
+        if (armsx3_ios_live_cpu_threads() != live || cpu_thread::g_threads_created.load() != created + 2 ||
+            cpu_thread::g_threads_deleted.load() != deleted + 2)
+            throw std::runtime_error("P51 persistent CPU lifecycle counters did not balance");
+        segmentCleanup.release();
+        for (u32 address : addresses)
+            if (vm::dealloc(address, vm::main) != 0x10000 || vm::check_addr(address))
+                throw std::runtime_error("P51 persistent guest deallocation failed");
+        vm::close(); initialized = false;
+        ARMSX3StartupLog("P51 PASS: same two native PPU workers handle eight paired notified batches/16 guest jobs; four isolated budget stops followed by successful reuse on the same workers, accumulated outputs/guards/aliases/cache, two queued exits and balanced joins; LV2 scheduling/context switches/global process/full TLS HLE/firmware/RSX/game boot remain untested");
+        return 0;
+    }
+    catch (const std::exception& error) { ARMSX3StartupLog(error.what()); if (initialized) vm::close(); return -1; }
+}

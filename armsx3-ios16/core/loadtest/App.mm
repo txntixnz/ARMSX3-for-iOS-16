@@ -56,6 +56,7 @@ static constexpr DiagnosticStage stages[] = {
     {48, "Guest page attribute output errors", "armsx3_core_test_page_attribute_errors"},
     {49, "Guest process PID and ELF SDK", "armsx3_core_test_process_sdk"},
     {50, "Two active PPU workers and budget isolation", "armsx3_core_test_active_ppu_pair"},
+    {51, "Persistent PPU pair and budget recovery", "armsx3_core_test_persistent_ppu_pair"},
 };
 static constexpr NSUInteger stageCount = sizeof(stages) / sizeof(stages[0]);
 static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";

@@ -2990,3 +2990,74 @@ send startup log. No P51 until phone P50 PASS. If P50 passes, two independent
 native workers' guest execution is newly confirmed, but LV2 scheduling/
 context switches/global process/full TLS HLE/firmware/RSX/game boot remain
 untested. Earlier P39-P49 scheduler peers remain unexecuted. No images.
+
+## 2026-10-11 — build70 phone PASS; build71 adds P51 persistent PPU pair
+
+User supplied ARMSX3-startup-20261011-143237-905-4045.txt and "Lets gooo".
+Build70 confirmed all49 P2-P50 AUTO PASS plus final all-stages PASS; no
+AUTO FAIL. P50 four native pairs yielded39/67,-2/73,51/-2,57/85 with both
+workers live at their release gate, independent CPU TLS/registers/budgets,
+full aliases/cache and balanced cleanup. This confirms actual independent
+native PPU guest execution; it does not prove physical simultaneous CPU
+execution or real LV2 scheduler admission/context switching.
+
+Build71 adds armsx3_core_test_persistent_ppu_pair/UI P51 Persistent PPU pair
+and budget recovery. P2-P50 Bridge prefix1386378bytes retained exactly;
+no source patch changed, existing46patch-chain validation remains valid.
+Shared seven opcodes and four64KiB CODE/DATA/stack allocations match P50.
+Construct exactly two real native PPU command workers once, start both
+with empty queues, observe aggregate command-wait count growth >=2 and
+live+2. Across eight rounds enqueue one ptr_call per worker and notify
+both real queues. Gate uses monotonically published round numbers;
+both ready and completed counters require exact round+1. Worker callback
+alone resets its own live registers/CIA/CTR and invokes exact production
+bounded exec_task. Host reads a release/acquire register snapshot rather
+than touching live registers. No Program/guest access after completion
+publication. Inputs republished after previous completion and native
+queue publication; cancellation guard wakes/joins both, including any
+constructed but unlaunched worker before Program/VM destruction.
+
+Per-worker loop counts17+round*3+i*14, budget8 for(round%4==1,i0) or
+(round%4==2,i1),128 otherwise. Expected paired results:
+39/67,-2/73,51/-2,57/85,63/91,-2/97,75/-2,81/109.
+Four limited jobs stop at8steps/CIA10008/r3=3/CTR=count-3, leaving their
+unique output slot and r7/r8 unchanged. Each limited worker completes
+its next job on the SAME worker: recovery(round,index)=(2,0),(3,1),
+(6,0),(7,1). Each slot DATA+100+round*20+i*4 starts a5; successful output
+is count big-endian. Entire DATA snapshot retains every earlier result,
+limited slots and guards; compare whole64KiB CODE/DATA/both stacks through
+normal and super aliases each batch. Check cache unchanged, own CPU/thread
+TLS, snapshot of13register/context values, no syscalls/interrupt/exit,
+unchanged IDs and exactlycreated+2/deleted baseline while running. Command
+wait counter is aggregate activity, NOT per-worker parked-state proof.
+Finally enqueue exactly one exit callback per worker, notify/join both,
+require two exit acknowledgments andcreated/deleted+2/live baseline.
+Release segment cache before deallocating all four regions and closing VM;
+configuration and construction ID restored on success and error.
+
+Validation passed: test_p51_fixture.py independently encodes seven words,
+models all16jobs with two reused contexts, precise PC/steps/CTR/partial
+registers, four recovery sequences and accumulating guarded output.
+Transitively retains P43-P50 fixture/hash checks; CI prepatch now invokes
+P51. test_p51_pair.py extracts EXACT full P51 phase and production probe,
+exec_task and bounded helper; p51_host_shims.cpp provides persistent host
+std::thread workers, mutex/CV command queues, flags/VM/decoder/scalar guest
+instruction operations. Eight full repetitions =16persistent host workers,
+128guest jobs,16queued exits. Force instruction yields and assert each
+worker's own production dispatch TLS cleared after EVERY callback and exit.
+G++C++20 Wall/Wextra/Werror ASAN/UBSAN detect_leaks=0 passed. Corrupt load,
+extra output write, mid-batch/initial/second-exit queue publication failures,
+active-gate cancellation, instruction throw, second constructor failure,
+dropped job plus all4alloc/setup guards return error with balanced joins,
+no maps/probe, configuration and IDs restored. Host queues/VM/native PPU
+operations remain shims; native iOS compile/link/device P51 pending (no
+local Xcode SDK). UI50rows uniqueP2-P51 symbols, plist71, workflow fixture,
+Bridge exact prefix and whitespace checked.
+
+Baseline mainc28e5ab90fbbee662ab26a0cd1030790b436f28e. Push build71 main;
+user observes Actions completion. DO NOT monitor Actions after push.
+Install ARMSX3_iOS16_INSTALL_THIS_IPA via TrollStore, run all50diagnostics
+and send startup log. No P52 until phone P51 PASS. Full LV2 scheduler
+admission/context switching/global process/full TLS HLE/firmware/RSX/game
+boot remain UNTESTED. Earlier P39-P49 scheduler peers remain unexecuted.
+No images requested or generated.
