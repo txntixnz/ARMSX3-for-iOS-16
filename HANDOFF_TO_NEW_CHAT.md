@@ -2076,3 +2076,87 @@ run all37 diagnostics and send the new .txt (plus .ips if another crash).
 P38 complete PASS, multiworker scheduling, firmware, RSX and game boot remain
 unverified. The diagnostic-only queue remains isolated with normal scheduler
 stopped throughout; passing it will not imply full process/game startup.
+
+## 2026-10-11 — build54 all37 PASS; build55 P39 two-worker queue
+
+Upload ARMSX3-startup-20261011-002337-395-834.txt identifies build54,
+PID834. P2-P38 all PASS, AUTO PASS all diagnostic stages completed.
+Both P38 iterations return28 and log cleanup status3/expected3/position0/
+fast_call1. Device confirms production single-worker admission, admitted
+priority change/query/restore, linked guest return42, both join states and
+complete restoration. Expected null-pointer EFAULT and invalid-priority
+EINVAL messages are deliberate rejection checks. Build54 cleanup fix is
+device-verified. Full game boot remains untested.
+
+Build55 adds P39 "Two-worker scheduler priority ordering" after P38 (38 total
+diagnostics P2-P39). New0035-ios-two-worker-scheduler-queue.patch follows0034,
+adding an iOS-only lv2_obj member/export and declaration. Production awake,
+awake_unlocked, schedule_all, service handlers, SC bindings and fast_call are
+unchanged. It requires the stopped/empty scheduler, exactly two configured
+hardware slots, current worker stack30000 and retained peer stack90000,
+both size8000 and entry10000, distinct IDs, priorities1100/1150, no pending/
+timed/yield/notify work or suspend/ack/hw-sleep/cancel state, initial STOP.
+Capture both constructor timestamps (nonzero allowed), raw priority unions
+and global order counter. Call actual public awake on worker then peer;
+verify ordered links, ONPROC0/1 and onproc_count2 with no runnable excess.
+Run the existing ten SC calls with policy2 counters. Final checks require
+both original priorities/raw orders, original timestamps/counter and initial
+queue order. RAII uses actual unqueue on both, restoring priorities/times/
+counter on normal, negative, bad-count and throwing callback exits.
+
+P39 CoreBridge is appended as a distinct stage; P2-P38 bytes stay unchanged.
+Same production-loaded five-header ELF and27 guest opcodes/golden hash as
+device-passed P38. Separate fixed peer stack90000..a0000 does not overlap
+TLS pool50000..90000; main reserve10000+90000 covers it. Construct a real
+named_thread<ppu_thread> with launch_retainer, IDbase+1 (production id_step1),
+priority1150, detached, entry OPD matching worker, no guest commands. Clear
+its CPU construction flags for stopped-scheduler classification, never start
+it during queue exercise. Program stores the peer pointer for bounded
+callback lifetime. With two slots occupied, SC47 worker1100->1200 must
+move worker behind peer1150 (peerONPROC0/workerONPROC1); SC48 in linked guest
+reads1200. SC47 restore1100 moves worker ahead again (worker0/peer1), SC48
+confirms1100. Preserve peer raw priority, registers, CIA/LR/current function,
+timestamp, no interrupt execution/history, STOP after removal; verify full
+peer stack and all prior code/data/main stack/TLS/HLE aliases/cache cleanup.
+Log the three queue transitions, wrapper result, post-fast_call SLEEP and
+unexecuted peer STOP. Repeat main joinable and detached variants.
+
+Important peer lifecycle detail: CPU constructor increments created counter;
+CPU destructor is empty and only cpu_thread::operator() cleanup increments
+deleted. RetainedPeerCleanup therefore sets exit, launches the peer solely
+for the CPU cleanup wrapper, and joins it after queue exercise. Production
+while(!(state&exit)...) skips cpu_task entirely; no peer guest code runs.
+This RAII also retires peer on callback exceptions. Four CPU constructors/
+cleanup exits across the two variants; live count must return to baseline.
+
+Host test compiles unchanged full production awake/awake_unlocked/schedule_all/
+unqueue/set_priority/count/ppu_state/get_running_ppu/fast_call bodies and
+actual join/set/get-priority service handlers, scoped syscall policy runner,
+P37/P38 scopes and new P39 scope plus exact CoreBridge callWithTLS callback.
+Both join variants pass ten SC count/nine history checks, queue crossing/
+restoration, TLS return42 and peer preservation. Negative/throwing callbacks,
+bad counts, both timestamp mutations, peer priority/global tag/wrong final
+order mutations restore queue/priorities/timestamps/counter. Nested probe,
+one-slot configuration, same ID, wrong peer stack/priority, peer stop/suspend/
+executing flag, active scheduler/pending state reject before admission.
+Production FIFO equal-priority admission and previous P37/P38 scopes pass.
+SC transport/history, guest instruction execution, VM aliases, atomics and
+locks are host shims; device still must validate full actual P39 execution.
+Separate threaded host regression compiles production CPU constructor/
+operator/destructor and exact RetainedPeerCleanup struct: normal/exception
+paths skip cpu_task and balance CPU created/deleted/live counters. Named
+thread launch/join primitives are host shims. G++ C++20 Wall/Wextra/Werror,
+ASAN/UBSAN; leak detection off for tool /proc restriction. Previous P38 exact
+old/new cleanup regression passes. Patch0035 applies/reverses cleanly after
+0034; P39 ELF/opcode builder exactly matches P38; App symbols unique/ordered.
+
+Baseline main259f3bb81b46b1e115bd734bdfa704d5306f5520,
+treedf95c00681ef3349932374c9d02aa9944c3a3b0e. P2-P38 prefix610061bytes,
+Git blobc59f657328cc9785b7f4073e628333210016034f. Info build55; only Bridge,
+App stage entry, Info, new0035 and handoff change. Existing log export intact.
+No local iOS/Xcode SDK; build55/P39 pending Actions/device. Do not monitor
+Actions after push; user reports workflow result. Install artifact
+ARMSX3_iOS16_INSTALL_THIS_IPA, rerun all38, send new.txt plus.ips if crash.
+Peer guest execution, scheduler start/context switching, full TLS HLE,
+global process/firmware/RSX/game boot remain untested. Passing P39 validates
+two-node ordering with scheduler stopped, not runnable multiworker execution.
