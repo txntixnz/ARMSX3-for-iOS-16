@@ -2475,3 +2475,114 @@ Do not monitor Actions after push. User installs
 ARMSX3_iOS16_INSTALL_THIS_IPA, runs all41 diagnostics and sends new log.
 No P43 until P42 device result; peer execution/real context switching,
 scheduler start/full TLS HLE/firmware/RSX/global process/game boot untested.
+
+2026-10-11: build60 all41 device PASS; build61/P43 memory services
+----------------------------------------------------------------
+Uploaded ARMSX3-startup-20261011-102428-659-1885.txt, header build60,
+PID1885. All P2-P42 AUTO PASS and final all-stages PASS. P42 executes two
+repetitions: MFTB full64/upper32/full64 ordered in core clock bracket,
+50 steps, history/service checks and cleanup. P8 and subsequent SPU stages
+pass again; previous UIKit crash did not recur in this run. Global process,
+firmware/RSX/game boot still not tested.
+
+Build61 appends armsx3_core_test_memory_syscalls (unique name; earlier P5
+already has a guest_memory export) and UI row43 "Guest memory allocation
+and release". P2-P42 baseline849861 bytes preserved as exact prefix,
+Git blob7e5752acfe0e577e3a2c1c93abddbe88b9e04d36. Info60->61.
+P43 clones device-passed P42 fixtures/worker/TLS/clock/FIFO cleanup and adds
+real production SC348 sys_memory_allocate and SC349 sys_memory_free.
+No core memory service, allocator, container take/free, time handler, guest
+instruction, SC binding, scheduler algorithm or fast_call body changed.
+
+Loaded guest callee adds14 words after MFTB stores: ADDIS creates size64K,
+ADDI flags0x200 and frame+88 output pointer; SC348 writes aligned address,
+STW saves status at frame+92. LWZ reloads address, SC349 frees it and STW
+saves status at+100; reload/SC349 repeats and stores EINVAL at+104. No
+dereference of guest heap in this stage; even an allocation failure cannot
+cause a null heap access. Heap contents/access remain for a subsequent test.
+Frame+96..99 and108..127 remain unchanged canaries. Caller24 words,
+callee39/156 bytes, total63/252 bytes, end100fc,64 steps incl HLE return.
+Same budget64 remains sufficient and bounded helper already allows<=4096.
+ELF CODE file200..2fc ends before DATA300; new static_assert enforces this.
+Fixture data/TLS/process metadata unchanged. Golden SHA1
+b7696c23538699040aec282e8bc66686a87cf44c independently reconstructed;
+P42 golden digest/data unchanged. Memory service PCs: SC348+192,
+SC349+208, repeated SC349+224 from guest begin10000.
+
+Before loaded guest call, real SC348 checks four invalid cases: size0 gives
+EALIGN, sizeffff/64K gives EALIGN, flag100 (unsupported4K) gives EINVAL,
+valid64K with null output gives EFAULT after allocation/internal free. Each
+result/CIA/history/name and unchanged data/aliases verified. Error values
+explicitly cast to u32 in u64 request arrays to prevent signed narrowing.
+Core snapshot allocatedAddress checked nonzero/aligned; after guest release
+vm::check_addr returnsfalse; status fields0/0/EINVAL and three exact history
+PC/name/results checked. Only observed address added to expected stack.
+Prior clock outputs/MFTB, FIFO yields, priority/join/TLS42 checks retained.
+
+New iOS-only armsx3_ios_memory_probe_and_call in sys_memory.cpp surrounds
+scheduler scope. Requires stopped Emu, current bounded PPU worker (stack
+30000/8000,entry10000), initialized FXO and no nested memory probe. Explicit
+TargetConditionals and Emu/System.h includes. Initialize default FXO
+lv2_memory_container with1MiB only if absent, and private production
+sys_memory_address_table if absent. Require exact1MiB/invalid-container-id,
+zero used charge, all65536 table entriesempty and both secondary-area bases0;
+refuse unrelated state. First ordinary allocator path reserves a256MiB virtual
+user64K area but commits only64KiB per allocation. Retain empty1MiB diagnostic
+container metadata in FXO; normal Emu.Init resets FXO before any real boot.
+VM reservations are removed by P43's existing vm::close, not counted as
+physical memory charge. Successful scope requires no table entries/charge.
+RAII recovers any recorded allocation on negative returns or exceptions via
+unchanged sys_memory_free and resets thread-local active flag. Initial table
+was empty and other workers do not execute guest code, so all entries belong
+to this bounded diagnostic scope. Normal memory calls are unchanged.
+
+New private scheduler_memory_and_call clones passed two-worker stopped queue
+scope and uses countpolicy5. Policies0-4 unchanged;5 adds SC348x5,SC349x2
+while retaining SC145x3,147x1,43x2,46x2,47x5,48x2,6x1:23 calls/22 histories.
+Null-output internal direct C++ free is not an SC349 binding event. History
+minimum22 before worker execution. Initial null-join entries remainindex0;
+allocation errors insertedindex3..6; guest yields11/12, clocks13/14,
+allocation/free/double-free15/16/17, guest priority18/join19, post priority
+no-op20/query21. All original history PCs/results retained where unchanged.
+
+0041-ios-guest-memory-syscalls-probe.patch contains four sources: bounded
+PPUModule process loader allowlist108/136/172/196/252 and max252;
+lv2.cpp private policy5/scheduler scope;sys_sync.h private declaration;
+sys_memory.cpp includes and private diagnostic memory scope. Audited all40
+prior repo patches: none changes sys_memory.cpp/h. Production memory source
+byte-identical after stripping new includes and appended iOS scope. Full0041
+four-file apply/reverse matched exact baselines after0040 and prior lv2 patches.
+
+Persisted host regressions:
+- test_p43_fixture.py: read-only independent opcode/data/hash reconstruction,
+  old P42 digest, ADDIS64K/flag/outputpointer/SC348/349 encodings, all9 guestSC
+  positions and252-byte CODE-before-DATA boundary. Optional Bridge path.
+- test_p43_loader.py: exact before0041/after0041 process wrapper; old252-byte
+  rejection; all5 accepted fixtures, malformed TLS/process, rejected neighboring
+  lengths, output/allocation preservation and loader-failure/bad-size rollback.
+  Pass pre/post PPUModule.cpp paths when running from repo checkout.
+- test_p43_memory.py: exact new Program/callback/TLS wrapper, unchanged actual
+  full scheduler/priority/service/fast_call bodies; exact production
+  sys_memory_allocate/free/allocate_user_memory, address-table allocate body,
+  container take/free bodies and new memory-scope wrapper. VM/FXO/locks/atomics/
+  SC transport/scalar guest executor use host substitutes; not live iOS VM.
+  Two real-source callback repetitions, all63 guest words/64 steps, memory
+  status/history/counts, two allocations/two frees per iteration (null output
+  plus guest), zero charge/table and exact stack/peer canaries. Inject allocation
+  failure, negative/throwing callbacks with retained successful allocations,
+  positive callback leaking allocation, nested memory probe, five corrupt TB
+  variants and existing scheduler negative/throwing/missingcount/state guards.
+  Policies0-5 each checked. MFTB carry/scale/offset tests retained. Optional
+  staged rpcs3 source-root and CoreBridge paths make extraction repo-usable.
+G++ C++20 Werror, ASAN/UBSAN passed (leak checks off for tool /proc restriction).
+Existing P41/P42 callback regressions passed with updated shared count policy;
+fixture/loader regressions passed. No local XcodeSDK; actual Darwin/iPhone
+memory-service path remains pending build61 device test.
+
+Baseline main09eca259c8658203bb096c78e8064675c0e3310a,
+treea3425029c205e10977283764e459a7893a4abc7e. Change Bridge, App new row,
+Info61,0041,3 tests and this handoff. No workflow edits. Do not monitor Actions
+after push. User installs ARMSX3_iOS16_INSTALL_THIS_IPA, runs all42 stages,
+sends log. P44 waits for P43 device outcome. Heap memory read/write and other
+memory APIs, actual peer execution/context switch/schedulerstart, full TLS
+HLE/globalprocess/firmware/RSX/game boot untested.
