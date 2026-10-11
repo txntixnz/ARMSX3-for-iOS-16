@@ -286,8 +286,10 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
     NSString* build = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleVersion"] ?: @"unknown";
     NSString* summary = self.previousRunPending ? [NSString stringWithFormat:@"Previous unfinished run: %@\n",
         [NSUserDefaults.standardUserDefaults stringForKey:pendingStageKey] ?: @"unknown stage"] : self.transcript;
+    NSString* source = self.previousRunPending ? @"previous unfinished run" : @"this run";
+    NSString* heading = [NSString stringWithFormat:tail ? @"Last 60 log lines from %@:\n" : @"Full log from %@:\n", source];
     return [NSString stringWithFormat:@"ARMSX3 diagnostics · build %@\n%@\n%@%@", build, summary,
-        tail ? @"Last 60 log lines from this run:\n" : @"Full log from this run:\n",
+        heading,
         [NSString stringWithUTF8String:selected.c_str()]];
 }
 - (void)copyResults {

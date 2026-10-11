@@ -2332,3 +2332,62 @@ treef0532781ac4cd51606be32d77cdd5a8c009dfc7d. Info58; Bridge/App/Info,
 Build58/P41 pending Actions and phone. Do not monitor Actions. User installs
 ARMSX3_iOS16_INSTALL_THIS_IPA, runs all40 diagnostics and sends log.
 Full process/firmware/RSX/game boot remain untested.
+
+2026-10-11: build58 P8/host UIKit crash; build59 SPU arena teardown fix
+-------------------------------------------------------------------
+Uploaded ARMSX3CoreLoadTest-2026-10-11-094357.ips and Archive(6).zip. Crash
+PID1454, iOS16.0/iPhone14,3, build58, 09:43:55 Brussels. ZIP log export
+ARMSX3-startup-20261011-074454-121-1486.txt was made by restarted PID1486;
+contains only preceding unfinished PID1454 run (header pending P8). P2-P7
+pass; P8 executes all eight SPU instructions and five mirrors, then main
+thread reads invalid host address10fee3259 during CoreGraphics glyph drawing
+at190759ab0. Core signal handler calls fatal/emergency_exit and aborts.
+Background P8 logs cleanup/VM close continuing during the abort. P41 never
+runs in this log; build58 guest timing remains unvalidated on device.
+
+Identified production SPU destructor race in pinned SPUThread.cpp: it first
+calls shm->unmap on five contiguous LS views, then memory_release on the
+entire seven-LS arena including two guards. POSIX unmap creates reusable
+address-space holes; UIKit/malloc can allocate inside one, then final whole
+arena munmap deletes that unrelated allocation. The main-thread glyph fault
+during background SPU destruction is consistent with this race; supplied
+logs lack arena bounds, so exact crashed pointer ownership is inferred.
+This explains how older successful runs can coexist with a timing-dependent
+failure before new P41 code is reached.
+
+New0039-ios-atomic-spu-arena-release.patch changes only iOS destructor:
+release complete owned7*0x40000 arena in one memory_release operation,
+without preliminary five unmaps. POSIX munmap removes shared views and guards
+together; backing shm lifetime/descriptor destruction stays unchanged.
+Other platform destructor branch retains original behavior. Explicit guarded
+TargetConditionals include added after stdafx; builds source after0003
+apple_jit include. No guest/SPU interpreter/DMA or P41 code changes.
+
+Deterministic regression test_spu_arena_release.py persisted in repo tests.
+Accepts before/after SPUThread.cpp and vm_native.cpp paths. Extracts exact
+old/new destructor and production POSIX memory_reserve/memory_release bodies;
+uses real mmap shared file for five LS aliases. Reserve nine-LS region to
+place one sentinel region on each side of owned seven-LS arena. Force an
+allocator to reuse first unmapped mirror with MAP_FIXED_NOREPLACE between
+teardown operations. Old iOS/native body demonstrably deletes this allocation;
+new iOS body has no intermediate holes and replacement allocated immediately
+after full release remains accessible with all canary bytes. Both neighboring
+sentinels, removed guards, shared aliases and single release checked across
+128 cycles per variant. New non-iOS branch reproduces unchanged old behavior.
+G++ C++20 Werror with ASAN/UBSAN, leak checking off for tool /proc restriction.
+Host Linux syscalls and forced scheduling point model the interleaving;
+not a live iOS allocator/CoreGraphics runtime test. No XcodeSDK locally.
+Patch0039 exact reverse/apply verified after sole prior SPUThread patch0003.
+
+App.mm log heading now distinguishes previous unfinished run from this run,
+for both full .txt sharing and60-line copied results; selection/rotation/
+filenames unchanged. This prevents interpreting export PID as the crash PID.
+40 UI stages P2-P41 remain identical. CoreBridge unchanged blob
+0138511efec8da94d4dada5293103ce3639a50fa. Info58->59. Only new0039,
+test_spu_arena_release.py, App heading, Info and handoff changed.
+
+Baseline main1fb8e9b0718965eb0554246d7f29694cfb9dc63e,
+treee890fc0a9feb2b6499cd02b8932417e55e1e9765. Build59 pending Actions/phone.
+Do not add P42 until P41 passes on phone. Do not monitor Actions after push.
+User installs ARMSX3_iOS16_INSTALL_THIS_IPA, reruns all40, sends .txt/.ips
+if another crash. Global process/firmware/RSX/game boot remain untested.

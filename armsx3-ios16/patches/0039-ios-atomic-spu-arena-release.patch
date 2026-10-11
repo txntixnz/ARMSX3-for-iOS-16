@@ -1,0 +1,32 @@
+--- a/rpcs3/Emu/Cell/SPUThread.cpp
++++ b/rpcs3/Emu/Cell/SPUThread.cpp
+@@ -1,5 +1,8 @@
+ #include "util/apple_jit.hpp"
+ #include "stdafx.h"
++#if defined(__APPLE__)
++#include <TargetConditionals.h>
++#endif
+ #include <charconv>
+ #include <cstring>
+ #include "Utilities/JIT.h"
+@@ -2031,6 +2034,12 @@
+ 
+ spu_thread::~spu_thread()
+ {
++#if defined(__APPLE__) && TARGET_OS_IPHONE
++	// All five file views and both guard regions belong to this one arena.
++	// Opening holes first lets UIKit/malloc reuse them; the final whole-arena
++	// release could then unmap those unrelated allocations. Tear down once.
++	utils::memory_release(ls - SIGNED_LS_SIZE * 3, SIGNED_LS_SIZE * 7);
++#else
+ 	// Unmap LS and its mirrors
+ 	for (s64 ls_offs = 0 - SIGNED_LS_SIZE * 2; ls_offs <= SIGNED_LS_SIZE * 2; ls_offs += SIGNED_LS_SIZE)
+ 	{
+@@ -2038,6 +2047,7 @@
+ 	}
+ 
+ 	utils::memory_release(ls - SIGNED_LS_SIZE * 3, SIGNED_LS_SIZE * 7);
++#endif
+ }
+ 
+ u8* spu_thread::map_ls(utils::shm& shm, void* ptr)
