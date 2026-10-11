@@ -123,7 +123,7 @@
  	static void cleanup();
 --- a/rpcs3/Emu/Cell/lv2/sys_memory.cpp
 +++ b/rpcs3/Emu/Cell/lv2/sys_memory.cpp
-@@ -581,3 +581,30 @@
+@@ -581,3 +581,38 @@
      return result;
  }
  #endif
@@ -135,9 +135,17 @@
 +    if (!context || !execute || !Emu.IsStopped() || cpu_thread::get_current() != context || !g_fxo->is_init()) return -1;
 +    if (s_ios_memory_probe_active) return -2;
 +    if (!g_fxo->is_init<last_reported_memory_stats>() && !g_fxo->init<last_reported_memory_stats>()) return -3;
++    // select() reads FXO storage directly; reset() leaves unconstructed maps
++    // filled with0xCC. Construct the registry before the guard and guest SC352.
++    using ContainerMap = id_manager::id_map<lv2_memory_container>;
++    if (!g_fxo->is_init<ContainerMap>() && !g_fxo->init<ContainerMap>()) return -3;
 +    bool otherContainers = false;
 +    idm::select<lv2_memory_container>([&](u32, lv2_memory_container&) { otherContainers = true; });
-+    if (otherContainers) return -4;
++    if (otherContainers) {
++        sys_memory.error("iOS P45 rejected: memory-container registry is not empty");
++        return -4;
++    }
++    sys_memory.notice("iOS P45 memory scope ready: container registry initialized and empty");
 +    auto& stats = g_fxo->get<last_reported_memory_stats>().body;
 +    struct Restore {
 +        atomic_t<last_reported_memory_stats::inner_body>& stats;

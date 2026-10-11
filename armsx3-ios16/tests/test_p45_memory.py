@@ -1,8 +1,13 @@
 """Compile production scheduler/service bodies and the exact P45 callback.
 
 Locks/atomics/VM/SC transport/guest instruction execution use host shims.
+IDM select is the exact production template; its map and FXO lifecycle are shimmed.
 Full awake/awake_unlocked/schedule_all/fast_call, priorities, service handlers,
 queue bookkeeping and the diagnostic callback/wrappers are unchanged bodies.
+
+Usage: python test_p45_memory.py upstream-armsx3/rpcs3 CoreBridge.cpp
+The upstream tree must have the iOS patches applied. No arguments uses the
+local review staging files.
 """
 from pathlib import Path
 import subprocess
@@ -35,6 +40,7 @@ service = read_core('Emu/Cell/lv2/sys_ppu_thread.cpp','sys_ppu_thread.cpp')
 time = read_core('Emu/Cell/lv2/sys_time.cpp','sys_time.cpp')
 memory_service=read_core('Emu/Cell/lv2/sys_memory.cpp','sys_memory.cpp')
 memory_header=read_core('Emu/Cell/lv2/sys_memory.h','sys_memory.h')
+idm_header=read_core('Emu/IdManager.h','IdManager.h')
 interpreter = read_core('Emu/Cell/PPUInterpreter.cpp','PPUInterpreter.cpp')
 bridge = bridge_path.read_text().split('int armsx3_core_test_memory_stats()', 1)[1]
 callback = function(bridge, 'const auto performSyscalls =') + ';'
@@ -68,6 +74,8 @@ using u8=uint8_t; using u32=uint32_t; using u64=uint64_t;
 using s32=int32_t; using s64=int64_t; using usz=size_t;
 constexpr u32 umax=UINT32_MAX; constexpr s32 smin=INT32_MIN,smax=INT32_MAX;
 template<class T> using shared_ptr=std::shared_ptr<T>;
+namespace stx {template<class T> using shared_ptr=std::shared_ptr<T>;}
+using shared_mutex=std::mutex;
 template<class T> T swap_be(T v) {if constexpr(sizeof(T)==4) return T(__builtin_bswap32(u32(v))); else return T(__builtin_bswap64(u64(v)));}
 template<class T> struct be_t {T value{}; operator T() const {return swap_be(value);} be_t& operator=(T x) {value=swap_be(x);return *this;} be_t& operator-=(T x) {return *this=T(*this)-x;}};
 enum class cpu_flag : unsigned {stop=1,again=2,ret=4,suspend=8,wait=16,signal=32,yield=64,preempt=128,notify=256};
@@ -163,7 +171,30 @@ struct ppu_thread : cpu_thread {
  void check_state() {state-=cpu_flag::wait;}
 };
 template<class T> struct named_thread : T {};
-namespace idm {template<class T,class F> bool check(u32,F) {return false;} template<class T> std::vector<shared_ptr<T>>& selected() {static std::vector<shared_ptr<T>> values;return values;} template<class T,class F> void select(F f) {for(auto& p:selected<T>())f(0,*p);}}
+template<class A,class B> constexpr bool PtrSame=std::is_same_v<A,B>;
+template<class A,class B> constexpr bool IdmTypesCompatible=std::is_same_v<A,B>;
+template<class T> struct atomic_ptr {
+ shared_ptr<T> value;
+ T* observe() const {return value.get();} shared_ptr<T> load() const {return value;}
+ atomic_ptr& operator=(shared_ptr<T> p) {value=std::move(p);return *this;}
+ void reset() {value.reset();}
+};
+namespace id_manager {
+ template<class T> struct id_map {
+  struct key {u32 value=0;u32 type() const {return T::id_base;} operator u32() const {return value;}};
+  std::array<atomic_ptr<T>,16> vec_data{};
+  std::array<key,16> vec_keys{};
+ };
+}
+class idm {
+ template<class F> struct function_traits;
+ template<class F,class R,class A1,class A2> struct function_traits<R(F::*)(A1,A2&) const> {using object_type=A2;using result_type=R;};
+ template<class T,class R> struct return_pair {T ptr;R ret{};};
+ template<class T> static constexpr u32 get_type() {return T::id_base;}
+public:
+ template<class T,class F> static bool check(u32,F) {return false;}
+ template<class T,class... Get,class F,class Lock=std::true_type> static auto select(F&&,Lock=std::true_type{});
+};
 struct {bool debug_or_root() const {return false;}} g_ps3_process_info;
 struct logger {template<class... T> void trace(const char*,T...) {}
  template<class... T> void warning(const char*,T...) {} template<class... T> void error(const char*,T...) {} template<class... T> void notice(const char*,T...) {}} ppu_log,sys_ppu_thread,sys_time,sys_memory;
@@ -203,11 +234,12 @@ namespace ppu_instructions {u32 SC(unsigned) {return 0x44000002;}}
 struct ppu_interpreter_rt {ppu_intrp_func_t decode(u32) {return run_sc;}};
 struct ppu_function_manager {u32 func_addr(unsigned,bool) {return 0x4000c;} bool is_func(u32) {return false;}};
 struct fxo {ppu_interpreter_rt interpreter; ppu_function_manager manager;
+ bool failNextInit=false;
  template<class T> static auto& storage() {static std::unique_ptr<T> value;return value;}
  template<class T> bool is_init() {if constexpr(std::is_same_v<T,ppu_interpreter_rt> || std::is_same_v<T,ppu_function_manager>)return true;else return bool(storage<T>());}
  bool is_init() {return true;}
- template<class T,class... Args> T* init(Args&&... args) {auto& p=storage<T>();if(p)return nullptr;p=std::make_unique<T>(std::forward<Args>(args)...);return p.get();}
- template<class T> T& get() {if constexpr(std::is_same_v<T,ppu_interpreter_rt>) return interpreter; else if constexpr(std::is_same_v<T,ppu_function_manager>)return manager;else return *storage<T>();}} fxo_instance;
+ template<class T,class... Args> T* init(Args&&... args) {auto& p=storage<T>();if(p)return nullptr;if(failNextInit){failNextInit=false;return nullptr;}p=std::make_unique<T>(std::forward<Args>(args)...);return p.get();}
+ template<class T> T& get() {if constexpr(std::is_same_v<T,ppu_interpreter_rt>) return interpreter; else if constexpr(std::is_same_v<T,ppu_function_manager>)return manager;else {if(!storage<T>())throw std::runtime_error("uninitialized FXO storage filled with0xCC");return *storage<T>();}}} fxo_instance;
 auto* g_fxo=&fxo_instance;
 namespace fmt {template<class... T> [[noreturn]] void throw_exception(const char*,T...) {throw std::runtime_error("invalid timebase selector");} template<class... T> std::string format(const char*,T...) {return {};}}
 const char* get_prx_name_by_cia(u32) {return nullptr;}
@@ -266,11 +298,17 @@ mftb_body = function(function(interpreter,'auto MFTB()'),'static const auto exec
 production += '\nvoid execute_MFTB(ppu_thread& ppu,ppu_opcode_t op) {\n'+mftb_body+';\nexec(ppu,op);\n}\n'
 # Scalar FXO/VM/atomic transport is shimmed; all memory operation bodies are exact.
 production += '\nconstexpr u32 SYS_MEMORY_CONTAINER_ID_INVALID=UINT32_MAX;\nconstexpr u64 SYS_MEMORY_PAGE_SIZE_64K=0x200,SYS_MEMORY_PAGE_SIZE_1M=0x400;\n'
-production += 'struct lv2_memory_container {const u32 size,id=SYS_MEMORY_CONTAINER_ID_INVALID;atomic_t<u32> used{};explicit lv2_memory_container(u32 n):size(n) {}\n'+function(memory_header,'u32 take(')+'\n'+function(memory_header,'u32 free(')+'\n};\n'
+production += 'struct lv2_memory_container {static constexpr u32 id_base=0x3f000000;const u32 size,id=SYS_MEMORY_CONTAINER_ID_INVALID;atomic_t<u32> used{};explicit lv2_memory_container(u32 n):size(n) {}\n'+function(memory_header,'u32 take(')+'\n'+function(memory_header,'u32 free(')+'\n};\n'
+select_body=function(idm_header,'\n\t{\n\t\tstatic_assert((IdmTypesCompatible<T, Get>')
+production += '\ntemplate<class T,class... Get,class F,class Lock> auto idm::select(F&& func,Lock) '+select_body+'\n'
 production += 'struct sys_memory_address_table {atomic_t<lv2_memory_container*> addrs[65536]{};std::array<u32,2> secondary_areas{};std::mutex mutex;\n'+function(memory_service,'u32 allocate(')+'\n};\n'
 production += '\nstd::mutex s_memstats_mtx;\n'+function(memory_service,'struct last_reported_memory_stats')+';\n'+function(memory_header,'struct sys_memory_info_t')+';\n'
 production += 'error_code sys_memory_free(cpu_thread&,u32);\n'+'\n'.join(function(memory_service,sig) for sig in ['u32 allocate_user_memory(','error_code sys_memory_allocate(','error_code sys_memory_free(','error_code sys_memory_get_user_memory_size('])
 production += '\nstatic thread_local bool s_ios_memory_probe_active=false;\n'+function(memory_service,'extern "C" int armsx3_ios_memory_probe_and_call(')+'\n'+function(memory_service,'extern "C" int armsx3_ios_memory_stats_probe_and_call(')
+registry_init='    using ContainerMap = id_manager::id_map<lv2_memory_container>;\n    if (!g_fxo->is_init<ContainerMap>() && !g_fxo->init<ContainerMap>()) return -3;\n'
+assert registry_init in memory_service
+old_scope=function(memory_service,'extern "C" int armsx3_ios_memory_stats_probe_and_call(').replace(registry_init,'').replace('armsx3_ios_memory_stats_probe_and_call','build64_memory_stats_probe_and_call',1)
+production += '\n'+old_scope+'\n'
 probe_start = lv2.index('struct ios_ppu_syscall_probe')
 probe_end = lv2.index('extern "C" int armsx3_ios_ppu_probe_syscalls_and_call', probe_start)
 production += '\n' + lv2[probe_start:probe_end]
@@ -410,10 +448,26 @@ void restored(const ppu_thread& worker,const ppu_thread& peer) {
 int main() {
 ''' + call_tls + r'''
  ppu_thread worker,peer; Program program;
+ using ContainerMap=id_manager::id_map<lv2_memory_container>;
+ populate(worker,peer,program);
+ assert(!g_fxo->is_init<ContainerMap>());
+ bool reachedGuest=false;
+ auto noGuest=+[](ppu_thread*,void* p)->int {*static_cast<bool*>(p)=true;return -77;};
+ try {build64_memory_stats_probe_and_call(&worker,noGuest,&reachedGuest);assert(false);}
+ catch(const std::runtime_error& e) {assert(std::string(e.what())=="uninitialized FXO storage filled with0xCC");}
+ assert(!reachedGuest && !g_fxo->is_init<ContainerMap>() && worker.syscall_history.index==0);
+ g_fxo->failNextInit=true;
+ assert(armsx3_ios_memory_stats_probe_and_call(&worker,noGuest,&reachedGuest)==-3);
+ assert(!reachedGuest && !g_fxo->is_init<ContainerMap>() && worker.syscall_history.index==0);
+ ContainerMap* retainedRegistry=nullptr;
  for(bool joinable:{true,false}) {
   populate(worker,peer,program);program.joinable=joinable;
   worker.joiner=joinable?ppu_join_status::joinable:ppu_join_status::detached;
   const int result=callWithTLS(&worker,0x50000,&program);
+  assert(g_fxo->is_init<ContainerMap>());
+  auto* registry=&g_fxo->get<ContainerMap>();
+  assert(!retainedRegistry || retainedRegistry==registry);retainedRegistry=registry;
+  assert(std::all_of(registry->vec_data.begin(),registry->vec_data.end(),[](const auto& p){return !p.observe();}));
   assert(result==94 && program.syscalls && program.tlsMemory && worker.gpr[3]==42);
   assert(worker.interrupt_thread_executing && !peer.interrupt_thread_executing);
   assert(worker.syscall_history.index==25 && peer.syscall_history.index==0);
@@ -467,9 +521,10 @@ int main() {
   const auto v=stats.load();assert(v.prev_total==123 && v.prev_avail==456);stats=last_reported_memory_stats::inner_body{};restored(worker,peer);
  }
  // Additional IDM containers would change reported total: reject that scope.
- populate(worker,peer,program);idm::selected<lv2_memory_container>().push_back(std::make_shared<lv2_memory_container>(0x10000));
+ populate(worker,peer,program);auto& registry=g_fxo->get<ContainerMap>();
+ registry.vec_data[3]=std::make_shared<lv2_memory_container>(0x10000);
  assert(armsx3_ios_memory_stats_probe_and_call(&worker,+[](ppu_thread*,void*){assert(false);return 0;},nullptr)==-4);
- idm::selected<lv2_memory_container>().clear();restored(worker,peer);
+ registry.vec_data[3].reset();restored(worker,peer);
  // Corrupted guest timebase outputs must fail and restore scheduler state.
  for(fault_mode=1;fault_mode<=5;fault_mode++) {
   populate(worker,peer,program);
@@ -623,7 +678,7 @@ int main() {
   assert(ppu_probe_syscalls_and_call(&worker,wrong,&bad,policy)==-3);
   assert(!s_ios_ppu_syscall_probe);
  }
- std::cout<<"PASS: full production queue/priority/service/fast_call bodies, exact P45 callback, loaded guest opcode execution, real current-time/frequency and MFTB handlers/clock body, carry/scaling/offset semantics, five corrupt timebase rejections, actual SC352 user memory report and allocation/free/accounting bodies, three availability snapshots, five statistics corruptions and cache restoration, first/last heap word writes and reads, big-endian byte/halfword loads, guard branch on ENOMEM, five corrupt heap output/store rejections and canaries, null outputs, yield FIFO/tail, histories and rollback/guards\n";
+ std::cout<<"PASS: exact production IDM select, missing-registry initialization regression and initialization failure, fresh and retained empty maps, sparse extra-container rejection; full production queue/priority/service/fast_call bodies, exact P45 callback, loaded guest opcode execution, real current-time/frequency and MFTB handlers/clock body, carry/scaling/offset semantics, five corrupt timebase rejections, actual SC352 user memory report and allocation/free/accounting bodies, three availability snapshots, five statistics corruptions and cache restoration, first/last heap word writes and reads, big-endian byte/halfword loads, guard branch on ENOMEM, five corrupt heap output/store rejections and canaries, null outputs, yield FIFO/tail, histories and rollback/guards\n";
 }
 '''
 with tempfile.TemporaryDirectory(prefix='p43-memory-') as temp:
