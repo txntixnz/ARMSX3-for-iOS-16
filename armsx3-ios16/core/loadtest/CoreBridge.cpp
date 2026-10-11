@@ -8552,11 +8552,22 @@ extern "C" __attribute__((visibility("default"))) int armsx3_core_test_scheduler
                     const int result = armsx3_ios_ppu_probe_scheduler_queue_and_call(worker, performSyscalls, &program);
                     std::snprintf(scopeLog, sizeof(scopeLog), "P38 scheduler scope returned %d", result);
                     ARMSX3StartupLog(scopeLog);
+                    // Production fast_call retains interrupt_thread_executing.
+                    // Once unqueued, ppu_state reports SLEEP for that worker;
+                    // a worker rejected before the call still reports STOP.
+                    const auto expectedStatus = worker->interrupt_thread_executing ? PPU_THREAD_STATUS_SLEEP : PPU_THREAD_STATUS_STOP;
+                    const auto schedulerState = lv2_obj::ppu_state(worker, false, true);
+                    std::snprintf(scopeLog, sizeof(scopeLog), "P38 scheduler cleanup: status=%u expected=%u position=%u fast_call=%u",
+                        static_cast<unsigned>(schedulerState.first), static_cast<unsigned>(expectedStatus), schedulerState.second,
+                        static_cast<unsigned>(worker->interrupt_thread_executing));
+                    ARMSX3StartupLog(scopeLog);
                     if (worker->prio.load().all != originalPriority.all || lv2_obj::g_priority_order_tag.load() != originalTag ||
                         worker->start_time != originalStartTime ||
                         lv2_obj::get_running_ppu(0) || worker->next_ppu ||
-                        lv2_obj::ppu_state(worker, false, true).first != PPU_THREAD_STATUS_STOP)
+                        schedulerState != std::pair{expectedStatus, 0u}) {
+                        ARMSX3StartupLog("P38 diagnostic scheduler removal/priority/order counter restoration failed");
                         throw std::runtime_error("P38 diagnostic scheduler removal/priority/order counter restoration failed");
+                    }
                     if (worker->gpr[13] != pool + 0x7060 ||
                         std::memcmp(vm::base(pool), expected.data(), expected.size()) ||
                         std::memcmp(vm::get_super_ptr(pool), expected.data(), expected.size()))
