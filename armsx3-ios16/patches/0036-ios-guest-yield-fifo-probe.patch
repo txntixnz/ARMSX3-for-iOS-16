@@ -1,0 +1,108 @@
+--- a/rpcs3/Emu/Cell/lv2/lv2.cpp
++++ b/rpcs3/Emu/Cell/lv2/lv2.cpp
+@@ -1702,7 +1702,12 @@
+ 	const int result = execute(context, user);
+ 	if (result < 0) return result;
+ 	for (u32 code = 0; code < probe.counts.size(); ++code)
+-		if (probe.counts[code] != (code == 46 ? 2u : (code == 6 ? 1u : (code == (policy ? 48u : 49u) ? (policy == 2 ? 2u : 1u) : (policy && code == 47 ? (policy == 2 ? 5u : 3u) : 0u))))) return -3;
++	{
++		const bool extended = policy == 2 || policy == 3;
++		const u32 expected = code == 43 && policy == 3 ? 2u : (code == 46 ? 2u : (code == 6 ? 1u :
++			(code == (policy ? 48u : 49u) ? (extended ? 2u : 1u) : (policy && code == 47 ? (extended ? 5u : 3u) : 0u))));
++		if (probe.counts[code] != expected) return -3;
++	}
+ 	return result;
+ }
+ extern "C" int armsx3_ios_ppu_probe_syscalls_and_call(ppu_thread* context,
+@@ -2492,6 +2497,81 @@
+ }
+ #endif
+ 
++#if defined(__APPLE__) && TARGET_OS_IPHONE
++// Two loaded guest yield calls exercise equal-priority FIFO rotation and
++// tail no-op while both workers fit in the stopped scheduler's two slots.
++int lv2_obj::ios_probe_scheduler_yield_and_call(ppu_thread* context, ppu_thread* peer,
++    int (*execute)(ppu_thread*, void*), void* user)
++{
++    if (!context || !peer || context == peer || context->id == peer->id || !execute ||
++        !Emu.IsStopped() || cpu_thread::get_current() != context ||
++        g_cfg.core.ppu_decoder != ppu_decoder_type::_static || g_cfg.core.ppu_threads + 0u != 2u ||
++        context->stack_addr != 0x30000u || peer->stack_addr != 0x90000u ||
++        context->stack_size != 0x8000u || peer->stack_size != 0x8000u ||
++        context->entry_func.addr != 0x10000u || peer->entry_func.addr != 0x10000u) return -1;
++    if (s_ios_ppu_syscall_probe) return -2;
++    const u64 startTime = context->start_time, peerStartTime = peer->start_time;
++    const auto isolated = [context, peer, startTime, peerStartTime]() {
++        const auto quiet = [](ppu_thread* thread, u64 timestamp) {
++            return !thread->res_notify && !thread->ack_suspend && !thread->hw_sleep_time &&
++                thread->start_time == timestamp && !thread->cancel_sleep && cpu_flag::suspend - thread->state;
++        };
++        return !g_pending && !g_scheduler_ready && g_waiting.empty() && g_to_sleep.empty() &&
++            g_to_awake.empty() && !g_postpone_notify_barrier && !s_yield_frequency &&
++            std::all_of(std::begin(g_to_notify), std::end(g_to_notify), [](const void* p) { return !p; }) &&
++            quiet(context, startTime) && quiet(peer, peerStartTime) && !peer->interrupt_thread_executing;
++    };
++    ppu_thread::ppu_prio_t previous{}, peerPrevious{};
++    u64 tag = 0;
++    {
++        std::lock_guard lock(g_mutex);
++        if (g_ppu || context->next_ppu || peer->next_ppu || !isolated() ||
++            context->prio.load().prio != 1100 || peer->prio.load().prio != 1100 ||
++            ppu_state(context, false, false) != std::pair{PPU_THREAD_STATUS_STOP, 0u} ||
++            ppu_state(peer, false, false) != std::pair{PPU_THREAD_STATUS_STOP, 0u}) return -4;
++        previous = context->prio.load(); peerPrevious = peer->prio.load(); tag = g_priority_order_tag.load();
++    }
++    struct Restore {
++        ppu_thread* context; ppu_thread* peer;
++        ppu_thread::ppu_prio_t previous; ppu_thread::ppu_prio_t peerPrevious;
++        u64 tag; u64 startTime; u64 peerStartTime;
++        ~Restore() {
++            std::lock_guard lock(g_mutex);
++            lv2_obj::unqueue(g_ppu, context, &ppu_thread::next_ppu);
++            lv2_obj::unqueue(g_ppu, peer, &ppu_thread::next_ppu);
++            context->prio = previous; peer->prio = peerPrevious;
++            g_priority_order_tag = tag; context->start_time = startTime; peer->start_time = peerStartTime;
++        }
++    } restore{context, peer, previous, peerPrevious, tag, startTime, peerStartTime};
++    const auto ordered = [context, peer](bool yielded) {
++        auto* first = yielded ? peer : context;
++        auto* second = yielded ? context : peer;
++        return g_ppu == first && first->next_ppu == second && !second->next_ppu &&
++            count_non_sleeping_threads().onproc_count == 2 && !count_non_sleeping_threads().has_running &&
++            ppu_state(first, false, false) == std::pair{PPU_THREAD_STATUS_ONPROC, 0u} &&
++            ppu_state(second, false, false) == std::pair{PPU_THREAD_STATUS_ONPROC, 1u};
++    };
++    if (!awake(context) || !awake(peer)) return -6;
++    {
++        std::lock_guard lock(g_mutex);
++        if (!isolated() || !ordered(false)) return -6;
++    }
++    const int result = ppu_probe_syscalls_and_call(context, execute, user, 3);
++    if (result < 0) return result;
++    {
++        std::lock_guard lock(g_mutex);
++        if (!isolated() || !ordered(true) || context->prio.load().all != previous.all ||
++            peer->prio.load().all != peerPrevious.all || g_priority_order_tag.load() != tag) return -5;
++    }
++    return result;
++}
++extern "C" int armsx3_ios_ppu_probe_scheduler_yield_and_call(ppu_thread* context, ppu_thread* peer,
++    int (*execute)(ppu_thread*, void*), void* user)
++{
++    return lv2_obj::ios_probe_scheduler_yield_and_call(context, peer, execute, user);
++}
++#endif
++
+ void lv2_obj::cleanup()
+ {
+ 	g_ppu = nullptr;
+--- a/rpcs3/Emu/Cell/lv2/sys_sync.h
++++ b/rpcs3/Emu/Cell/lv2/sys_sync.h
+@@ -305,6 +305,7 @@
+     static int ios_probe_priority_change_and_call(ppu_thread*, int (*)(ppu_thread*, void*), void*);
+     static int ios_probe_scheduler_queue_and_call(ppu_thread*, int (*)(ppu_thread*, void*), void*);
+     static int ios_probe_scheduler_pair_and_call(ppu_thread*, ppu_thread*, int (*)(ppu_thread*, void*), void*);
++    static int ios_probe_scheduler_yield_and_call(ppu_thread*, ppu_thread*, int (*)(ppu_thread*, void*), void*);
+ #endif
+ 
+ 	static void cleanup();

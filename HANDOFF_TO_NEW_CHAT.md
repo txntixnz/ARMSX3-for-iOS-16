@@ -2160,3 +2160,60 @@ ARMSX3_iOS16_INSTALL_THIS_IPA, rerun all38, send new.txt plus.ips if crash.
 Peer guest execution, scheduler start/context switching, full TLS HLE,
 global process/firmware/RSX/game boot remain untested. Passing P39 validates
 two-node ordering with scheduler stopped, not runnable multiworker execution.
+
+2026-10-11: build55 DEVICE PASS; build56 P40 guest yield prepared
+----------------------------------------------------------------
+Uploaded ARMSX3-startup-20261011-005358-046-998.txt, PID998, shows all38
+P2-P39 stages PASS. Both P39 repeats confirm priority1100->1200 moves
+worker behind peer1150, restore1100 moves it ahead, scope result28,
+main SLEEP3 and unexecuted peer STOP, repeated unload/cleanup and AUTO PASS.
+
+Build56 appends P40 "Guest yield and FIFO scheduler ordering". Preserve
+P2-P39 byte-for-byte (664686-byte prefix, blob
+a3093443df97a3452b232e95ed6d31e32d747028). New patch0036 adds only an iOS
+diagnostic two-worker scope/export and syscall-count policy3. Production
+scheduler, yield service, syscall bindings and fast_call remain unchanged.
+Two stopped workers, equal priority1100, two hardware slots. Real public
+awake admits main0/peer1. Guest SC43 rotates main behind peer; another SC43
+at the tail preserves peer0/main1. Both remain ONPROC, so production yield
+returns CELL_CANCEL=1 without a context switch. Both timestamps, raw priority
+unions and global ordering counter must remain unchanged. Actual unqueue
+and RAII restore all captured scheduler state on success/failure/exception.
+Keep P39's exit-only named-peer cleanup and all ELF/TLS/stack/TOC/HLE checks;
+peer never executes guest code. Repeat main joinable and detached variants.
+
+Loaded fixture has34 instructions/136 code bytes, callee40 bytes; execution
+expects35 steps including HLE return. Callee SC43 twice stores results1/1
+at DATA+24/+28, restores worker ID from r7, then SC48 queries priority1100.
+Caller restores TOC, joins, reads TLS and returns42. Guest end10088.
+Module SHA1 0998aeffb1a30e1c3a947c500c5ee85179f94b2c, independently derived
+from pinned production loader's program-header hash records and fixture.
+Policies0/1/2 retain old counts. Policy3 requires SC43=2,46=2,47=5,48=2,6=1,
+other=0:12 calls/11 BIND history entries (unused6 has none). Enable actual
+ppu_call_history bool before constructing worker and restore afterward;
+assert first/tail yield histories have error1 and CIAs begin+100/+112.
+Noop SC47 before/after yields must preserve FIFO; query confirms1100.
+
+Host P40 regression compiles full production yield/awake/awake_unlocked/
+schedule_all/unqueue/set_priority/count/ppu_state/get_running_ppu/fast_call,
+actual yield/join/set/get service handlers, all diagnostic policies/scopes
+and exact P40 CoreBridge callback. Independent bounded PPC interpreter
+decodes actual fixture instructions, drives service handlers and checks
+35 steps, TLS42, histories,1/1 outputs and FIFO changes. Both variants,
+negative/throwing/bad-count/mutated-state rollback, nested/invalid guards,
+direct production FIFO/yield and policies0/1/2/3 pass. SC transport/history,
+VM aliases, atomics, locks and instruction executor are host substitutes;
+full production guest interpreter and iOS ABI still need device validation.
+P39 callback/priority/rollback regression, exact peer lifecycle normal/
+exception regression and P38 fast_call cleanup regression also pass.
+G++ C++20 Wall/Wextra/Werror with ASAN/UBSAN, leak detection off due tool
+/proc restriction. Patch0036 applies/reverses after0035; UI has39 ordered,
+unique stages P2-P40. No local Xcode SDK. Info build56; only Bridge/App/Info,
+patch0036 and handoff changed. Log export and workflow are unchanged.
+
+Baseline main6880c20b68a1eebca91f91b84e7e2db706f8e0d3,
+tree73a4dd9ad6327119c275a1052862815b5e2b9934. Build56/P40 pending Actions
+and phone validation. Do not monitor Actions after push: user reports result.
+Install ARMSX3_iOS16_INSTALL_THIS_IPA, run all39, send .txt/.ips if crash.
+Scheduler start, >2 runnable workers/suspend handoff, peer guest execution,
+real context switching, full TLS HLE, firmware/RSX/process/game boot untested.
