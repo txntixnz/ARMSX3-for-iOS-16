@@ -4732,3 +4732,133 @@ but must research appropriate bounded path before implementation. Global
 HLE table/import loader/weak-memory stress/arbitrary contention/LV2 scheduling/
 renderer/firmware/game boot remain untested. Midnight Club Los Angeles remains
 the user's desired first eventual game; do not promise compatibility/boot.
+
+## 2026-10-12 — Build86 native PASS; Build87 / P67 blocking spinlock pause/resume
+
+User supplied ARMSX3-startup-20261012-011428-471-8012.txt, scratch upload,
+LibraryID libfile_4531055cbe308191874d4739db03d98c. Build86 header and
+all65 unique P2–P66 AUTO PASS verified; final all-stage PASS, no FAIL.
+Native P66 starts1791767665.608683, ends7665.611561 (~2.9ms).
+Transactions first0 counter2 checksum3 TLS1/1 results1/6; first1 counter4
+checksum10 TLS2/2 results6/1; first0 counter6 checksum21 TLS3/3 results1/6.
+Actual registered production initialize/lock/trylock/unlock, six signed
+EBUSY returns, three fresh trylock acquisitions and exact ABI/history/
+guest contexts/whole VM/TLS/cache/lifecycle now natively proven. No game boot.
+
+Build87 appends ONLY armsx3_core_test_blocking_spinlock_handoff; preserves
+all Build86 bridge2018202 bytes exactly, SHA256
+77aed343a6d3919d1e8a088d9d546c3d7cbb3ec8f9941153c934d2c2696ee862.
+No prior P2–P66 implementation, prior tests,47 patches,upstream pin or
+build scripts changed. Adds P67 UI/plist87/CI test_p67_fixture.py and
+two new tests plus root handoff; exactly seven intended changed files.
+No new upstream hook, service-body replacement or global debugger setting.
+
+P67 retains P66 compact program, paired workers/TLS/configuration,
+12-slice budgets/exact contexts/VM/cache/gates/cleanup. ONE opcode changed:
+guest waiter third call atoffset52 now BL208→production lock260 rather
+than BL212→trylock264.68words/272bytes SHA1
+cacb3c02a2daa1324de32b0568f6a5f235c3bf35.21 total guest BL/HLE calls:
+3initialize,3uncontended lock,3CONTENDED lock,6busy trylock,6unlock.
+Still72dispatches/66budget pauses/186bounded steps(165 ordinary guest
+instructions+21 HLE calls),54non-TLS guest stores+6TLS,42own output words,
+12protected writes,13native lock writes. First roles0/1/0 and final
+counter6/checksum21/TLS3/3/lock0 unchanged; results1/6,6/1,1/6.
+The recovered call's history name/CIA is now sys_spinlock_lock/10260.
+
+CODE10260 cache entry is a DIAGNOSTIC observedLock wrapper. It forwards
+every invocation to the actual registered sys_spinlock_lock HLE binder
+with original opcode/this_op/next arguments. Only waiter slice8 requests
+per-thread cpu_flag::dbg_global_pause before forwarding, then publishes
+lockEntered epoch. No guest register repair or host lock release is used.
+The held native lock enters its actual while condition/test_stopped body,
+which calls native cpu_thread::check_state and publishes cpu_flag::wait.
+No ordinary cross-thread context read occurs until controller acquires
+that wait flag and the matching entry epoch. Wrapper requires no preexisting
+pause/wait on entry, ensuring this is a new in-service wait publication.
+The dbg_global_pause branch holds the worker inside native check_state until
+explicitly cleared. Uses this flag deliberately: cpu_flag::suspend would
+invoke cpu_sleep/LV2 awake, while dbg_pause would invoke gdb_server.
+Neither of those additional paths is part of this diagnostic.
+
+Before any unlocking instruction, the first worker verifies the blocked
+call: r3 remains input lock address23000 (rather than early success0),
+full32GPR/CTR/FPR/VR/status/reservation snapshot unchanged from slice7;
+only guest BL updated LR=10038 and HLE binder set CIA=10260. Current and
+last function are sys_spinlock_lock, saved syscall args intact; completed
+history count remains prior value, no return/worker-completion published.
+Whole DATA/TLS/stacks and aliases match previous boundary exactly, including
+held ABADCAFE/protected counter+checksum and absence of waiter output/TLS
+writes. This also distinguishes waiting inside the busy body from pausing
+in the binder's post-call test_stopped after a premature success result.
+Then first worker executes the guest's actual production unlock at10268,
+requires lock0 and expected bounded result/PC108 before clearing pause and
+notifying waiter state. Native check_state clears wait, native lock loop
+re-evaluates/acquires ABADCAFE, returns CELL_OK through real HLE history/LR,
+and guest completes its protected updates/unlock/private TLS increment.
+Three entry/return epochs and blocked count checked; paused flags clear on
+normal completion. No fabricated service return value or restored register.
+
+Controller roles alternate too: owner controls blocked peer for tx1/3;
+peer controls blocked owner for tx2. Shared Callback carries runGuest,
+actual lock handler and releaseBlocked pointers; Program holds two native
+context pointers and valid expected-pool snapshot during controller scope.
+Atomic entry/wait publications precede live read; pause-clear notification
+and callback completion publications order subsequent reads. All native
+CPU flags remain actual core atomics. Peer-side controller exceptions log
+details, cancel gates and signal owner's exit so a blocked native service
+can escape. Existing2-second readiness/wait/completion deadlines,8-second
+owner deadline and cancel/exit/notify/stop/join RAII retained. On every error
+peer is joined before TLS freeing, owner before VM/cache teardown. Exit
+releases debugger pause waits; normal flow never enters cpu_flag::again.
+The instruction budget does not count inner HLE loop iterations; deadline/
+CPU exit guards bound error handling. Native compile/device result pending.
+
+Pinned primary native sources inspected at upstream92b931b9...:
+CPU/CPUThread.cpp/.h, Utilities/bit_set.h, rpcs3/util/atomic.hpp, plus P66
+service/binder/PPU sources already staged. test_stopped calls check_state
+when state nonzero; check_state handles dbg_global_pause, publishes wait
+atomically and calls PPU cpu_wait→state.wait. atomic_bs_t inherits atomic_t;
+its fetch_op uses seq_cst compare_exchange and loads, providing acquired
+publication for live context reads while pause prevents further changes.
+No need for global Emu pause or scheduler registry mutations.
+
+Validation PASS:
+- test_p67_fixture.py chains unchanged P43–P66 including all frozen-prefix
+  checks, independently encodes68 literal words and models72dispatches,
+  exact GPR/LR/PC/ABI/history/whole DATA/TLS/deferred outputs and counts.
+  Additional independent in-flight event requires held lock/prior history/
+  input r3 unchanged at native call260 with LR10038 before unlock; three
+  role-alternating blocking handoffs and source wiring/cleanup assertions.
+- test_p67_pair.py reuses P66 shim construction WITHOUT its workload.
+  Extracts exact P67, native spinlock bodies/binder argument/result macros,
+  native CPU test_stopped, unchanged bounded exec_task/helper and TLS/slot
+  helpers. CPU check_state/debugger atomic wait/VM/atomic BE storage/registry/
+  queues/decoders/instructions are explicitly HOST MODELS; native CPU wait
+  is not claimed from host compilation. Modeled BE lock accesses are ordered
+  by this controlled pause, not an arbitrary-contention atomic model.
+  G++C++20 Wall/Wextra/Werror pthread ASAN+UBSAN detect_leaks0 PASS:
+  8runs/16retained workers/576slices/24live pause snapshots, exactly3pause
+  handoffs perrun,21calls/165ordinary instructions/38queuepubs+callbacks/
+  all store/lifecycle/log counts. Applicable foundational faults and168..185
+  retained; new186..200 detect missing wait publication,early success/input
+  change,blocked CIA/LR/current-function/history/FPR/VR/CR/reservation damage,
+  premature own output/TLS/neighbor writes,missing pause clear and failed
+  unlock. All5allocation/setup/production TLS guard negatives/config restore
+  retained. Faults only in host models; delivered native has no injected bugs.
+- Build86 all65 native phases verified;66unique UI/export symbols P2–P67,
+  plist87/minimum iOS16.0/47unchanged patches/exact frozen prefix/Python
+  syntax/git whitespace verified. Scratch p67-fixture-check.log and
+  p67-host-check.log. No native SDK/Xcode in local runtime; CI/native phone
+  run required to prove the new CPU check_state/atomic wait integration.
+
+Remote baseline mainbecb2d60d1d6c84963809b3b61629b20b54a569e,
+tree9839c2ca9c8ab8957035a05be01e39d2eb78e8a1. Standing continuation and
+observed native P66 PASS authorize Build87 push. Preserve remote100755
+script modes; verify baseline tree plus seven intended changes. DO NOT
+query/monitor Actions after push; user reports outcome. Install
+ARMSX3_iOS16_INSTALL_THIS_IPA via TrollStore, run all66diagnostics, send
+startup log. No P68 until native P67 PASS. This is a controlled native CPU
+debugger-pause handoff, not arbitrary spinlock contention/weak-memory stress
+or LV2 mutex scheduling. Retry-again cancellation/resumption,global HLE
+table/import loader,renderer/firmware/game boot remain untested. Preserve
+Midnight Club Los Angeles goal without promising compatibility or timing.
