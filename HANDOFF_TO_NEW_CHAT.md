@@ -5185,3 +5185,111 @@ Build90 correction push. Verify baseline plus seven changes, retain remote
 Install ARMSX3_iOS16_INSTALL_THIS_IPA with TrollStore, run all68diagnostics,
 send log. No P70 until native P69 PASS. Blocking LV2 mutex sleep queues,
 recursive mutexes/serialized savestate/renderer/firmware/game boot untested.
+
+## 2026-10-12 — Build90 native PASS; Build91 / P70 recursive LV2 mutex depth
+
+Newest actual phone log ARMSX3-startup-20261012-123812-498-10632.txt,
+pid10632, Build90: ALL68 phases P2–P69 AUTO PASS in order and final all-stage
+PASS. P69 tx1/2/3 first roles0/1/0, TLS10/10→20/20→30/30, results6/6.
+Valid native create now succeeds, all expected error results and object owner/
+metadata/history/VM/TLS/cache/cleanup guards pass, zero native mutex IDs leak.
+P69 duration1791808688.847351→8688.860722 approximately13.4ms (includes
+expected service error logging). CELL_EFAULT/ESRCH/EDEADLK/EPERM/EBUSY log
+messages are deliberately tested guest responses, not diagnostic failures.
+This phone evidence confirms Build90 registry initialization fix. Game boot
+still untested. P69 native PASS authorizes next P70 diagnostic.
+
+Build91 appends armsx3_core_test_recursive_mutex_ownership(), new P70 UI
+stage and test_p70_fixture.py chain. Plist91/minimum iOS16.0. Exact Build90
+CoreBridge prefix preserved:2165582 bytes SHA256
+a94cec9d79c2c6ea09b18308ab8a27248a1d9644a68d4db44310d5af9ef86efa.
+All47 core patches/upstream pin unchanged; ROOT handoff authoritative.
+
+P70 uses the proven P69 stopped-core, actual native mutex map initialization/
+empty-namespace guard, retained two PPU workers/production TLS slots, real
+SC0 interpreter/syscall table/binder/services, complete paused contexts and
+VM/ID cleanup. No internal P69 workload invocation, global table mutation,
+service body replacement, diagnostic owner/count writes, predicted IDs,
+blocking mutex service, or new core patch. Attribute recursive flag is now
+SYS_SYNC_RECURSIVE10 rather than NOT_RECURSIVE20; other private FIFO attributes
+and name/key remain same. Actual sys_mutex_trylock native try_lock increments
+lock_count for same-owner acquisition; native try_unlock decrements nonzero
+count and returns WITHOUT clearing owner. Only next unlock with count0 clears
+owner. Native count records additional acquisitions:0 means one owned level,
+1 means two owned levels. Test validates that convention directly.
+
+Three lifecycles first roles0/1/0, twelve paired operations each:
+0 valid create / null-output EFAULT;
+1 first acquire OK / invalid0 ESRCH;
+2 first recursive acquire OK (count1) / peer try EBUSY;
+3 destroy held EBUSY / wrong-owner unlock EPERM;
+4 first partial release OK (count0 but owner retained) / peer try EBUSY;
+5 first final release OK (owner0) / invalid0 ESRCH;
+6 invalid0 ESRCH / second acquire OK;
+7 wrong-owner unlock EPERM / second recursive acquire OK (count1);
+8 destroy held EBUSY / second partial release OK (count0, owner retained);
+9 destroy held EBUSY / second final release OK (owner0), explicitly ordered
+busy destroy BEFORE final release on SC slice;
+10 destroy OK / invalid0 ESRCH;
+11 destroy stale ESRCH / try stale ESRCH.
+All other paired slices run together. First-worker partial-release peer call
+can occur on either side of decrement because ownership must remain held.
+Second-owner partial-release destroy remains EBUSY in either order.
+
+Same10guest words/40bytes SHA1 02e9f1e9d5ec6989fede817305bc7086af199b3c;
+budgets3/1/6, CIA12/16/40. Native dynamic IDs read from guest output; stale
+checks precede next creation. Request/output regions stay disjoint for36calls
+per worker. Every paired boundary verifies exact native owner AND recursion
+count, exists1/protocol/recursive/adaptive/key/name/cond_count0/empty sq and
+namespace size. Complete GPR/FPR/VR/status/reservation snapshots, signed
+r3/history/error results, actual syscall names/8arguments, deferred outputs,
+whole DATA/TLS/stacks/code/cache/privileged aliases and untouched guards kept.
+RestoreID preserves native allocation scratch; guest contexts not repaired.
+
+72SC calls, usage100create6/101destroy15/103trylock33/104unlock18;
+216dispatches/144budget pauses/720guest instructions.216guest STW
+(144output words +72own TLS increments),3native ID writes.
+108peer slice jobs +peer exit +owner entry =110pubs/callbacks;
+exactly2worker constructions/joins. TLS12/12→24/24→36/36, results6/6.
+Peer join before TLS free; owner join before VM/cache teardown; isolated
+mutex cleanup after both joins on exceptions, normally namespace already
+empty. Registry initialized conditionally/reused, never reset; nonempty
+namespace rejected preserving objects. Settings/config restored on all paths.
+
+Validation PASS:
+- test_p70_fixture.py chains all unchanged P43–P69/frozen prefixes, freezes
+  complete Build90 prefix, checks exact guest words and independently models
+  recursion increments/partial and final releases/all ownership/error/handle
+  transitions,72SC/720steps/144pauses, every scalar context/history/ABI/PC/LR/
+  CTR/deferred output and whole DATA/TLS36/36, all216guest stores. Requires
+  registry initialization before lookup and two retained CPU constructions.
+- test_p70_pair.py adapts P69 host harness construction without running P69
+  workload. Extracted native service/binder/SC/dispatcher/TLS/bounded bodies
+  retained, exact native recursive try_lock/try_unlock branches executed.
+  Independent expectations for110pubs/720instructions/72TLSstores/144output
+  stores and actual syscall usage/logs. G++C++20 Wall/Wextra/Werror pthread
+  ASAN+UBSAN detect_leaks0 PASS:8runs/16workers/1728paired slices plus fresh
+  registry recovery, all guards/contexts/memory/counts/cleanup.
+  Applicable foundational/207..219 fault set retained, except209 nonrecursive
+  self-deadlock false-success mutation inapplicable. New host-only220 omits
+  recursive increment,221 omits partial-release decrement,222 wrongly returns
+  EDEADLK for recursive acquisition, all detected. Fault0 native method
+  operations unchanged; these mutations are NOT delivered to native services.
+  Fresh registry construction/reuse/rejected init/omitted init/nonempty namespace
+  preservation and allocation/setup/TLS negatives remain covered.
+  CPU/VM/ID allocator/storage/atomic control/notify/FXO/registry/queues/decoder
+  remain explicitly HOST MODELS. Build90 test_p69_registry.py unchanged and
+  retained in workflow for native key/map-default/allocator regression.
+- Native Build90 phone all68PASS verified,69unique UI/export symbols P2–P70,
+  exact2165582-byte prefix,47unchanged patches/plist91/iOS16.0/Python syntax/
+  git whitespace PASS. Scratch p70-fixture-check.log,p70-host-check.log.
+  No local Xcode/iOS SDK; new P70 native compile/phone execution PENDING.
+
+Remote baseline maindfdc6959beb1c7e3d1c2b06cca7d4bd116599731,
+treecb4101caf3a61fef48b1a26f3906d704aef6b5b2. Standing continuation and
+P69 native PASS authorize Build91 push. Verify baseline plus seven files,
+preserve remote100755 scripts. DO NOT monitor/query Actions after push;
+user supplies result. Install ARMSX3_iOS16_INSTALL_THIS_IPA via TrollStore,
+run all69diagnostics, send log. No P71 before native P70 PASS. Blocking LV2
+sleep queues/recursive overflow/serialized savestate/import loader/renderer/
+firmware/game boot remain untested; Midnight Club Los Angeles goal retained.
