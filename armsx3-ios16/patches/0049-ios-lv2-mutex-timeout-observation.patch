@@ -1,0 +1,56 @@
+--- a/rpcs3/Emu/Cell/lv2/lv2.cpp
++++ b/rpcs3/Emu/Cell/lv2/lv2.cpp
+@@ -3665,3 +3665,42 @@
+     return lv2_obj::ios_probe_mutex_sleep_state(waiter, holder);
+ }
+ #endif
++
++#if defined(__APPLE__) && TARGET_OS_IPHONE
++int lv2_obj::ios_probe_mutex_timeout_state(ppu_thread* waiter, ppu_thread* holder, u64 timeout)
++{
++    if (!waiter || !holder || waiter == holder || !timeout || cpu_thread::get_current() != holder || !Emu.IsStopped()) return -1;
++    std::lock_guard lock(g_mutex);
++    // Read deadline fields under the same native scheduler mutex used for
++    // sleep registration/removal. No guest registers or clocks are modified.
++    return g_scheduler_ready && !g_pending && g_to_sleep.empty() && g_waiting.size() == 1 &&
++        g_waiting.front().second == waiter && g_waiting.front().first == waiter->end_time &&
++        waiter->end_time != umax && waiter->end_time >= waiter->start_time &&
++        waiter->end_time - waiter->start_time == timeout &&
++        g_ppu == holder && !holder->next_ppu && !waiter->next_ppu && !waiter->next_cpu &&
++        waiter->state.all_of(cpu_flag::wait + cpu_flag::suspend) &&
++        waiter->state.none_of(cpu_flag::signal + cpu_flag::again + cpu_flag::exit + cpu_flag::notify) ? 1 : 0;
++}
++extern "C" int armsx3_ios_ppu_probe_mutex_timeout_state(ppu_thread* waiter, ppu_thread* holder, u64 timeout)
++{
++    return lv2_obj::ios_probe_mutex_timeout_state(waiter, holder, timeout);
++}
++#endif
++#if defined(__APPLE__) && TARGET_OS_IPHONE
++int lv2_obj::ios_probe_mutex_timeout_finished(ppu_thread* waiter, ppu_thread* holder)
++{
++    const auto current = cpu_thread::get_current();
++    if (!waiter || !holder || waiter == holder || (current != waiter && current != holder) || !Emu.IsStopped()) return -1;
++    std::lock_guard lock(g_mutex);
++    const bool pair = (g_ppu == holder && holder->next_ppu == waiter && !waiter->next_ppu) ||
++        (g_ppu == waiter && waiter->next_ppu == holder && !holder->next_ppu);
++    return g_scheduler_ready && !g_pending && g_waiting.empty() && g_to_sleep.empty() && pair &&
++        !waiter->next_cpu && !holder->next_cpu &&
++        waiter->state.none_of(cpu_flag::suspend + cpu_flag::signal + cpu_flag::again + cpu_flag::exit + cpu_flag::notify) &&
++        holder->state.none_of(cpu_flag::suspend + cpu_flag::signal + cpu_flag::again + cpu_flag::exit + cpu_flag::notify) ? 1 : 0;
++}
++extern "C" int armsx3_ios_ppu_probe_mutex_timeout_finished(ppu_thread* waiter, ppu_thread* holder)
++{
++    return lv2_obj::ios_probe_mutex_timeout_finished(waiter, holder);
++}
++#endif
+--- a/rpcs3/Emu/Cell/lv2/sys_sync.h
++++ b/rpcs3/Emu/Cell/lv2/sys_sync.h
+@@ -474,6 +474,8 @@
+ #if defined(__APPLE__) && TARGET_OS_IPHONE
+     static int ios_probe_mutex_scheduler_and_call(ppu_thread*, ppu_thread*, int (*)(void*), void*);
+     static int ios_probe_mutex_sleep_state(ppu_thread*, ppu_thread*);
++    static int ios_probe_mutex_timeout_state(ppu_thread*, ppu_thread*, u64);
++    static int ios_probe_mutex_timeout_finished(ppu_thread*, ppu_thread*);
+ #endif
+ 	static ppu_thread* get_running_ppu(u32 index);
+ 
