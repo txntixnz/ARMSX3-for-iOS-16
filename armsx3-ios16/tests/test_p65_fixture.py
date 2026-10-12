@@ -5,7 +5,11 @@ root=Path(__file__).resolve().parent
 runpy.run_path(str(root/'test_p64_fixture.py'))
 bridge=root.parent/'core/loadtest/CoreBridge.cpp'
 assert hashlib.sha256(bridge.read_bytes()[:1941662]).hexdigest()=='63e582a260e62048c8f07078e9bbde0d73ff90649d7af1e98b5392923b0165ff','Build84 bridge prefix changed'
-source=bridge.read_text();start=source.index('int armsx3_core_test_guest_spinlock_handoff()');stage=source[start:]
+source=bridge.read_text();start=source.index('int armsx3_core_test_guest_spinlock_handoff()')
+opening=source.index('{',start);end=opening+1;depth=1
+while depth:
+    depth+=(source[end]=='{')-(source[end]=='}');end+=1
+stage=source[start:end]
 code=stage.split('const std::array<u32, 29> opcodes{',1)[1].split('};',1)[0]
 ops=[]
 constants={'compareLock':0x2c070000,'addToken':0x7d6b5214,'acquireFence':0x4c00012c,'releaseFence':0x7c2004ac}

@@ -4588,3 +4588,147 @@ fixtures. Controlled guest spinlock workload is now integrated, while
 arbitrary contention/weak-memory stress/production sys_spinlock HLE/LV2
 scheduling/renderer/firmware/game boot remain untested. Preserve remote
 100755 script baseline modes; verify baseline tree+seven intended changes.
+
+## 2026-10-12 — Build85 native PASS; Build86 / P66 registered spinlock HLE
+
+Authoritative continuation: root handoff only. User attached
+ARMSX3-startup-20261012-004335-066-7746.txt (scratch upload; LibraryID
+libfile_2ed11ce84de08191887f6153c225f05b). Build85 header verified;
+all64 unique P2–P65 AUTO PASS, final all-stage PASS, no FAIL.
+P65 starts1791765811.527929, ends5811.531215 (~3.3ms). Transactions:
+first0 counter2 checksum3 TLS1/1; first1 counter4 checksum10 TLS2/2;
+first0 counter6 checksum21 TLS3/3, results1/1 each. Native guest spinlock
+acquisition/exclusion/retry/fenced release/handoff and exact context/VM/
+TLS/stack/cache/lifecycle cleanup confirmed. This is not game boot.
+
+Build86 appends ONLY armsx3_core_test_hle_spinlock_handoff and its required
+PPUModule.h include to CoreBridge.cpp, preserving the entire Build85
+1976066-byte prefix exactly, SHA256
+47f8bd0063ab6aed0804726a36b7ead7c4a1c560ef4702c8c34d4f6ba350df2e.
+No prior native P2–P65 code,47 patches,upstream pin or build scripts changed.
+Adds UI P66/plist86/CI test_p66_fixture.py plus two new P66 tests.
+One prior test correction: test_p65_fixture.py now extracts its function
+through balanced braces rather than treating the entire remaining bridge
+as P65. Its original oracle/assertions/frozen prefix remain unchanged;
+this allows append-only phases to coexist without counting their workers
+as P65 constructors. Eight intended changed files including root handoff.
+
+P66 resolves four actual native registered handlers by exact names from
+ppu_module_manager::get_module("sysPrxForUser")->functions and
+ppu_function_manager::get(). Exactly one match per name, in-range/non-null
+indices, distinct handlers required. No duplicated native service bodies,
+new core hooks, global module initialization, HLE table allocation or
+import linkage mutation. Isolated CODE slots at10000+256/260/264/268 are
+registered with actual production BIND_FUNC_WITH_BLR initialize/lock/
+trylock/unlock handlers using ppu_register_function_at. Generic words
+decoded first; custom cache entries and full CODE bytes checked before
+execution and after joined cleanup. The diagnostic therefore exercises
+guest BL → native registered HLE ABI wrapper → actual sys_spinlock body
+→ LR return → guest continuation, with all fetches bounded.
+
+Pinned primary sources inspected from ARMSX2/ARMSX3 commit
+92b931b9fb5eef7f1317cb482917dfc19aceebd9:
+Modules/sys_spinlock.cpp, PPUFunction.h, PPUModule.h, ErrorCodes.h and
+local patched PPUThread.cpp/.h/PPUOpcodes.h. Services initialize conditionally
+clear a nonzero word; lock uncontended exchanges ABADCAFE; trylock returns
+not_an_error(CELL_EBUSY=8001000a) when held and otherwise exchanges ABADCAFE;
+unlock stores0. Error_code is signed32 and binder returns sign-extended
+EBUSY ffffffff8001000a in64-bit r3. Initialize/unlock are void: their
+r3 remains input lock address23000, including syscall history error field.
+History captures four arguments from eight saved syscall_args. Native
+BIND_FUNC sets CIA to handler address, records name/error/args, restores
+current_function and returns to masked LR. With current_function initially
+null, last_function updates to the most recently called service.
+
+Guest program68words/272bytes, SHA1
+25216a46c35be459b66d128891fcf9c695d26626. Main paths:
+0 ADDI r3,r5,0;4 BL initialize256;8 ADDI;12 BL lock260;
+16 STW lock result→own+16;20 B→common64.
+Waiter enters132/136/140/144 NOP;148 B→24. At24 ADDI;
+28 BL try264;32 store first busy→own+20;36 ADDI;40 BL try264;
+44 store second busy→own+24;48 ADDI;52 BL try264;
+56 store success→own+28;60 B→common64.
+Common64/68 LWZ protected counter/checksum,72 ADDI counter,76 ADD token;
+80/84 protected stores;88/92/96 own counter/checksum/token stores;
+100 ADDI lock argument;104 BL unlock268;108 store void result→own+32;
+112/116/120 increment real guest TLS word via r13-6ff4;
+124 own TLS output;128 B→end272. Remaining words NOP placeholders,
+with last four positions receiving native HLE handlers in cache.
+
+Initial lock23000=12345678 deliberately nonzero, counter23080=0,
+checksum23084=0; DATA64KiB A5 except bootstrap/inputs. No host updates
+guest lock/protected/output results after initialization. Three transactions
+on two retained native workers/production TLS slots, first roles0/1/0.
+First guest initialization clears nonzero lock; later initialization calls
+take no-write zero branch. First native lock is ALWAYS called while free,
+so no unbounded blocking wait is entered. Waiting guest calls trylock twice
+while held (six EBUSY total), then once AFTER ordered production unlock;
+three fresh successes. Both workers each perform exactly one protected
+counter/checksum update, unlock and increment private TLS per transaction.
+Whole DATA/TLS/stack/alias checks validate deferred outputs at every slice.
+Expected totals counter2/4/6,checksum3/10/21,TLS1/2/3 on each worker.
+
+12 paired slices per transaction=72 bounded dispatches/66 pauses/186steps:
+first26steps,second36steps each transaction;165 guest instructions plus
+21 registered HLE calls.21 guest BL calls,3 initialize,3 uncontended lock,
+9 trylock(6 busy+3 success),6 unlock. First budgets
+[1,1,1,2,1,6,5,2,1,2,3,1],PC offsets
+[4,256,8,260,16,80,100,268,108,116,128,272]. Waiter budgets
+[1,1,1,1,1,3,4,2,2,7,7,6],PC offsets
+[136,140,144,148,24,32,44,52,56,84,108,272]. Only slice8 orders unlock
+before fresh try; other paired slices release concurrently. First final
+bounded result1,second6 (helper returns instruction steps in final slice),
+so transaction logs results1/6,6/1,1/6.21 HLE history records cumulatively
+split10/11 across worker0/1.54 non-TLS guest STW+6TLS stores;
+42 own output words+12 protected writes;13 native service lock writes
+(one initclear+6acquire+6release). No guest reservation operations or stack/
+FPR/VR/status changes. Full retained32GPR/CTR/LR/CIA/FPR/VR/CR/XER/FPSCR/
+VRSAVE/reservation snapshots, syscall args/history/current/last names,
+HLE count/address/signed-or-void result/four input arguments checked.
+Contexts initialized only at transaction start; resumes compare before
+executing without register repair. Failure details logged before native TLS
+bootstrap's existing catch-all converts them to its error result.
+36peerjobs+queuedexit+owner=38queue publications/callbacks, exactly2
+constructions/joins; peer join before TLS free,owner join before VM/cache
+deallocation. Proven gate/cancel/stop/join/config guards retained.
+
+Validation PASS:
+- Independent test_p66_fixture.py chains all P43–P65/frozen prefixes,
+  checks68literal instruction words and independently models72dispatches,
+  every PC/LR/complete GPR/history/ABI/whole DATA/TLS/deferred output boundary,
+  all instruction/service/store counts and both role orders. SHA1 above.
+- test_p66_pair.py reuses existing P65 shim construction WITHOUT running
+  its workload. Extracts exact new P66, unchanged production exec_task,
+  bounded helper,TLS bootstrap/slot guards, all four native sys_spinlock
+  service bodies and actual BIND_FUNC/argument/result templates plus
+  BIND_FUNC_WITH_BLR macro. CPU/VM/queue/registry/atomic storage/casts/
+  decoder/instructions remain HOST MODELS, not native emulation. Atomic
+  BE scalar storage is safe for this explicitly ordered workload and is
+  not a model of arbitrary host atomic contention. Native source files
+  staged under scratch upstream for extraction; do not vendor them in repo.
+  G++C++20 Wall/Wextra/Werror pthread ASAN+UBSAN detect_leaks0 PASS:
+  8runs/16workers/576slices,all instruction/BL/store/publication/lifecycle
+  counts and three transaction logs exact. Selected applicable foundational
+  faults2..17/23/26/27/36..41/60/153 plus168..185 detected (bad cache,
+  omitted initialize/unlock,wrong acquisition marker/busy result/argument,
+  history count/error/args/name/CIA,current-function leak,saved syscall args,
+  adjacent lock word,protected counter/output token,branch target/LR,missing
+  registry). All5allocation/setup/exact TLS guard negatives/config restoration
+  retained. Faults apply in host shims; no injected bugs in delivered native.
+- Native Build85 all64 stages verified.65unique UI/export symbols P2–P66,
+  exact Build85 frozen prefix/plist86/iOS16.0/47unchangedpatches/Python syntax/
+  whitespace checked. Scratch p66-fixture-check.log,p66-host-check.log.
+  Native P66 iOS compile via CI; phone execution PENDING user log.
+
+Remote baseline main7a19c9da7bd6a52359bd4482c42aa0401d8726c2,
+tree060c07c462b362ad68637621495206ae91d6bc75. Observed P65 native PASS
+and standing continuation authorize Build86 push. Preserve remote100755
+script modes; verify baseline tree plus exactly eight intended changes.
+DO NOT query/monitor Actions after push; user reports build/phone outcome.
+Install ARMSX3_iOS16_INSTALL_THIS_IPA via TrollStore, run all65diagnostics,
+send startup log. No P67 before native P66 PASS. Blocking spinlock contention/
+cpu_flag::again recovery or real LV2 synchronization scheduler could be next,
+but must research appropriate bounded path before implementation. Global
+HLE table/import loader/weak-memory stress/arbitrary contention/LV2 scheduling/
+renderer/firmware/game boot remain untested. Midnight Club Los Angeles remains
+the user's desired first eventual game; do not promise compatibility/boot.
