@@ -5393,3 +5393,129 @@ run all70diagnostics, send log. No P72 before native P71 PASS. Blocking LV2
 sleep queue entry/wake/timeout expiry/recursive overflow/serialized savestate/
 import loader/renderer/firmware/game boot remain untested; Midnight Club Los
 Angeles goal retained.
+
+## 2026-10-12 — Build92 native PASS; Build93 / P72 contended LV2 mutex sleep/wake
+
+Latest actual phone log ARMSX3-startup-20261012-162613-812-11640(1).txt,
+pid11640, Build92: ALL70 phases P2–P71 AUTO PASS in order, final all-stage
+PASS, no FAIL. P71 tx1/2/3 first roles0/1/0, TLS12/12→24/24→36/36,
+results6/6. Eighteen native sys_mutex_lock calls/12immediate successes/6invalid
+ESRCH and full64 timeout ABI/history/object/context/cleanup PASS. Expected
+service-error logs are tested guest responses, not diagnostic failure.
+P71 native PASS authorizes next P72. Game boot remains untested.
+
+Build93 appends armsx3_core_test_mutex_sleep_wake(), adds UI P72 and fixture
+chain, plist93/minimum iOS16.0. Exact Build92 CoreBridge prefix preserved:
+2250420bytes SHA256 c0770ffff9e5b9ab6de78cf9dfc6b2b9d1dd10e45d9772d91cd853ef19d068ac.
+All original47 patches unchanged; new patch0048-ios-lv2-mutex-sleep-wake-probe
+adds narrow iOS diagnostic scope/observation helpers in lv2.cpp/sys_sync.h.
+Total48 patches, same upstream pin. ROOT handoff authoritative.
+
+P72 keeps proven P71 guest code10words/40bytes, SHA1
+6fb8b669d0f97364f3ece4e1171767e2f5ca3a21, BE32ID/BE32code/BE64arg input
+layout, full64 timeout tests, budgets3/1/6/CIA12/16/40, actual SC0/syscall table/
+binder/five mutex APIs and native object/TLS/context/memory/cleanup guards.
+No global syscall table mutation, service replacements or copied equivalent
+locking code. Workload changes second worker op5 from invalid try to actual
+sys_mutex_lock(handle,0) while first still owns, and second op6 becomes
+invalid try ESRCH. First op5 is real guest unlock104. Thus each transaction
+has one real contended zero-timeout lock and native release/reown/wakeup;
+remaining first/second recursive ownership checks continue as before.
+After op5/SC second owns with count0; op6 leaves that ownership intact;
+op7 recursively acquires count1, op8 partial release count0, op9 full release
+with first busy destroy explicitly ordered before release, op10 destroy,
+op11 stale ESRCH. First role0/1/0 exercises blocked peer and blocked owner.
+
+First worker's runGuest callback waits BEFORE its unlock SC until actual
+IDM mutex control.owner equals that worker, control.sq equals waiter and
+lock_count0, plus new native observation confirms scheduler removed waiter:
+g_ppu is holder alone, no next_ppu/next_cpu, waiter wait+suspend, no signal/
+again/exit, scheduler ready, no pending/startup/timeout queues. Observation
+uses native scheduler mutex and atomic CPU flags, synchronized with native
+sleep_unlocked's removal. It reads NO live waiter guest GPR/history. Holder
+then compares full DATA/TLS and aliases with expected pre-SC bytes (no guest
+output/TLS stores during blocked service), increments observation and runs
+real guest unlock. Native try_unlock detects queue, reown/FIFO transfers
+owner, awake/schedule_all clears suspend and signals waiter; real lock body
+consumes signal and returns success once. Post-boundary checks require exact
+signed ABI/history/context/memory, new second owner/count0 and empty queue.
+Three observations required, no sleep/signal/again flags left after service.
+Deadline/cancel guard stops/notifies waiter on observation failure so both
+roles can unwind without waiting indefinitely for an unlock.
+
+Patch48 scope requires stopped core/current controller, two slots/static
+interpreter, exact stacks30000/40000 size8000, quiet empty native scheduler
+queues/unready state and clean worker scheduling fields. Saves both native
+priorities/start/end timestamps/global priority tag, calls actual awake for
+both then make_scheduler_ready, invokes diagnostic work. Work lambda joins
+peer on success and exceptions BEFORE scheduler restoration; outer existing
+peer guard still handles construction/setup failure. Checks final pair
+membership/empty waiting/startup queues/no suspend/signal/again/CPU linkage.
+Restore unqueues only pair, removes only their timeout/startup entries, clears
+pair links/sleep-signal flags/cancel scratch, restores priorities/tag/times
+and prior unready scheduler state. Successful path explicitly finishes
+restore and checks native empty queue/ready flag/priorities/tag/timestamps;
+exception destructor executes same restore. Existing unrelated scheduler
+state is rejected before activation and preserved. MutexCleanup still runs
+AFTER both worker joins; zero native mutex IDs required on normal path.
+Native service and existing scheduler implementations unchanged by patch.
+
+72syscalls:100create6/101destroy15/102lock18/103trylock15/104unlock18;
+9immediate/recursive lock successes +3queued successes +6invalid-lock ESRCH.
+216dispatches/144budget pauses/720guest instructions/216guest STW
+(144output words+72TLSincrements)/3native ID stores.110pubs/callbacks,
+2worker constructions/joins. TLS12/12→24/24→36/36, results6/6. Peer joins
+before TLS free and scheduler restoration, owner joins before VM/cache and
+mutex exception cleanup. All code/DATA/TLS/stacks/aliases/cache/full paused
+register/status/reservation/history/settings/ID infrastructure checks kept.
+
+Validation PASS:
+- test_p72_fixture.py chains unchanged P43–P71/frozen prefixes and freezes
+  entire Build92 prefix. Independent scalar queue model enters held lock
+  before unlock, leaves whole DATA/TLS unchanged while queued, transfers owner
+  on release and resumes waiter once; three queue handoffs/full64 ABI/history/
+  owner/count/errors/handle lifetime/PC/LR/CTR and all720steps/144pauses/
+  216stores/72SC/whole DATA/TLS checked. No native scheduler claim from oracle.
+- test_p72_pair.py adapts P71 host harness WITHOUT running earlier workloads.
+  Extracts actual five service bodies including full lock, native try_lock/
+  try_unlock/try_own/reown/FIFO schedule/unqueue, SC/binder/dispatcher/TLS/
+  bounded bodies, plus exact new native scope/observation bodies (host counter
+  instrumentation counts observations). Sleep/awake/ready/CPU/VM/ID/atomic
+  control/priority/notifications/FXO/queue/decoder/GPR casts are explicit HOST
+  MODELS. Actual lv2_obj sleep_unlocked/awake_unlocked/schedule_all/CPU waits
+  and ARM16-byte CAS are NOT executed locally; iOS build executes them.
+  C++20 Wall/Wextra/Werror pthread ASAN+UBSAN detect_leaks0 PASS:
+  8runs/16workers/1728paired slices plus fresh registry recovery;3modeled
+  sleeps/wakes and18native timeout parameter observations per successful
+  workload; all contexts/memory/results/counts/cleanup/global scope restore
+  verified. Applicable foundational/207..224 and LD22 faults retained.
+  New225 omits queue insertion,226 omits scheduler removal,227 omits signal,
+  228wrong owner on reown,229early guest result mutation while asleep,
+  230bad restored priority and231bad restored end_time all detected.
+  Mutations are HOST ONLY; fault0 native method/scope operations unchanged.
+  Registry init/reuse/rejected init/omitted init/nonempty namespace/setup/TLS
+  negatives retained. Prior scheduler-ready state negative rejects scope and
+  preserves ready=true; harness clears its seed afterward, not native core.
+- test_p72_patch.py applies original47 then patch48 to two pinned target files
+  in temporary tree; preserves whole prior lv2.cpp as prefix, verifies only
+  iOS helper declarations added to header, explicit guards/awake/ready/restore/
+  queue observation structure, no syscall-table or mutex-service changes.
+  Initial local check exposed an extra newline in the staged mirror; fixed
+  generated patch against exact pinned EOF. Fresh upstream regression PASS.
+  Workflow runs this patch regression before its actual full patch sequence.
+- Build92 phone all70PASS/three exact transactions,71unique UI/export stages
+  P2–P72, exact2250420-byte prefix,48patches/original47unchanged/plist93/iOS16/
+  Python syntax/non-patch git whitespace/new patch added-line whitespace PASS.
+  Unified diff context retains its required space/tab markers. Scratch p72-fixture-check.log,
+  p72-host-check.log,p72-patch-check.log. No local Xcode/iOS SDK; native P72
+  compile and real iOS scheduler/blocked syscall execution remain PENDING.
+
+Remote baseline main0245304d0b69d7b1917df22698ece25d5cd547ff,
+treebb2ab3f35ed23acc1842627b56766a05614a6498. Standing continuation and
+P71 native PASS authorize Build93 push. Verify baseline plus nine files,
+retain remote100755 scripts. DO NOT monitor/query Actions after push;
+user supplies result. Install ARMSX3_iOS16_INSTALL_THIS_IPA via TrollStore,
+run all71diagnostics, send log. No P73 before native P72 PASS. Arbitrary
+multiwaiter contention/timeout expiry/cancellation replay/weak-memory stress/
+recursive overflow/serialized savestate/import loader/renderer/firmware/game
+boot remain untested; Midnight Club Los Angeles goal retained.

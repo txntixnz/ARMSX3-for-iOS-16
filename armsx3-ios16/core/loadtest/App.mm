@@ -77,6 +77,7 @@ static constexpr DiagnosticStage stages[] = {
     {69, "LV2 mutex ownership and lifecycle", "armsx3_core_test_lv2_mutex_ownership"},
     {70, "Recursive mutex depth and partial release", "armsx3_core_test_recursive_mutex_ownership"},
     {71, "Mutex lock service and 64-bit timeout arguments", "armsx3_core_test_mutex_lock_fast_paths"},
+    {72, "Contended mutex and native LV2 sleep/wake", "armsx3_core_test_mutex_sleep_wake"},
 };
 static constexpr NSUInteger stageCount = sizeof(stages) / sizeof(stages[0]);
 static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";

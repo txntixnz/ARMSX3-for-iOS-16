@@ -1,0 +1,120 @@
+--- a/rpcs3/Emu/Cell/lv2/lv2.cpp
++++ b/rpcs3/Emu/Cell/lv2/lv2.cpp
+@@ -3564,3 +3564,104 @@
+ 		}
+ 	}
+ }
++
++#if defined(__APPLE__) && TARGET_OS_IPHONE
++// Stopped-core diagnostic scope. All mutex calls still use the native syscall
++// table and actual scheduler. The caller joins its peer before returning.
++int lv2_obj::ios_probe_mutex_scheduler_and_call(ppu_thread* context, ppu_thread* peer,
++    int (*execute)(void*), void* user)
++{
++    if (!context || !peer || context == peer || context->id == peer->id || !execute ||
++        !Emu.IsStopped() || cpu_thread::get_current() != context ||
++        g_cfg.core.ppu_decoder != ppu_decoder_type::_static || g_cfg.core.ppu_threads + 0u != 2u ||
++        context->stack_addr != 0x30000u || peer->stack_addr != 0x40000u ||
++        context->stack_size != 0x8000u || peer->stack_size != 0x8000u) return -1;
++    const auto quiet = [] {
++        return !g_pending && g_waiting.empty() && g_to_sleep.empty() && g_to_awake.empty() &&
++            !g_postpone_notify_barrier && !s_yield_frequency &&
++            std::all_of(std::begin(g_to_notify), std::end(g_to_notify), [](const void* p) { return !p; });
++    };
++    const auto clean = [](ppu_thread* p) {
++        return !p->next_ppu && !p->next_cpu && !p->ack_suspend && !p->cancel_sleep &&
++            !p->hw_sleep_time && !p->res_notify &&
++            p->state.none_of(cpu_flag::suspend + cpu_flag::signal + cpu_flag::again);
++    };
++    ppu_thread::ppu_prio_t prior{}, peerPrior{}; u64 tag = 0;
++    {
++        std::lock_guard lock(g_mutex);
++        if (g_ppu || g_scheduler_ready || !quiet() || !clean(context) || !clean(peer)) return -2;
++        prior = context->prio.load(); peerPrior = peer->prio.load(); tag = g_priority_order_tag.load();
++    }
++    struct Restore {
++        ppu_thread* context; ppu_thread* peer; ppu_thread::ppu_prio_t prior, peerPrior;
++        u64 tag, start, peerStart, end, peerEnd;
++        bool active = true;
++        void finish() {
++            if (!active) return;
++            std::lock_guard lock(g_mutex);
++            // The peer is joined; context is the controller returning from execute.
++            lv2_obj::unqueue(g_ppu, context, &ppu_thread::next_ppu);
++            lv2_obj::unqueue(g_ppu, peer, &ppu_thread::next_ppu);
++            g_waiting.erase(std::remove_if(g_waiting.begin(), g_waiting.end(), [&](const auto& x) {
++                return x.second == context || x.second == peer;
++            }), g_waiting.end());
++            g_to_sleep.erase(std::remove_if(g_to_sleep.begin(), g_to_sleep.end(), [&](auto* p) {
++                return p == context || p == peer;
++            }), g_to_sleep.end());
++            context->next_ppu = nullptr; peer->next_ppu = nullptr;
++            context->next_cpu = nullptr; peer->next_cpu = nullptr;
++            context->state -= cpu_flag::suspend + cpu_flag::signal;
++            peer->state -= cpu_flag::suspend + cpu_flag::signal;
++            context->cancel_sleep = 0; peer->cancel_sleep = 0;
++            context->prio = prior; peer->prio = peerPrior; g_priority_order_tag = tag;
++            context->start_time = start; peer->start_time = peerStart;
++            context->end_time = end; peer->end_time = peerEnd;
++            g_scheduler_ready.release(false); active = false;
++        }
++        ~Restore() { finish(); }
++    } restore{context, peer, prior, peerPrior, tag, context->start_time, peer->start_time,
++        context->end_time, peer->end_time};
++    if (!awake(context) || !awake(peer)) return -3;
++    make_scheduler_ready();
++    const int result = execute(user);
++    {
++        std::lock_guard lock(g_mutex);
++        const bool pair = (g_ppu == context && context->next_ppu == peer && !peer->next_ppu) ||
++            (g_ppu == peer && peer->next_ppu == context && !context->next_ppu);
++        if (result >= 0 && (!g_scheduler_ready || !quiet() || !pair || context->next_cpu || peer->next_cpu ||
++            context->ack_suspend || peer->ack_suspend || context->cancel_sleep || peer->cancel_sleep ||
++            !context->state.none_of(cpu_flag::suspend + cpu_flag::signal + cpu_flag::again) ||
++            !peer->state.none_of(cpu_flag::suspend + cpu_flag::signal + cpu_flag::again))) return -4;
++    }
++    restore.finish();
++    {
++        std::lock_guard lock(g_mutex);
++        if (g_ppu || g_scheduler_ready || !quiet() || context->next_ppu || peer->next_ppu ||
++            context->next_cpu || peer->next_cpu || context->prio.load().all != prior.all ||
++            peer->prio.load().all != peerPrior.all || g_priority_order_tag.load() != tag ||
++            context->start_time != restore.start || peer->start_time != restore.peerStart ||
++            context->end_time != restore.end || peer->end_time != restore.peerEnd) return -5;
++    }
++    return result;
++}
++int lv2_obj::ios_probe_mutex_sleep_state(ppu_thread* waiter, ppu_thread* holder)
++{
++    if (!waiter || !holder || waiter == holder || cpu_thread::get_current() != holder || !Emu.IsStopped()) return -1;
++    std::lock_guard lock(g_mutex);
++    // Reads are synchronized with native sleep_unlocked's queue removal. Only
++    // atomic flags/queue fields are inspected; live guest GPRs are not read.
++    return g_scheduler_ready && !g_pending && g_waiting.empty() && g_to_sleep.empty() &&
++        g_ppu == holder && !holder->next_ppu && !waiter->next_ppu && !waiter->next_cpu &&
++        waiter->state.all_of(cpu_flag::wait + cpu_flag::suspend) &&
++        waiter->state.none_of(cpu_flag::signal + cpu_flag::again + cpu_flag::exit) ? 1 : 0;
++}
++extern "C" int armsx3_ios_ppu_probe_mutex_scheduler_and_call(ppu_thread* context, ppu_thread* peer,
++    int (*execute)(void*), void* user)
++{
++    return lv2_obj::ios_probe_mutex_scheduler_and_call(context, peer, execute, user);
++}
++extern "C" int armsx3_ios_ppu_probe_mutex_sleep_state(ppu_thread* waiter, ppu_thread* holder)
++{
++    return lv2_obj::ios_probe_mutex_sleep_state(waiter, holder);
++}
++#endif
+--- a/rpcs3/Emu/Cell/lv2/sys_sync.h
++++ b/rpcs3/Emu/Cell/lv2/sys_sync.h
+@@ -471,6 +471,10 @@
+ 
+ 	// Can be called before the actual sleep call in order to move it out of mutex scope
+ 	static void prepare_for_sleep(cpu_thread& cpu);
++#if defined(__APPLE__) && TARGET_OS_IPHONE
++    static int ios_probe_mutex_scheduler_and_call(ppu_thread*, ppu_thread*, int (*)(void*), void*);
++    static int ios_probe_mutex_sleep_state(ppu_thread*, ppu_thread*);
++#endif
+ 	static ppu_thread* get_running_ppu(u32 index);
+ 
+ 	struct notify_all_t
