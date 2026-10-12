@@ -5007,3 +5007,114 @@ TrollStore, run all67diagnostics, send startup log. No P69 before native
 P68 PASS. Serialized savestate reload/arbitrary contention/LV2 mutex
 scheduling/global HLE table/import loader/weak-memory stress/renderer/
 firmware/game boot remain untested; Midnight Club Los Angeles goal retained.
+
+## 2026-10-12 — Build89 / P69: native LV2 mutex ownership and lifecycle
+
+Latest actual phone evidence: ARMSX3-startup-20261012-031751-457-9697.txt,
+pid9697, Build88. ALL67 stages P2–P68 AUTO PASS in order, final all-stage
+PASS, no FAIL. P68 tx1/2/3 first roles0/1/0, counter2/4/6 checksum3/10/21
+TLS1/2/3, results1/6,6/1,1/6. Deliberate native sys_spinlock_lock aborted
+messages are expected cancellation evidence. Earlier pid9270 Build88 log
+also passes. P68 phone PASS authorizes next diagnostic; game boot untested.
+
+Build89 appends armsx3_core_test_lv2_mutex_ownership(), P69 UI stage and
+fixture chain; plist89/minimum iOS16.0. CoreBridge Build88 prefix is preserved
+byte-for-byte:2123739 bytes SHA256
+7efd56cb6a9ae22e24b83cab553a635cc0173dea779deca9e3e3fca7bc37570f.
+All47 patches and upstream pin92b931b9fb5eef7f1317cb482917dfc19aceebd9
+remain unchanged. Authoritative handoff is this ROOT file, not nested copy.
+
+Native path: guest SC(0) uses actual interpreter SC handler, normal
+ppu_execute_syscall/g_ppu_syscall_table/BIND_FUNC and real sys_mutex_create,
+sys_mutex_destroy, sys_mutex_trylock, sys_mutex_unlock. Read-only handler/name
+checks for codes100/101/103/104. No global table mutation, syscall fixture
+hook, copied native service bodies, blocking sys_mutex_lock(102), or new core
+patch. Two retained named_thread<ppu_thread> contexts keep real production
+TLS/queue/bootstrap/stop/join helpers. Private nonrecursive FIFO mutexes,
+NOT_PROCESS_SHARED/NOT_ADAPTIVE, key0, flags0, native-endian name iOSMutex.
+The 40-byte zero-initialized attribute lives23040; real guest ID output23000.
+Require initially empty native mutex namespace; preserve existing objects
+when that guard rejects. IDs are read from actual native output, checked
+against85000000 type prefix; no predicted cookie/uniqueness requirement.
+
+Ten guest words/40bytes, SHA1 02e9f1e9d5ec6989fede817305bc7086af199b3c:
+LWZ r3/r4/r11 from request r5; SC0; STW r3 to result r6;
+LWZ/ADDI/STW own TLS count using r13-6ff4; STW count to result+4; NOP.
+Requests21000+call*40hex+worker*20hex; results20200+call*20hex+worker*10hex.
+Host writes only request inputs, never native mutex owner/result/TLS outputs.
+Pause budgets3/1/6 give exact CIA offsets12/16/40: beforeSC, afterSC before
+guest result stores, then6steps completed. Each new request initializes
+register inputs once; later callbacks require complete unchanged context.
+Full32GPR/CTR/LR/CIA,FPR32/VR32/status4/reservation128 and native syscall
+history/latest args/8saved syscall args checked. Errors sign-extend s32 into
+r3/history64; guest STW stores32bits. RestoreID RAII restores id_manager::g_id
+TLS scratch after bounded calls because native object creation updates it;
+this preserves worker infrastructure without repairing guest registers.
+
+Three mutex lifecycles, first worker roles0/1/0. Paired calls by operation
+(first worker / second worker):
+0 create OK / create null-output EFAULT;
+1 acquire OK / invalid0 ESRCH;
+2 self try EDEADLK / peer try EBUSY;
+3 destroy held EBUSY / wrong-owner unlock EPERM;
+4 release OK / invalid0 ESRCH;
+5 invalid0 ESRCH / second acquire OK;
+6 wrong-owner unlock EPERM / second self try EDEADLK;
+7 destroy held EBUSY / second release OK (busy destroy explicitly ordered
+before release during SC slice; all other paired slices released together);
+8 destroy OK / invalid0 ESRCH;
+9 destroy stale ESRCH / try stale ESRCH.
+At every paired boundary read actual IDM object owner/metadata/exists1,
+reserved0/empty sleep queue/lock_count0/cond_count0/protocol/name and exact
+namespace cardinality. Verify whole DATA/TLS/stacks/code, privileged aliases,
+decoded cache and untouched guards. Stale handle checks precede new creation.
+
+60 actual guest SC calls: create6,destroy12,trylock30,unlock12;
+180dispatches/120pauses/600guest instructions/180guest STW
+(120result/TLS-output stores +60own TLS stores),3native ID stores.
+90peer jobs +peer exit +owner entry =92queue publications/callbacks.
+Exactly2worker constructions/joins; TLS10/10→20/20→30/30 and results6/6
+after each lifecycle. Peer joins before TLS free; owner joins before VM/cache
+teardown. MutexCleanup declared before worker guards, so on failure it
+withdraws only isolated diagnostic mutexes AFTER both workers join and calls
+native on_id_destroy for key0. Normal final namespace must already be empty.
+Settings restored on all paths, including reservation max0/RSX reservation
+disabled during bounded probe. Final log explicitly limits this evidence.
+
+Validation PASS:
+- test_p69_fixture.py chains unchanged P43–P68/frozen prefixes, independently
+  decodes exact10words and models all60SC calls/errors/ownership/ID lifetimes,
+  600steps/120pauses/deferred outputs/TLS/full scalar GPR/PC/LR/CTR/history/ABI,
+  whole DATA/TLS and180guest stores. Build88 phone log all67PASS verified.
+- test_p69_pair.py constructs earlier host shims WITHOUT rerunning spinlock
+  workload, extracts exact four native mutex APIs and try_lock/try_unlock,
+  SC lambda, normal dispatcher/name/lookup, binder, bounded exec_task and
+  production TLS helpers. CPU/VM/ID allocator/storage/atomic control/notify/
+  registry/table shape/queue/decoder remain explicit HOST MODELS; native
+  service/binder bodies execute on those models. G++ C++20 Wall/Wextra/Werror,
+  pthread, ASAN+UBSAN detect_leaks0 PASS:8runs/16workers/1440paired slices,
+  all call/store/usage/context/memory/TLS/cleanup counts. Applicable faults
+  2..17,26,27,36..41,60,173..177,179,180 plus207..217 all detected;
+  old172/181/182 spinlock-specific mutations are inapplicable and omitted.
+  New host-only mutations cover wrong owner, false success for busy/self/
+  wrong-owner/held-destroy, stale object retained, unsigned error ABI, bad
+  published ID/protocol/exists/recursive count. Fault0 extracted operations
+  unchanged; mutations are NOT delivered to native services. Allocation/
+  setup/production TLS guards retained. Nonempty namespace negative preserves
+  prior object/exists and rejects before CPU construction; host seed then
+  removed by harness. All config restoration/cleanup checks pass.
+-68unique P2–P69 UI/export symbols, exact frozen prefix, plist89/iOS16.0,
+  47unchanged patches, Python syntax and git whitespace checks PASS.
+  Scratch p69-fixture-check.log/p69-host-check.log. Local host checks cannot
+  establish native16byte atomic implementation or LV2 scheduler behavior.
+  No local Xcode/iOS SDK; native compile and P69 phone execution PENDING.
+
+Remote baseline main753dd166dc1246f44511f2f01e95158ff1214cbf,
+tree1e6864d2b6b86aac28deb4ee9608d586dcb636b4. Standing continuation and
+observed P68 native PASS authorize Build89 push. Verify baseline plus seven
+changes, preserve remote100755 scripts. DO NOT monitor/query Actions after
+push; user supplies result. Install ARMSX3_iOS16_INSTALL_THIS_IPA via
+TrollStore, run all68diagnostics, send startup log. No P70 before native
+P69 PASS. Blocking LV2 mutex queues/recursive mutexes/serialized savestate/
+weak-memory stress/import loader/renderer/firmware/game boot remain untested;
+Midnight Club Los Angeles goal retained.
