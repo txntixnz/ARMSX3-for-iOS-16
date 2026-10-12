@@ -5635,3 +5635,113 @@ ordered diagnostics, send startup log. No P74 before native P73 PASS. Exact
 wall-clock latency/timeout-unlock races/arbitrary multiwaiter/cancellation/
 replay/weak-memory stress/recursive overflow/serialized savestate/import loader/
 renderer/firmware/game boot remain untested; Midnight Club Los Angeles retained.
+
+## Build 95 / P74 — timed mutex unlock and timer cancellation (2026-10-12)
+
+Latest authoritative phone log ARMSX3-startup-20261012-212638-402-12096.txt
+(Library libfile_10eb62624bc88191bac9703576183379) is Build94: ALL72 ordered
+P2–P73 AUTO PASS, final all-stage PASS, no FAIL. Three P73 native timed expiry
+transactions1/2/3 first roles0/1/0, TLS12/12→24/24→36/36, results6/6. Actual
+100000us deadlines registered, ETIMEDOUT sign-extended, holder retained/count0,
+mutex/timer queues empty, fresh acquisition and scheduler/ID cleanup allPASS.
+P73 native start1791840395.299259→finish0395.619555 (~320.3ms for3timeouts;
+observed duration, not a latency guarantee). Earlier212442-584-12077 attachment
+was another Build93 ALL71PASS run, not P73 evidence. Build94 workflow97/run
+38296906427 had succeeded; at user's request its single build job114970064542
+was rerun successfully via GitHub API to regenerate deleted artifact (rerun
+accepted, completion not monitored). No P74 before P73nativePASS, now satisfied.
+
+Build95 appends armsx3_core_test_mutex_timed_wake / P74, UI stage73, bundle95,
+minimumiOS16.0. Whole Build94 CoreBridge2347165-byte prefix frozen, SHA256
+52167d36b34eee76b20ab389106ec352a5a9d16dd29fdff1866c4c7edc6df6b5.
+All49 patches unchanged; patch48 scheduler scope and patch49 read-only native
+deadline/finished-state observers reused. Upstream remains pinned
+92b931b9fb5eef7f1317cb482917dfc19aceebd9. Native service/scheduler/timer bodies,
+clock/config, ownership and dispatcher are unchanged and not injected/hooked.
+
+P74 uses successful P72 lifecycle scaffold with a real timed request and
+stronger finished-state check. Same2nativeworkers/productionTLS, recursive
+FIFO mutex100create/101destroy/102lock/103try/104unlock through real guestSC0,
+normal interpreter/production binder/table/services. Same10words/40bytes SHA1
+6fb8b669d0f97364f3ece4e1171767e2f5ca3a21, CODE10000/DATA20000, stacks30000/
+40000, TLS50000..90000, budgets3/1/6 and exactCIA12/16/40. Full paused GPR/FPR/
+VR/status/reservation/history/8syscallargs/aliases/code/DATA/TLS/stacks/cache
+checks retained. Descriptor16bytes BE32handle/output+BE32syscall+BE64secondarg.
+
+Three12-operation transactions, firstroles0/1/0:
+0create/nulloutputEFAULT;1lock/invalidlockESRCH;2recursive/tryEBUSY;
+3helddestroyEBUSY/wrongunlockEPERM;4partialunlock retainsowner/tryEBUSY;
+5holderfinalunlock/timedlock(handle,1000000us) SUCCESS;
+6invalidlockESRCH/invalidtryESRCH;7wrongunlockEPERM/recursive lock;
+8helddestroyEBUSY/partialunlock;9helddestroyEBUSY/finalunlock (ordered destroy
+before release);10destroy/invalidtryESRCH;11staledestroyESRCH/staletryESRCH.
+Other lock timeout args cycle0/1122334455667788/FEDCBA9876543210 as before.
+
+At operation5 SC slice, waiter enters actual mutex queue and timed native LV2
+sleep. Holder waits for owner/count0/queue and patch49 observer under native
+g_mutex: exact one timer for waiter, end_time matches entry and end-start=
+1000000, active holder alone, waiter wait+suspend/clean signal/again/exit/notify/
+CPU links. Whole DATA/TLS remain unchanged; no live waiter register/history
+reads. Then actual guest finalunlock transfers FIFO ownership via native reown/
+awake, unregisters pending timer and signals waiter. Actual lock consumes
+signal and returns CELL_OK. After both callbacks finish and peer returns to
+real command queue, patch49 finished observer requires empty waiting/startup
+queues, exact active pair and clean flags/links. Validate secondowner/count0,
+empty mutex queue, success ABI/history/context before guest stores. Three
+observations required, no timed failure accepted. Uses1s timeout for scheduling
+margin; no strict wall-time threshold/claim. Deadline-boundary race not tested.
+
+72SC:100create6/101destroy15/102lock18/103try15/104unlock18. Nine immediate/
+recursive successes+3timed-wake successes+6invalid-lockESRCH.216dispatches,
+144pauses,720instructions,216guestSTW (144outputs+72TLS),3nativeIDstores,
+110publications/callbacks,2workersconstructed/joined. TLS12/12→24/24→36/36,
+results6/6. Failure gate stops/notifies waiter for unwind. Peer joins BEFORE
+TLS release and scheduler restore; owner joins BEFORE VM/cache/mutex cleanup.
+Zero leaked mutex IDs and prior registry/settings/scheduler state preserved.
+
+Validation PASS:
+- test_p74_fixture.py chains unchanged P43–P73 and freezes entire Build94
+  prefix. Independent scalar oracle adds1s timer registration for actual waiter,
+  unchanged bytes while blocked, guest unlock transfers owner/removes timer,
+  successful waiter continuation,3cancellations/no remaining timers. Checks all
+  ownership/depth/errors/stale/handle lifecycles/full64 ABI/history/PC/LR/CTR,
+  whole DATA/TLS and720steps/144pauses/216stores/72SC. Not native scheduling.
+- Unchanged test_p73_patch.py again applies frozen48+49 to exact pinned targets
+  and verifies previous implementations preserved/read-only observers PASS.
+  Workflow now runs P74 fixture plus existing P73patch/P69registry checks.
+- test_p74_pair.py adapts P73 host harness without running old workloads;
+  extracts five native APIs/full lock branch/mutexmethods/FIFO/unqueue, guestSC/
+  binder/dispatcher/TLS/bounded and native patch48/49 helper bodies. Actual guest
+  clock/wait_timeout/CPU check_state/sleep-awake scheduler/VM/CPU/ID allocator/
+  storage/atomic control/priority/notify/FXO/decoder/GPR casts are explicit HOST
+  MODELS; native kernel timer and scheduler not locally executed.1s modeled
+  timer, modeled awake cancellation; real extracted lock consumes signal and
+  returns success. C++20 Wall/Wextra/Werror pthread ASAN+UBSAN detect_leaks0
+  PASS:8runs/16workers/1728paired slices plus fresh registry recovery; per success
+  3registered waits/3cancellations/zero modeled expiries/3successful native lock
+  returns/18API timeout observations/720instructions/110pubs/TLS36/36. Applicable
+  foundational/207..224/LD22 and queue225..229 (including reown228) and scope
+  230..231 retained. Deadline234/timer-removal236 retained. New237false expiry
+  on signalled lock,238timer registered to holder instead of waiter,239stale
+  next_cpu link all detected. Expiry-only232/233/235 and nonrecursive deadlock209
+  inapplicable, not claimed. Mutations HOST ONLY; fault0 extracted code unchanged.
+  Registry init/reuse/rejected/omitted init/nonempty namespace/settings/setup/
+  allocations/TLS guards and prior scheduler-ready preservation PASS. Host-only
+  unsupported mutated timeout throws for bounded negative unwind. LSan disabled
+  because runtime cannot inspect /proc under ptrace; ASAN/UBSAN remained enabled.
+- Phone72orderedPASS/3exactP73transactions;73uniqueUI/export stages;whole prior
+  bridge frozen;all49patches unchanged;bundle95/iOS16/Python syntax/git whitespace
+  and exact1s native request/observer matching PASS. Scratch p74-fixture-check.log
+  and p74-host-check.log. No local Xcode/iOS SDK: P74compile/device execution
+  remain PENDING. Do not equate host model success with native timer success.
+
+Publication baseline maind6702ce0a8dc56b039bd9c70f9c9b9dd5e1d0aea,
+tree87dd51fd362850816bbfa0486b08c48548fa4a6a (171blobs). Publish7files,
+2newtests→173blobs; verify all hashes/preserve remote100755 scripts. Standing
+continuation and nativeP73PASS authorize push. DO NOT monitor/query Actions
+after push unless user specifically requests an operation needing a run ID.
+Install ARMSX3_iOS16_INSTALL_THIS_IPA via TrollStore, run all73diagnostics, send
+log. No P75 before nativeP74PASS. Exact wall-time latency/deadline-boundary unlock
+races/multiwaiter/cancellation replay/weak-memory stress/recursive overflow/
+serialized savestate/import loader/renderer/firmware/game boot remain untested.
+Midnight Club Los Angeles goal retained.
