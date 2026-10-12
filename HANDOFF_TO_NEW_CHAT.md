@@ -5293,3 +5293,103 @@ user supplies result. Install ARMSX3_iOS16_INSTALL_THIS_IPA via TrollStore,
 run all69diagnostics, send log. No P71 before native P70 PASS. Blocking LV2
 sleep queues/recursive overflow/serialized savestate/import loader/renderer/
 firmware/game boot remain untested; Midnight Club Los Angeles goal retained.
+
+## 2026-10-12 — Build91 native PASS; Build92 / P71 production mutex-lock immediate paths
+
+Latest supplied phone log ARMSX3-startup-20261012-144853-456-11372.txt,
+pid11372, Build91: ALL69 stages P2–P70 AUTO PASS in order, final all-stage
+PASS, no FAIL. P70 tx1/2/3 first roles0/1/0, TLS12/12→24/24→36/36,
+results6/6, actual recursive count/partial release/retained owner/full release
+and native-ID cleanup PASS. Duration1791816530.516471→6530.531632 ~15.2ms
+including expected service-error logging. P69 also still passes. Game boot
+untested. P70 native PASS authorizes P71; same two-worker architecture.
+
+Build92 appends armsx3_core_test_mutex_lock_fast_paths(), adds UI P71 and
+test_p71_fixture.py chain, plist92/minimum iOS16.0. Exact Build91 CoreBridge
+prefix remains2207638bytes SHA256
+151c3c28cdd5377a146607c96142adca3913f08fc61169fac8cdad04350c4fe0.
+All47 patches and upstream pin unchanged. ROOT handoff remains authoritative.
+
+P71 extends proven P70 ownership test to actual sys_mutex_lock syscall102
+through normal guest SC0/interpreter/table/binder/service. Read-only table/name
+check now covers100/101/102/103/104. The full production sys_mutex_lock service
+executes its initial IDM lookup/try_lock branches: immediately acquired free
+mutex, same-owner recursive acquisition, and invalid-ID ESRCH. Peer-held
+requests still use sys_mutex_trylock103 and EBUSY, so the new syscall102 never
+queues or sleeps. This phase explicitly proves only its immediate branches,
+not sleep/wake/timeouts. No copied core service, custom table, object-state
+injection, scheduler bypass, or new patch. Existing recursive counts/partial
+and final releases/error/destroy/stale guards retained.
+
+Guest argument loading changes from three LWZ to LWZ r3,r5,0;
+LD r4,r5,8; LWZ r11,r5,4. Remaining SC/result/TLS/NOP words unchanged.
+Exact10words/40bytes SHA1 6fb8b669d0f97364f3ece4e1171767e2f5ca3a21.
+Each host-written INPUT descriptor is16bytes: BE32id/output pointer, BE32code,
+BE64second argument. Creation uses attribute pointer23040; other non-lock
+second arguments0. Lock102 uses timeout sequence0,1122334455667788,
+FEDCBA9876543210 selected(call+worker)%3. New job arguments use u64 so the
+full timeout survives input setup, r4, saved8argument ABI and history. Native
+method takes u64 timeout; these values do not wait because each request
+succeeds immediately or rejects invalid ID. No expiry claim.
+
+Same twelve paired operations and recursive lifecycle as P70, but first
+worker ops1/2/6 and second worker ops1/6/7 call102 instead of103. Per lifecycle
+four successful immediate/recursive lock calls and two invalid-lock ESRCH;
+three lifecycles give12successes+6invalid-lock calls. Other held-peer probes
+use103; wrong-owner unlock EPERM, partial release retains owner, final release
+permits handoff, held destruction ordered before second final release at
+op9/SC, successful destroy/stale handles still checked. First roles0/1/0.
+All native object owner/count/metadata/exists/queue and complete paused CPU
+context/history/ABI/data/TLS/stacks/aliases/cache/ID/TLS/config/VM cleanup
+guards kept; zero native mutex IDs leaked required. Registry conditional
+construction/reuse/nonempty rejection preserved from Build90.
+
+72actual guest syscalls:100create6/101destroy15/102lock18/103trylock15/
+104unlock18.216dispatches/144budget pauses/720guest instructions;
+216guest STW (144output+72TLS),3native-ID writes.108peer slice jobs+exit+
+owner entry =110pubs/callbacks;2worker constructions/joins. TLS12/12→24/24→
+36/36, results6/6. Pause budgets3/1/6 still exact CIA12/16/40. Host input
+descriptors now16bytes, output layout unchanged and disjoint for all36calls.
+Join/stop/TLS free/mutex exception cleanup/cache/VM/settings guards unchanged.
+
+Validation PASS:
+- test_p71_fixture.py chains unchanged P43–P70/frozen prefixes, freezes whole
+  Build91 prefix, independently decodes exact LD/LWZ/SC words and models all
+  immediate/recursive lock/try/error/partial-release/destroy/handle transitions,
+  full64descriptors/timeouts/r4/ABI/history,72SC/720steps/144pauses/216stores
+  and whole DATA/TLS36/36/scalar context/PC/LR/CTR at every boundary.
+- test_p71_pair.py adapts earlier explicit host shims without running previous
+  phase workloads; extracts all FIVE native mutex service bodies including
+  complete sys_mutex_lock, actual lock methods/SC/binder/dispatcher/TLS/
+  bounded execution. Sleep/queue/busy-wait/timeout interfaces are compile-only
+  host stubs that throw if entered; no scheduler execution is modeled here.
+  Inherited host decoder already implements LD. GPR cast host shim unified
+  to match signed error and full64argument conversions without ambiguous
+  old overloads; native binder code still extracted. CPU/VM/ID storage/atomic
+  control/registry/FXO/notifications/queues/decoder/GPR casts remain models.
+  Native logger overload observes actual u64 timeout parameter in extracted
+  sys_mutex_lock and compares it with guest r4,18observations per successful
+  workload. C++20 Wall/Wextra/Werror pthread ASAN+UBSAN detect_leaks0 PASS:
+  8runs/16workers/1728paired slices plus fresh registry recovery. All counts,
+  lifecycle/errors/contexts/memory/TLS/cleanup checked. Applicable faults
+  retained from P70, plus22guest LD mutation,223host-only skipped real lock
+  acquisition,224host-only truncated u64 argument cast; all detected. Native
+  timeout observation detects224 even when r4/history still retain full64.
+  Recursion220..222 and registry218/219/setup/TLS/nonempty preservation
+  negatives still pass. Fault0 extracted service/method operations unchanged;
+  mutations are NOT delivered to native core. Native scheduler/atomics unproven.
+- Native Build91 log all69PASS/three exact P70 transactions verified;
+  70unique UI/export symbols P2–P71, whole2207638-byte frozen prefix,
+  plist92/iOS16.0/47unchanged patches/Python syntax/whitespace PASS.
+  Scratch p71-fixture-check.log,p71-host-check.log. Local Xcode/iOS SDK not
+  available; P71 native compile/phone execution PENDING.
+
+Remote baseline main177bcfff35a6ff36f068ffae79233d52ccc2124f,
+tree468d87c0d832f9d76e5b45edb780b16b642ae12f. Standing continuation and
+P70 native PASS authorize Build92 push. Verify baseline plus seven changes,
+preserve remote100755 scripts. DO NOT monitor/query Actions after push;
+user supplies result. Install ARMSX3_iOS16_INSTALL_THIS_IPA via TrollStore,
+run all70diagnostics, send log. No P72 before native P71 PASS. Blocking LV2
+sleep queue entry/wake/timeout expiry/recursive overflow/serialized savestate/
+import loader/renderer/firmware/game boot remain untested; Midnight Club Los
+Angeles goal retained.
