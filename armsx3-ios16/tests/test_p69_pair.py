@@ -21,6 +21,12 @@ shims=shims.replace('struct Fxo{','struct ppu_syscall_usage{std::array<std::atom
 shims=shims.replace('template<class T>T&get(){return interpreter;}','template<class T>auto&get(){if constexpr(std::is_same_v<T,ppu_interpreter_rt>)return interpreter;else return syscall_usage;}')
 shims=shims.replace('namespace ppu_instructions{\n u32 B(', 'namespace ppu_instructions{\n u32 SC(u32 lev){return 0x44000002|(lev<<5);}\n u32 B(')
 assert 'u32 SC(u32 lev)' in shims
+# FXO construction is modeled explicitly. The old always-initialized shim hid
+# Build89's native unconstructed-map failure. Production allocation is checked
+# separately by test_p69_registry.py using the real id_key/map/allocator bodies.
+shims=shims.replace('struct Fxo{', 'struct lv2_obj;namespace id_manager{template<class T>struct id_map{};}\nstruct Fxo{bool mutexRegistryReady=false;u32 mutexRegistryInits=0;')
+shims=shims.replace('template<class T>bool is_init(){return available;}', 'template<class T>bool is_init(){if constexpr(std::is_same_v<T,id_manager::id_map<lv2_obj>>)return mutexRegistryReady || fault==219;else return available;}')
+shims=shims.replace('template<class T>bool init(){return available;}', 'template<class T>bool init(){if constexpr(std::is_same_v<T,id_manager::id_map<lv2_obj>>){if(fault==218)return false;mutexRegistryReady=true;++mutexRegistryInits;}return available;}')
 mutex_header=(native/'lv2/sys_mutex.h').read_text();mutex_source=(native/'lv2/sys_mutex.cpp').read_text();lv2=(native/'lv2/lv2.cpp').read_text()
 for code,name in [(100,'create'),(101,'destroy'),(103,'trylock'),(104,'unlock')]:
  assert f'BIND_SYSC(sys_mutex_{name})' in lv2
@@ -72,7 +78,8 @@ class idm{public:
  static inline std::recursive_mutex guard;static inline std::map<u32,shared_ptr<lv2_mutex>>objects;static inline u32 cookie=0;
  template<class T>static u32 last_id(){return fault==214?0xdeadbeef:id_manager::g_id;}
  template<class B,class T,class F>static u32 import(F make){
-  std::lock_guard lock(guard);const u32 id=lv2_mutex::id_base+0x800+(++cookie&255);
+  std::lock_guard lock(guard);if(!fxo.mutexRegistryReady)return 0;
+  const u32 id=lv2_mutex::id_base+0x800+(++cookie&255);
   auto object=make();if(!object)return 0;object->exists=fault==216?2:1;objects[id]=object;id_manager::g_id=id;return id;
  }
  template<class T>struct Pair{shared_ptr<T>ptr;CellError ret{};explicit operator bool()const{return bool(ptr);}T*operator->()const{return ptr.get();}};
@@ -136,13 +143,23 @@ checks=checks.replace('"counter=2 checksum=3 TLS=1/1 results=1/1", "counter=4 ch
 a=checks.index(' const std::vector<int> faults');b=checks.index('\n for(int value:faults)',a)
 checks=checks[:a]+''' const std::vector<int> faults{2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,26,27,36,37,38,39,40,41,60,173,174,175,176,177,179,180,207,208,209,210,211,212,213,214,215,216,217};''' +checks[b:]
 a=checks.index(' std::puts(');b=checks.index('\n}',a)
-checks=checks[:a]+''' const u32 priorID=0x8500ff01;
+checks=checks[:a]+''' assert(fxo.mutexRegistryReady && fxo.mutexRegistryInits==1);
+ // A fresh registry must be constructed. Test rejected construction and a
+ // host-only omitted-init mutation; neither may leave objects or workers.
+ for(unsigned value:{218u,219u}){
+  fault=value;fxo.mutexRegistryReady=false;
+  assert(armsx3_core_test_lv2_mutex_ownership()==-1);restored();
+ }
+ fault=0;assert(!fxo.mutexRegistryReady);
+ assert(armsx3_core_test_lv2_mutex_ownership()==0);restored();
+ assert(fxo.mutexRegistryReady && fxo.mutexRegistryInits==2);
+ const u32 priorID=0x8500ff01;
  auto prior=std::make_shared<lv2_mutex>(1,0x20,0x2000,0,0);prior->exists=1;idm::objects[priorID]=prior;
  const auto before=cpu_thread::g_threads_created.load();
  assert(armsx3_core_test_lv2_mutex_ownership()==-1);
  assert(idm::objects.size()==1 && idm::objects[priorID]==prior && prior->exists==1 && cpu_thread::g_threads_created==before);
  idm::objects.clear();restored();
- std::puts("PASS: P69/extracted native mutex create/destroy/trylock/unlock + try_lock/try_unlock + SC handler/syscall dispatcher/binder/bounded/TLS;8runs/16workers/1440slices/60SC each/600instructions/92pubs,3mutexlifecycles/all ownership and signed errors/full contexts/memory/TLS30/30/ID cleanup; foundational and207..217 fault models/mutations/all allocation/setup/TLS guards/nonempty mutex namespace guard detected;CPU/VM/ID allocator/atomic control/notify/registry remain host models;native iOS execution pending.");''' +checks[b:]
+ std::puts("PASS: P69/extracted native mutex create/destroy/trylock/unlock + try_lock/try_unlock + SC handler/syscall dispatcher/binder/bounded/TLS;8runs/16workers/1440slices/60SC each/600instructions/92pubs plus fresh registry recovery;3mutexlifecycles/all ownership and signed errors/full contexts/memory/TLS30/30/ID cleanup; foundational and207..219 fault models/mutations/all allocation/setup/TLS guards/nonempty mutex namespace guard/first construction/reuse/failed init/omitted init detected;CPU/VM/ID allocator/atomic control/notify/registry remain host models;native iOS execution pending.");''' +checks[b:]
 with tempfile.TemporaryDirectory(prefix='p69-pair-') as temp:
  source=Path(temp)/'test.cpp';binary=Path(temp)/'test';source.write_text(shims+extras+binding+services+table+production+phase+checks)
  subprocess.run(['g++','-std=c++20','-Wall','-Wextra','-Werror','-pthread','-fsanitize=address,undefined','-fno-omit-frame-pointer',str(source),'-o',str(binary)],check=True)

@@ -5118,3 +5118,70 @@ TrollStore, run all68diagnostics, send startup log. No P70 before native
 P69 PASS. Blocking LV2 mutex queues/recursive mutexes/serialized savestate/
 weak-memory stress/import loader/renderer/firmware/game boot remain untested;
 Midnight Club Los Angeles goal retained.
+
+## 2026-10-12 — Build89 phone failure; Build90 repairs P69 registry initialization
+
+Newest supplied log ARMSX3-startup-20261012-043501-722-10323.txt,
+pid10323, Build89: P2–P68 all67AUTO PASS; P69 FAIL at first valid create.
+Null-output create correctly returns CELL_EFAULT8001000d. Valid create
+returns CELL_EAGAIN80010001, publishes no mutex handle, then diagnostic
+reports missing handle and callback/final totals mismatch. P69 did NOT pass.
+No next phase: Build90 reruns corrected P69, still68diagnostics P2–P69.
+
+Root cause: stopped diagnostic core initializes selected FXO types on demand;
+P69 used idm::select/import on id_manager::id_map<lv2_obj> without constructing
+that map. Primary util/fixed_typemap.hpp reset fills unconstructed storage
+with0xCC, get<T>() directly returns that storage and does not initialize it.
+Native IdManager.h default map constructor initializes8192keys to typeumax
+and highest_index0; allocate_id in IdManager.cpp requires those defaults.
+Trap-valued highest_index/keys instead make allocation return nullptr;
+lv2_obj::create propagates CELL_EAGAIN. Same explicit registry initialization
+pattern already exists for memory-container diagnostic in patch0043.
+Build89 host model incorrectly assumed every FXO type was already initialized,
+so it did not expose this native prerequisite. Correct that model here.
+
+Build90 adds explicit is_init<MutexMap>/init<MutexMap> for actual
+id_manager::id_map<lv2_obj> BEFORE first namespace select, import or worker
+construction. Initialization failure returns a named diagnostic error through
+existing RAII cleanup. Existing initialized registry is reused; existing
+mutex namespace still rejects without deleting those objects. No registry
+reset, service replacement, predicted IDs, allocator bypass, or new core patch.
+All P2–P68 bytes remain identical to Build88 frozen2123739-byte prefix;
+P69 workload/opcodes/syscalls/ownership errors/counters/history/TLS/guard and
+cleanup behavior otherwise unchanged. Plist90/minimum iOS16.0;47unchanged
+patches and same upstream pin. App UI still has68unique exports/stages.
+
+Validation PASS:
+- Updated test_p69_fixture.py retains full P43–P68 chain, exact frozen prefix,
+  all P69 independent guest SC ownership oracle and new init-before-first-use
+  requirement. No change to expected60SC/600steps/180dispatches/120pauses,
+  three lifecycles/TLS30/30/results6/6.
+- Updated test_p69_pair.py explicitly models fresh/constructed LV2 registry,
+  one construction across8successful runs, then failed initialization218 and
+  host-only omitted-init219 negatives, followed by successful fresh recovery.
+  All earlier applicable faults207..217/foundational failures, setup/TLS/
+  cleanup/context/memory checks and nonempty namespace preservation pass.
+  Extracted native service/binder/SC/dispatcher/TLS/bounded bodies unchanged;
+  CPU/VM/ID storage/atomic control/notify/registry remain HOST MODELS.
+- New test_p69_registry.py extracts actual native id_key class, id_map default
+  member layout/constructor and allocate_id body from pinned source. Trap field
+  values model0xCC storage WITHOUT illegal C++ object lifetime access and
+  reproduce rejected allocation. Exact map default constructors then establish
+  zero highest_index/free keys/null storage; actual allocator publishes correct
+  IDs/types, reaches8192capacity, detects exhaustion, clears/reuses entries and
+  advances invalidation cookies. Pointer/FXO storage and fixed-ID index helper
+  remain shims; dynamic allocator/key/default initializers execute natively on
+  host. ASAN+UBSAN/Wall/Wextra/Werror C++20 PASS. Workflow runs this regression
+  against pinned upstream before patches. No iOS atomics/scheduler claim.
+- Python syntax/git whitespace/frozen prefix/68UI exports/plist90 and native
+  Build89 log failure ordering verified. Scratch p69-build90-fixture.log,
+  p69-build90-host.log,p69-build90-registry.log. Native Build90 compile/phone
+  execution PENDING; do not describe P69 as proven until new phone PASS.
+
+Remote baseline main4fb33b6ecb22bbda60b69894df1226f6d062dee4,
+treedd1374fd98f3f109066e06d214019034b33dc370. Standing continuation authorizes
+Build90 correction push. Verify baseline plus seven changes, retain remote
+100755 scripts. DO NOT monitor/query Actions after push; user supplies result.
+Install ARMSX3_iOS16_INSTALL_THIS_IPA with TrollStore, run all68diagnostics,
+send log. No P70 until native P69 PASS. Blocking LV2 mutex sleep queues,
+recursive mutexes/serialized savestate/renderer/firmware/game boot untested.

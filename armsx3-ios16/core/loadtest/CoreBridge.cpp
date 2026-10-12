@@ -27115,6 +27115,7 @@ extern "C" __attribute__((visibility("default"))) int armsx3_core_test_interrupt
 }
 
 // Build89 adds production LV2 mutex ownership and lifecycle through guest SC.
+// Build90 constructs its LV2 registry before the first diagnostic lookup.
 #include "Emu/Cell/lv2/sys_mutex.h"
 extern ppu_intrp_func_t ppu_get_syscall(u64);
 extern std::string ppu_get_syscall_name(u64);
@@ -27308,6 +27309,11 @@ extern "C" __attribute__((visibility("default"))) int armsx3_core_test_lv2_mutex
         std::memcpy(attribute.name, "iOSMutex", 8);
         std::memcpy(data + 0x3040, &attribute, sizeof(attribute));
         std::vector<u8> expectedData(data, data + 0x10000);
+        // The stopped diagnostic core constructs FXO types on demand. get()
+        // accesses storage directly; construct the real map before select/import.
+        using MutexMap = id_manager::id_map<lv2_obj>;
+        if (!g_fxo->is_init<MutexMap>() && !g_fxo->init<MutexMap>())
+            throw std::runtime_error("P69 native LV2 object registry initialization failed");
         struct MutexCleanup {
             static std::vector<u32> ids() {
                 std::vector<u32> values;

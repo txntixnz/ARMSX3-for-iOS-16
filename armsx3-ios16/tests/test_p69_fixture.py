@@ -105,4 +105,7 @@ for text in ['ppu_get_syscall_name(codes[i])','sys_mutex_attribute_t attribute{}
  'program.slices != 90','std::array<u32, 2>{30, 30}','id_manager::g_id = previous','slice < 2 ? -2 : 6']:
  assert text in stage,text
 assert stage.count('std::make_unique<named_thread<ppu_thread>>')==2
+registry=stage.index('using MutexMap = id_manager::id_map<lv2_obj>;')
+assert registry < stage.index('struct MutexCleanup') < stage.index('MutexCleanup::ids().empty()')
+assert 'if (!g_fxo->is_init<MutexMap>() && !g_fxo->init<MutexMap>())' in stage
 print('PASS: P69 SHA1='+hashlib.sha1(encoded).hexdigest()+',10words/40bytes,180dispatches/120pauses/600guest instructions/60SC calls,three nonrecursive mutex lifecycles/exact owner/error/handoff/destroy/stale states,whole DATA/TLS30/30;P43-P68 preserved')
