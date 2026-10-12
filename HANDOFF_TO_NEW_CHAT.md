@@ -4862,3 +4862,148 @@ debugger-pause handoff, not arbitrary spinlock contention/weak-memory stress
 or LV2 mutex scheduling. Retry-again cancellation/resumption,global HLE
 table/import loader,renderer/firmware/game boot remain untested. Preserve
 Midnight Club Los Angeles goal without promising compatibility or timing.
+
+## 2026-10-12 — Build87 native PASS; Build88 / P68 interrupted native lock replay
+
+User supplied ARMSX3-startup-20261012-014108-316-8856.txt, scratch upload,
+LibraryID libfile_4c1117adcf4c8191bb14b38f40b49570. Build87 header and
+all66 unique P2–P67 AUTO PASS verified, final all-stage PASS, no FAIL.
+P67 starts1791769265.642096, ends9265.645120 (~3.0ms).
+First roles0/1/0, counter2/4/6,checksum3/10/21,TLS1/2/3 each;
+results1/6,6/1,1/6. Actual native held-lock busy path, CPU debugger pause/
+wait publication/live snapshot, real guest unlock and native lock resumption
+now confirmed on phone. No game boot claimed.
+
+Build88 appends ONLY armsx3_core_test_interrupted_spinlock_replay and an
+extern declaration for native thread-local g_tls_log_prefix. Full Build87
+2067562-byte bridge prefix preserved byte-for-byte, SHA256
+bb4853b5d2a063da159c72b9f2ba943bd72c72b04f0c968d33f17c3588de337b.
+Prior P2–P67 implementation/tests,47 patches,upstream pin and build scripts
+unchanged. Adds UI P68/plist88/CI test_p68_fixture.py,two new tests,root
+handoff; seven intended changed files. No native service/core hook patch.
+
+P68 keeps P67's exact68word/272byte guest program, SHA1
+cacb3c02a2daa1324de32b0568f6a5f235c3bf35, and isolated registry/cache/
+VM/TLS/two-worker setup. Changes the controlled held-lock handoff: the
+pending native call is STOPPED before first worker unlocks, native lock
+sets cpu_flag::again, binder must suppress false success and retain the
+input r3/other args. It then exercises actual production cold fast_call
+recovery, followed by a bounded retry of that same service address.
+No serialized savestate file or actual title reload is involved.
+
+Native primary PPUThread.cpp::fast_call/cpu_task::cia_call/cpu_on_stop,
+CPUThread check_state, service/binder sources inspected. Native fast_call
+only performs argument/CIA reload fixup when old_cia==0 and state&again;
+old_cia nonzero takes another path and logs unimplemented HLE callstack
+savestates. P68 deliberately uses production cia_call's cold setup:
+loaded_from_savestate=true; fast_call(exchange(cia,0),gpr2,true). Native
+loaded_from_savestate preserves the already-created guest BL return LR.
+No global HLE table allocation needed; return sentinel is not reached on
+this interrupted path. Native fast_call retains interrupt_thread_executing
+and the replay module; diagnostic expects those instead of clearing them.
+
+Only waiter slice8 enters this cold call. The outer diagnostic lock cache
+wrapper sets coldActive and invokes actual fast_call while the original
+bounded probe remains active. That nested exec_task dispatches the same
+cache slot once; coldActive prevents recursive cold setup and its inner
+wrapper requests dbg_global_pause before calling the unchanged registered
+lock handler. Native busy-body check_state publishes wait as in P67.
+First worker verifies full live context/input/PC10260/LR10038/history/
+whole DATA/TLS/stacks and aliases while lock remains ABADCAFE. It then
+adds reversible cpu_flag::stop and notifies, without unlocking yet.
+Native check_state stops even with debugger pause set, clears wait and
+calls actual ppu_thread::cpu_on_stop. The held lock returns {}, sets again;
+native bind_result sees again and does NOT write success0 to r3.
+Binder's stop processing clears current_function; interrupted history
+therefore has null func_name, CIA10260,error23000,four original args.
+last_function remains sys_spinlock_lock; BIND_FUNC_WITH_BLR leaves CIA10264
+and records current_module=sysPrxForUser instead of returning via LR.
+Stop-related 'aborted' or perf-stat logs are expected for this intentional
+interruption; diagnostic PASS/FAIL controls the result.
+
+Inner wrapper publishes interrupted epoch and waits on a separate replay
+gate. First worker acquires it, verifies stop/again/debugger flags with
+wait cleared, preserved full GPR inputs/syscall args, false-success
+suppression, native module/history/LR/CIA and unchanged guest memory,
+then executes actual guest production unlock. Requires lock0 and PC108,
+then publishes restart. Only AFTER the interrupted values are verified,
+the inner wrapper deliberately dirties r3..r10 to BAD0000000000000+reg.
+This is a diagnostic fault stimulus, not native service behavior. It proves
+the real fast_call saved-argument copy matters rather than merely comparing
+inputs that already match. No diagnostic argument repair is performed.
+The inner wrapper returns with stop/again still set. Probe budget boundary
+returns -2; actual fast_call::at_ret restores all eight syscall_args into
+r3..r10 and rewinds CIA10264→10260. It consumes loaded_from_savestate and
+restores caller logging prefix/current_function; interrupt/module retained.
+Outer wrapper compares native restored prefix, counts fixup and returns.
+Its RAII additionally restores logging prefix/coldActive on exceptions.
+After bounded helper returns, waiter verifies production fixup/CIA/module/
+flags, then clears ONLY reversible stop/again/debugger control flags and
+notifies. CIA/GPR/LR are not repaired. Next queued slice starts at10260;
+registered lock retries uncontended, returns CELL_OK through real HLE ABI,
+and guest writes success/protected values/output/unlock/TLS exactly once.
+
+Both controller roles exercised: owner controls stopped peer tx1/3; peer
+controls stopped owner tx2. Acquired wait/interrupted/restart/completion
+epochs order every cross-thread read. Existing deadline/cancel/exit/notify/
+stop/join guards kept; peer joins before TLS free,owner before VM/cache
+teardown. Clear stop/again before returning worker callback to normal queue,
+so retained workers survive. Program has exactly3fixups/3interrupted calls.
+Native fast_call, bounded scope nesting and cpu_on_stop are real functions,
+not equivalent recovery code duplicated into CoreBridge.
+
+Budgets first unchanged[1,1,1,2,1,6,5,2,1,2,3,1]; waiter now
+[1,1,1,1,1,3,4,2,3,8,7,6]. Waiter PCs
+[136,140,144,148,24,32,44,52,260,84,108,272]. Slice8 paused/replayed
+input r3=23000 and lock0; slice9 retry then counter store yields lock
+ABADCAFE/counter+2,checksum waits untilslice10 as before.72dispatches/
+66budget pauses/192bounded steps=165ordinary guest instructions+24actual
+HLE calls+3extra outer diagnostic dispatches.21guest BL calls.3initialize,
+3uncontended initial lock,3interrupted held lock,3successful retry lock,
+6busy trylock,6unlock; interrupted attempts do not write lock or guest
+output. Guest/native write counts unchanged from P67. Histories now11/13
+for workers0/1, transaction bases0/0→3/5→8/8; aborted history counts once,
+retry adds one further record. Final counter6/checksum21/TLS3/3/lock0,
+transaction results1/6,6/1,1/6. Full retained GPR/FPR/VR/status/reservation/
+CIA/LR/history/ABI/module/interrupt/context snapshots and VM/TLS/cache/
+aliases/stack guards still checked at every normal boundary.
+
+Validation PASS:
+- test_p68_fixture.py chains all unchanged P43–P67/frozen prefixes, checks
+  exact68words/SHA1, independently models192steps/24service records, live
+  held event, stopped history/no-success preservation, deliberate volatile
+  clobber/saved-input restoration/CIA rewind and fresh retry. Every normal
+  PC/LR/GPR/ABI/history/DATA/TLS/deferred output and write count checked.
+- test_p68_pair.py builds P67 host models WITHOUT its workload and extracts
+  native CPU test_stopped, exact cpu_on_stop and fast_call plus unchanged
+  spinlock service/binder/TLS/bounded helper/exec_task bodies. Host CPU
+  check_state model now handles STOP priority over debugger pause and calls
+  extracted cpu_on_stop; native CPU check_state/atomic waits/VM/registry/
+  names/log formatting/queues/instructions remain explicitly HOST MODELS.
+  Minimal model function-manager return address0 suffices for this aborted
+  path; global HLE return table is not tested here.
+  G++C++20 Wall/Wextra/Werror pthread ASAN+UBSAN detect_leaks0 PASS:
+  8runs/16workers/576slices/24native-fast_call recovery executions; all
+  counts/logs/cleanup and allocation/setup/TLS guard negatives retained.
+  Applicable foundational/168..198/200 faults retained;199(single debugger
+  pause-clear mutation) is inapplicable to new combined flag-clear path.
+  Host-only mutation201..206 of extracted fast_call catches omitted arg
+  copy,missing/double CIA rewind,bad restored logging prefix,damaged saved
+  arg/token and missing loaded-state LR preservation. With fault0 native
+  operations execute unchanged; these mutation branches are NOT delivered
+  in native core or services. Restored-input proof uses deliberate clobber
+  in diagnostic after cancellation verification, described above.
+- Build87 all66 native phases verified,67unique UI/export symbols P2–P68,
+  exact frozen prefix/plist88/minimum iOS16.0/47unchangedpatches/Python
+  syntax/whitespace PASS. Scratch p68-fixture-check.log,p68-host-check.log.
+  Native new phase compile/device execution still PENDING user outcome.
+
+Remote baseline main79ba4ce767ba5f0687f32756dd94804a9f96712b,
+tree6e60feab1aead7ce97027f6cb656874f68b0199f. Standing continuation and
+observed P67 native PASS authorize Build88 push. Verify baseline plus seven
+changes, preserve remote100755 scripts. DO NOT monitor/query Actions after
+push; user supplies result. Install ARMSX3_iOS16_INSTALL_THIS_IPA via
+TrollStore, run all67diagnostics, send startup log. No P69 before native
+P68 PASS. Serialized savestate reload/arbitrary contention/LV2 mutex
+scheduling/global HLE table/import loader/weak-memory stress/renderer/
+firmware/game boot remain untested; Midnight Club Los Angeles goal retained.

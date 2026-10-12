@@ -73,6 +73,7 @@ static constexpr DiagnosticStage stages[] = {
     {65, "Guest spinlock and protected worker handoff", "armsx3_core_test_guest_spinlock_handoff"},
     {66, "Production spinlock services and guest calls", "armsx3_core_test_hle_spinlock_handoff"},
     {67, "Blocking spinlock and paused native service", "armsx3_core_test_blocking_spinlock_handoff"},
+    {68, "Interrupted lock and native replay fixup", "armsx3_core_test_interrupted_spinlock_replay"},
 };
 static constexpr NSUInteger stageCount = sizeof(stages) / sizeof(stages[0]);
 static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";

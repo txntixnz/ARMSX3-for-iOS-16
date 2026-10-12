@@ -26422,3 +26422,694 @@ extern "C" __attribute__((visibility("default"))) int armsx3_core_test_blocking_
     }
     catch (const std::exception& error) { ARMSX3StartupLog(error.what()); if (initialized) vm::close(); return -1; }
 }
+
+// Build88 adds native interrupted-service cold replay fixup.
+extern thread_local std::string(*g_tls_log_prefix)();
+extern "C" __attribute__((visibility("default"))) int armsx3_core_test_interrupted_spinlock_replay()
+{
+    ARMSX3StartupLog("P68 BEFORE interrupted production lock, native again-result suppression and cold fast_call replay fixup");
+    bool initialized = false;
+    try
+    {
+        if (!Emu.IsStopped() || armsx3_ios_live_cpu_threads())
+            throw std::runtime_error("P68 requires stopped emulator and no live CPU workers");
+        struct Configuration
+        {
+            bool ppu = g_cfg.core.ppu_prof.get(), spu = g_cfg.core.spu_prof.get(), debug = g_cfg.core.spu_debug.get();
+            thread_scheduler_mode scheduler = g_cfg.core.thread_scheduler.get();
+            ppu_decoder_type decoder = g_cfg.core.ppu_decoder.get();
+            s32 reservations = g_cfg.core.ppu_128_reservations_loop_max_length;
+            bool rsxReservations = g_cfg.core.rsx_accurate_res_access.get();
+            Configuration() { g_cfg.core.ppu_prof.set(false); g_cfg.core.spu_prof.set(false);
+                g_cfg.core.spu_debug.set(false); g_cfg.core.thread_scheduler.set(thread_scheduler_mode::os);
+                g_cfg.core.ppu_decoder.set(ppu_decoder_type::_static);
+                g_cfg.core.ppu_128_reservations_loop_max_length.set(0);
+                g_cfg.core.rsx_accurate_res_access.set(false); }
+            ~Configuration() { g_cfg.core.ppu_prof.set(ppu); g_cfg.core.spu_prof.set(spu);
+                g_cfg.core.spu_debug.set(debug); g_cfg.core.thread_scheduler.set(scheduler);
+                g_cfg.core.ppu_decoder.set(decoder);
+                g_cfg.core.ppu_128_reservations_loop_max_length.set(reservations);
+                g_cfg.core.rsx_accurate_res_access.set(rsxReservations); }
+        } configuration;
+        if (g_cfg.core.ppu_threads + 0u != 2u || !g_fxo->is_init() ||
+            (!g_fxo->is_init<ppu_interpreter_rt>() && !g_fxo->init<ppu_interpreter_rt>()))
+            throw std::runtime_error("P68 requires two PPU slots and initialized core interpreter");
+        vm::init(); initialized = true;
+        if (!vm::reserve_map(vm::main, 0x10000, 0x80000))
+            throw std::runtime_error("P68 main memory block unavailable");
+        const std::array<u32, 4> addresses{0x10000, 0x20000, 0x30000, 0x40000};
+        for (u32 address : addresses)
+            if (vm::alloc(0x10000, vm::main, 0x10000) != address)
+                throw std::runtime_error("P68 isolated code/data/stack allocation failed");
+        const u32 codeAddress = addresses[0], dataAddress = addresses[1];
+        using namespace ppu_instructions;
+        using namespace ppu_instructions::implicts;
+        const std::array<const char*, 4> names{"sys_spinlock_initialize", "sys_spinlock_lock", "sys_spinlock_trylock", "sys_spinlock_unlock"};
+        const auto* module = ppu_module_manager::get_module("sysPrxForUser");
+        if (!module) throw std::runtime_error("P68 sysPrxForUser registry absent");
+        const auto& functions = ppu_function_manager::get();
+        std::array<ppu_intrp_func_t, 4> services{};
+        for (u32 i = 0; i < names.size(); ++i) {
+            u32 matches = 0;
+            for (const auto& entry : module->functions) {
+                const auto& info = entry.second;
+                if (info.name && !std::strcmp(info.name, names[i])) {
+                    if (info.index >= functions.size() || !functions[info.index])
+                        throw std::runtime_error("P68 registered spinlock handler/index absent");
+                    services[i] = functions[info.index]; ++matches;
+                }
+            }
+            if (matches != 1) throw std::runtime_error("P68 spinlock registry name is missing or ambiguous");
+            for (u32 j = 0; j < i; ++j)
+                if (services[i] == services[j]) throw std::runtime_error("P68 distinct spinlock services share a handler");
+        }
+        const u32 addToken = (31u << 26) | (11u << 21) | (11u << 16) | (10u << 11) | (266u << 1);
+        // The third waiter call now enters production lock while held.
+        // A diagnostic wrapper sets a debugger pause before invoking the
+        // unchanged registered handler; native check_state publishes wait.
+        const std::array<u32, 68> opcodes{
+            ADDI(3, 5, 0), B(252, false, true), ADDI(3, 5, 0), B(248, false, true), STW(3, 6, 16), B(44),
+            ADDI(3, 5, 0), B(236, false, true), STW(3, 6, 20), ADDI(3, 5, 0), B(224, false, true), STW(3, 6, 24),
+            ADDI(3, 5, 0), B(208, false, true), STW(3, 6, 28), B(4),
+            LWZ(9, 5, 128), LWZ(11, 5, 132), ADDI(9, 9, 1), addToken,
+            STW(9, 5, 128), STW(11, 5, 132), STW(9, 6, 0), STW(11, 6, 4), STW(10, 6, 8),
+            ADDI(3, 5, 0), B(164, false, true), STW(3, 6, 32),
+            LWZ(12, 13, -0x6ff4), ADDI(12, 12, 1), STW(12, 13, -0x6ff4), STW(12, 6, 12), B(144),
+            NOP(), NOP(), NOP(), NOP(), B(-124),
+            NOP(), NOP(), NOP(), NOP(), NOP(), NOP(), NOP(), NOP(), NOP(), NOP(), NOP(), NOP(), NOP(),
+            NOP(), NOP(), NOP(), NOP(), NOP(), NOP(), NOP(), NOP(), NOP(), NOP(), NOP(), NOP(), NOP(),
+            NOP(), NOP(), NOP(), NOP()};
+        std::memcpy(vm::base(dataAddress + 0x80), "iOSProbe", 9);
+        auto* code = reinterpret_cast<be_t<u32>*>(vm::base(codeAddress));
+        for (u32 i = 0; i < opcodes.size(); ++i) code[i] = opcodes[i];
+        const auto* bytes = static_cast<const u8*>(vm::base(codeAddress));
+        const std::vector<u8> expectedCode(bytes, bytes + 0x10000);
+        struct SegmentCacheCleanup {
+            u8* pointer; bool active = false;
+            void release() { if (active) { utils::memory_decommit(pointer, 0x8000); active = false; } }
+            ~SegmentCacheCleanup() { release(); }
+        } segmentCleanup{vm::g_exec_addr + vm::g_exec_addr_seg_offset + (codeAddress >> 1)};
+        segmentCleanup.active = true;
+        ppu_register_range(codeAddress, sizeof(opcodes));
+        ppu_register_function_at(codeAddress, sizeof(opcodes), nullptr);
+        std::array<std::vector<u8>, 2> expectedStacks;
+        for (u32 i = 0; i < 2; ++i) {
+            std::memset(vm::base(addresses[2 + i]), 0xa5, 0x10000);
+            const auto* stack = static_cast<const u8*>(vm::base(addresses[2 + i]));
+            expectedStacks[i].assign(stack, stack + 0x10000);
+        }
+        struct Gate { std::atomic<u32> released{0}; std::atomic<bool> cancel{false}; };
+        struct Job {
+            u32 begin = 0, end = 0, budget = 0, count = 0, output = 0, round = 0, slice = 0;
+            int result = -99; bool tls = false, clean = false, resumed = false, reservationClean = false;
+            std::array<u64, 15> registers{};
+            std::array<u64, 35> continuation{};
+            std::array<u32, 4> status{};
+            std::array<u64, 32> floating{};
+            std::array<u8, 512> vectors{};
+            std::array<u8, 48> selectedVectors{};
+            u32 reservationAddress = 0, reservationCached = 0;
+            u64 reservationTime = 0; bool fullReservation = false;
+            std::array<u8, 128> reservationData{};
+            u64 historyIndex = 0, historyCIA = 0, historyError = 0;
+            const char* historyName = nullptr; const char* lastName = nullptr;
+            std::array<u64, 4> historyArgs{};
+            std::array<u64, 8> syscallArgs{};
+            bool coldActive = false, interrupt = false, replayed = false;
+            const char* moduleName = nullptr;
+            std::atomic<u32> interrupted{0}, restart{0};
+            std::atomic<u32> lockEntered{0}, lockReturned{0};
+            std::atomic<u32> ready{0}, completed{0}, exitAck{0};
+        };
+        struct Program {
+            Gate gate; std::array<Job, 2> jobs; std::vector<u8>* expectedData = nullptr;
+            std::array<std::vector<u8>, 2>* expectedStacks = nullptr;
+            std::array<ppu_thread*, 2> contexts{};
+            std::vector<u8>* expectedPool = nullptr;
+            u32 blocked = 0; std::atomic<u32> fixups{0};
+            u64 created = 0, deleted = 0;
+            int result = -99; u32 batches = 0, slices = 0; bool tlsMemory = false, restored = false;
+            std::array<u32, 2> totals{};
+            std::atomic<bool> completed{false};
+        };
+        const auto runGuest = +[](ppu_thread& context, Job& job) {
+            job.tls = get_current_cpu_thread() == &context && thread_ctrl::get_current() != nullptr;
+            const auto status = [&context] {
+                return std::array<u32, 4>{context.cr.pack(),
+                    (u32(context.xer.so) << 31) | (u32(context.xer.ov) << 30) |
+                    (u32(context.xer.ca) << 29) | context.xer.cnt,
+                    context.fpscr.bits.pack(), context.vrsave};
+            };
+            const auto snapshot = [&context] {
+                std::array<u64, 35> values{};
+                for (u32 i = 0; i < 32; ++i) values[i] = context.gpr[i];
+                values[32] = context.ctr; values[33] = context.lr; values[34] = context.cia;
+                return values;
+            };
+            // A new transaction initializes its inputs once. Every later queue
+            // callback continues the exact paused context without register writes.
+            job.resumed = !job.slice || (snapshot() == job.continuation && status() == job.status &&
+                context.raddr == job.reservationAddress && context.rtime == job.reservationTime &&
+                context.res_cached == job.reservationCached && context.use_full_rdata == job.fullReservation &&
+                !std::memcmp(context.rdata, job.reservationData.data(), sizeof(context.rdata)) &&
+                !std::memcmp(context.fpr, job.floating.data(), sizeof(context.fpr)) &&
+                !std::memcmp(context.vr, job.vectors.data(), sizeof(context.vr)) &&
+                !context.current_function && context.last_function == job.lastName &&
+                context.syscall_history.index == job.historyIndex &&
+                context.interrupt_thread_executing == job.interrupt && context.current_module == job.moduleName &&
+                !std::memcmp(context.syscall_args, job.syscallArgs.data(), sizeof(context.syscall_args)));
+            if (job.slice && job.historyIndex && job.resumed) {
+                const auto& history = context.syscall_history.data[(job.historyIndex - 1) % context.syscall_history.data.size()];
+                job.resumed = history.cia == job.historyCIA && history.func_name == job.historyName &&
+                    history.error == job.historyError && history.args == job.historyArgs;
+            }
+            if (!job.resumed) { job.result = -8; return; }
+            if (!job.slice) {
+                const u32 transaction = job.round / 12, worker = (job.output >> 7) & 1u;
+                if (context.raddr) { job.result = -9; return; }
+                for (u32 i = 0; i < 32; ++i)
+                    if (i != 1 && i != 13 && i != 30) context.gpr[i] = 0xa5a5000000000000ull + i;
+                context.gpr[5] = 0x23000; context.gpr[6] = job.output;
+                context.gpr[10] = transaction * 2 + worker + 1;
+                context.cr.unpack(0x8a6c5e79u ^ (transaction << 8) ^ (worker << 12));
+                context.fpscr.bits.unpack(0x13579bdfu ^ (transaction << 20) ^ (worker << 24));
+                context.xer.so = !worker; context.xer.ov = (transaction & 1u) != 0;
+                context.xer.ca = worker != 0; context.xer.cnt = u8(0x15 + transaction + worker);
+                context.vrsave = 0x5aa50000u | (transaction << 8) | worker;
+                for (auto& value : context.fpr) value = 7.0;
+                std::memset(context.vr, 0x3c, sizeof(context.vr));
+                context.lr = 0x12340000; context.ctr = 0x76540000;
+                context.cia = job.begin + (worker == transaction % 2 ? 0u : 132u);
+                if (context.current_function || context.syscall_history.data.empty()) { job.result = -10; return; }
+                context.last_function = nullptr;
+                context.syscall_history.count_debug_arguments = 4;
+                std::memset(context.syscall_args, 0, sizeof(context.syscall_args));
+            }
+            try { job.result = armsx3_ios_ppu_exec_bounded(&context, job.begin, job.end, job.budget); }
+            catch (const std::exception&) { job.result = -7; }
+            job.registers = {context.gpr[1], context.gpr[2], context.gpr[3], context.gpr[4], context.gpr[6],
+                context.gpr[7], context.gpr[8], context.gpr[9], context.gpr[10], context.gpr[13], context.ctr, context.cia,
+                context.lr, context.gpr[30], context.gpr[0]};
+            const u32 transaction = job.round / 12, worker = (job.output >> 7) & 1u;
+            job.replayed = true;
+            if (job.slice == 8 && worker != transaction % 2) {
+                job.replayed = context.state & cpu_flag::stop && context.state & cpu_flag::again &&
+                    context.state & cpu_flag::dbg_global_pause && context.cia == job.begin + 260 &&
+                    !context.loaded_from_savestate && context.interrupt_thread_executing && !job.coldActive &&
+                    context.current_module && !std::strcmp(context.current_module, "sysPrxForUser");
+                if (job.replayed) {
+                    // Only reversible CPU control flags are cleared. Production
+                    // fast_call already restored arguments and rewound CIA.
+                    context.state -= cpu_flag::stop + cpu_flag::again + cpu_flag::dbg_global_pause;
+                    context.state.notify_one();
+                }
+            }
+            job.interrupt = context.interrupt_thread_executing; job.moduleName = context.current_module;
+            job.continuation = snapshot(); job.status = status();
+            job.reservationClean = !context.raddr && !context.use_full_rdata;
+            job.historyIndex = context.syscall_history.index; job.lastName = context.last_function;
+            std::memcpy(job.syscallArgs.data(), context.syscall_args, sizeof(context.syscall_args));
+            if (job.historyIndex) {
+                const auto& history = context.syscall_history.data[(job.historyIndex - 1) % context.syscall_history.data.size()];
+                job.historyCIA = history.cia; job.historyName = history.func_name;
+                job.historyError = history.error; job.historyArgs = history.args;
+            }
+            job.reservationAddress = context.raddr; job.reservationTime = context.rtime;
+            job.reservationCached = context.res_cached; job.fullReservation = context.use_full_rdata;
+            std::memcpy(job.reservationData.data(), context.rdata, sizeof(context.rdata));
+            std::memcpy(job.floating.data(), context.fpr, sizeof(context.fpr));
+            std::memcpy(job.vectors.data(), context.vr, sizeof(context.vr));
+            for (u32 i = 0; i < 3; ++i) {
+                const be_t<v128> value = context.vr[i + 1];
+                std::memcpy(job.selectedVectors.data() + i * 16, &value, sizeof(value));
+            }
+            job.clean = !context.current_function && !(context.state & cpu_flag::exit) && !(context.state & cpu_flag::again) && !(context.state & cpu_flag::dbg_global_pause);
+        };
+        struct Callback { Program* program; decltype(runGuest) runner; ppu_intrp_func_t lock; void (*release)(ppu_thread&, Callback&); };
+        const ppu_intrp_func_t observedLock = +[](ppu_thread& context, ppu_opcode_t op, be_t<u32>* instruction, ppu_intrp_func* next) {
+            auto& callback = *reinterpret_cast<Callback*>(context.gpr[30]);
+            auto& program = *callback.program;
+            const u32 worker = (context.gpr[6] >> 7) & 1u;
+            auto& job = program.jobs[worker];
+            const bool observe = job.slice == 8 && worker != (job.round / 12) % 2;
+            if (observe && !job.coldActive) {
+                struct Scope {
+                    Job& job; decltype(g_tls_log_prefix) prefix = g_tls_log_prefix;
+                    ~Scope() { job.coldActive = false; g_tls_log_prefix = prefix; }
+                } scope{job};
+                job.coldActive = true;
+                // Same cold-entry setup used by production ppu_cmd::cia_call.
+                // Keep the current bounded dispatch probe active across nesting.
+                context.loaded_from_savestate = true;
+                context.fast_call(std::exchange(context.cia, 0), context.gpr[2], true);
+                if (g_tls_log_prefix != scope.prefix)
+                    throw std::runtime_error("P68 native fast_call logging prefix did not restore");
+                program.fixups.fetch_add(1, std::memory_order_release);
+                return;
+            }
+            if (observe) {
+                if (context.state & cpu_flag::dbg_global_pause || context.state & cpu_flag::wait)
+                    throw std::runtime_error("P68 lock wrapper entered with preexisting pause/wait state");
+                context.state += cpu_flag::dbg_global_pause;
+                job.lockEntered.store(job.round + 1, std::memory_order_release);
+            }
+            callback.lock(context, op, instruction, next);
+            if (observe) {
+                job.lockReturned.store(job.round + 1, std::memory_order_release);
+                job.interrupted.store(job.round + 1, std::memory_order_release);
+                const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+                while (job.restart.load(std::memory_order_acquire) != job.round + 1 &&
+                    !program.gate.cancel.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline)
+                    std::this_thread::yield();
+                if (job.restart.load(std::memory_order_acquire) != job.round + 1 || program.gate.cancel.load(std::memory_order_acquire))
+                    throw std::runtime_error("P68 interrupted service did not receive its replay gate");
+                // Deliberately dirty volatile argument registers AFTER their
+                // interrupted values have been verified. Only production
+                // fast_call's cold fixup may recover these saved inputs.
+                for (u32 reg = 3; reg <= 10; ++reg) context.gpr[reg] = 0xbad0000000000000ull + reg;
+            }
+        };
+        for (u32 i = 0; i < services.size(); ++i)
+            ppu_register_function_at(codeAddress + 256 + i * 4, 4, i == 1 ? observedLock : services[i]);
+        auto& interpreter = g_fxo->get<ppu_interpreter_rt>();
+        std::array<ppu_intrp_func_t, 68> expectedCache{};
+        for (u32 i = 0; i < opcodes.size(); ++i)
+            expectedCache[i] = i == 65 ? observedLock : i >= 64 ? services[i - 64] : interpreter.decode(opcodes[i]);
+        const auto* cache = reinterpret_cast<const ppu_intrp_func*>(vm::g_exec_addr + u64(codeAddress) * 2);
+        if (!vm::check_addr(codeAddress, vm::page_executable, 0x10000))
+            throw std::runtime_error("P68 executable registration failed");
+        for (u32 i = 0; i < opcodes.size(); ++i)
+            if (!cache[i].fn || cache[i].fn != expectedCache[i])
+                throw std::runtime_error("P68 shared guest code was not eagerly decoded");
+        const auto releaseBlocked = +[](ppu_thread& first, Callback& callback) {
+            auto& program = *callback.program;
+            const u32 firstWorker = (first.gpr[6] >> 7) & 1u;
+            auto& firstJob = program.jobs[firstWorker];
+            auto& waiterJob = program.jobs[1 - firstWorker];
+            auto& waiter = *program.contexts[1 - firstWorker];
+            const u32 epoch = firstJob.round + 1;
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+            while ((waiterJob.lockEntered.load(std::memory_order_acquire) != epoch ||
+                !(waiter.state & cpu_flag::wait)) && !program.gate.cancel.load(std::memory_order_acquire) &&
+                std::chrono::steady_clock::now() < deadline) std::this_thread::yield();
+            // Native check_state's atomic wait publication is the boundary.
+            // dbg_global_pause holds it there until this controller clears it;
+            // no cross-thread context read occurs before the acquired wait flag.
+            if (program.gate.cancel.load(std::memory_order_acquire) ||
+                waiterJob.lockEntered.load(std::memory_order_acquire) != epoch || !(waiter.state & cpu_flag::wait) ||
+                !(waiter.state & cpu_flag::dbg_global_pause) || waiterJob.lockReturned.load(std::memory_order_acquire) == epoch ||
+                waiterJob.completed.load(std::memory_order_acquire) >= epoch)
+                throw std::runtime_error("P68 waiter did not pause inside the held-lock call");
+            std::array<u64, 35> expected = waiterJob.continuation;
+            expected[33] = waiterJob.begin + 56; expected[34] = waiterJob.begin + 260;
+            for (u32 reg = 0; reg < 32; ++reg)
+                if (waiter.gpr[reg] != expected[reg]) throw std::runtime_error("P68 blocked HLE GPR/input changed");
+            const std::array<u32, 4> status{waiter.cr.pack(),
+                (u32(waiter.xer.so) << 31) | (u32(waiter.xer.ov) << 30) | (u32(waiter.xer.ca) << 29) | waiter.xer.cnt,
+                waiter.fpscr.bits.pack(), waiter.vrsave};
+            if (waiter.ctr != expected[32] || waiter.lr != expected[33] || waiter.cia != expected[34] ||
+                status != waiterJob.status || std::memcmp(waiter.fpr, waiterJob.floating.data(), sizeof(waiter.fpr)) ||
+                std::memcmp(waiter.vr, waiterJob.vectors.data(), sizeof(waiter.vr)) ||
+                waiter.raddr != waiterJob.reservationAddress || waiter.rtime != waiterJob.reservationTime ||
+                waiter.res_cached != waiterJob.reservationCached || waiter.use_full_rdata != waiterJob.fullReservation ||
+                std::memcmp(waiter.rdata, waiterJob.reservationData.data(), sizeof(waiter.rdata)) ||
+                !waiter.current_function || std::strcmp(waiter.current_function, "sys_spinlock_lock") ||
+                !waiter.last_function || std::strcmp(waiter.last_function, "sys_spinlock_lock") ||
+                waiter.syscall_history.index != waiterJob.historyIndex ||
+                std::memcmp(waiter.syscall_args, waiterJob.syscallArgs.data(), sizeof(waiter.syscall_args)))
+                throw std::runtime_error("P68 blocked native HLE ABI/history/context differs");
+            if (!program.expectedPool || std::memcmp(vm::base(0x20000), program.expectedData->data(), 0x10000) ||
+                std::memcmp(vm::get_super_ptr(0x20000), program.expectedData->data(), 0x10000) ||
+                std::memcmp(vm::base(0x50000), program.expectedPool->data(), 0x40000) ||
+                std::memcmp(vm::get_super_ptr(0x50000), program.expectedPool->data(), 0x40000))
+                throw std::runtime_error("P68 blocked call wrote protected data/output/TLS early");
+            for (u32 i = 0; i < 2; ++i)
+                if (std::memcmp(vm::base(0x30000u + i * 0x10000u), (*program.expectedStacks)[i].data(), 0x10000) ||
+                    std::memcmp(vm::get_super_ptr(0x30000u + i * 0x10000u), (*program.expectedStacks)[i].data(), 0x10000))
+                    throw std::runtime_error("P68 blocked stack/alias guard changed");
+            // Stop while still held; let native test_stopped return true,
+            // sys_spinlock_lock set again and its binder suppress r3 success.
+            waiter.state += cpu_flag::stop; waiter.state.notify_one();
+            const auto interruptedDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+            while (waiterJob.interrupted.load(std::memory_order_acquire) != epoch &&
+                !program.gate.cancel.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < interruptedDeadline)
+                std::this_thread::yield();
+            if (waiterJob.interrupted.load(std::memory_order_acquire) != epoch ||
+                program.gate.cancel.load(std::memory_order_acquire) || !(waiter.state & cpu_flag::stop) ||
+                !(waiter.state & cpu_flag::again) || !(waiter.state & cpu_flag::dbg_global_pause) ||
+                waiter.state & cpu_flag::wait || waiter.current_function ||
+                !waiter.current_module || std::strcmp(waiter.current_module, "sysPrxForUser") ||
+                waiter.cia != waiterJob.begin + 264 || waiter.lr != waiterJob.begin + 56 ||
+                waiter.syscall_history.index != waiterJob.historyIndex + 1 ||
+                waiter.loaded_from_savestate || !waiter.interrupt_thread_executing)
+                throw std::runtime_error("P68 native interrupted lock flags/module/CIA/history differ");
+            const auto& interruptedHistory = waiter.syscall_history.data[(waiter.syscall_history.index - 1) % waiter.syscall_history.data.size()];
+            if (interruptedHistory.func_name || interruptedHistory.cia != waiterJob.begin + 260 ||
+                interruptedHistory.error != 0x23000 || interruptedHistory.args != waiterJob.historyArgs ||
+                std::memcmp(waiter.syscall_args, waiterJob.syscallArgs.data(), sizeof(waiter.syscall_args)))
+                throw std::runtime_error("P68 interrupted binder overwrote input/result/history");
+            for (u32 reg = 0; reg < 32; ++reg)
+                if (waiter.gpr[reg] != expected[reg]) throw std::runtime_error("P68 cancelled call changed GPR/input");
+            if (std::memcmp(vm::base(0x20000), program.expectedData->data(), 0x10000) ||
+                std::memcmp(vm::base(0x50000), program.expectedPool->data(), 0x40000))
+                throw std::runtime_error("P68 interrupted call wrote guest state before unlock");
+            callback.runner(first, firstJob); vm::temporary_unlock(first);
+            if (firstJob.result != -2 || firstJob.continuation[34] != firstJob.begin + 108 ||
+                *static_cast<be_t<u32>*>(vm::base(0x23000)) != 0)
+                throw std::runtime_error("P68 production unlock failed before native waiter resume");
+            ++program.blocked;
+            // Preserve stop/again through actual fast_call::at_ret; the
+            // waiter clears them only after verifying production replay fixup.
+            waiterJob.restart.store(epoch, std::memory_order_release);
+        };
+        auto* data = static_cast<u8*>(vm::base(dataAddress));
+        std::memset(data, 0xa5, 0x10000); std::memcpy(data + 0x80, "iOSProbe", 9);
+        const be_t<u32> zero = 0;
+        for (u32 offset : std::array<u32, 3>{0x3000, 0x3080, 0x3084})
+            std::memcpy(data + offset, &zero, sizeof(zero));
+        const be_t<u32> initialLock = 0x12345678u;
+        std::memcpy(data + 0x3000, &initialLock, sizeof(initialLock));
+        std::vector<u8> expectedData(data, data + 0x10000);
+        const u64 live = armsx3_ios_live_cpu_threads();
+        const auto created = cpu_thread::g_threads_created.load(), deleted = cpu_thread::g_threads_deleted.load();
+        Program program; program.expectedData = &expectedData; program.expectedStacks = &expectedStacks; program.created = created; program.deleted = deleted;
+        for (auto& job : program.jobs) { job.begin = codeAddress; job.end = codeAddress + sizeof(opcodes); }
+        {
+            // Callback storage remains alive until every stop/join guard has run.
+            Callback callback{&program, runGuest, services[1], releaseBlocked};
+            std::unique_ptr<named_thread<ppu_thread>> owner;
+            bool launched = false, joined = false;
+            struct StopOwner {
+                Program& program; decltype(owner)& slot; bool& started; bool& finished;
+                ~StopOwner() {
+                    program.gate.cancel.store(true, std::memory_order_release);
+                    if (!slot) return;
+                    slot->state += cpu_flag::exit; slot->state.notify_one();
+                    slot->cmd_notify.store(1); slot->cmd_notify.notify_one();
+                    if (!started) { *slot = thread_state::created; started = true; }
+                    if (!finished) { (*slot)(); finished = true; }
+                }
+            } stopOwner{program, owner, launched, joined};
+            {
+                struct ConstructionID { u32 previous = id_manager::g_id;
+                    explicit ConstructionID(u32 id) { id_manager::g_id = id; }
+                    ~ConstructionID() { id_manager::g_id = previous; } } constructionID{ppu_thread::id_base};
+                const ppu_thread_params params{static_cast<vm::addr_t>(addresses[2]), 0x8000, 0, {}, 0, 0};
+                owner = std::make_unique<named_thread<ppu_thread>>(stx::launch_retainer{}, params, "iOS resumed TLS owner", 1000);
+            }
+            program.contexts[0] = owner.get();
+            const ppu_intrp_func_t executeOwner = +[](ppu_thread& context, ppu_opcode_t, be_t<u32>*, ppu_intrp_func*) {
+                auto& callback = *reinterpret_cast<Callback*>(context.gpr[30]); auto& program = *callback.program;
+                const auto callWithTLS = +[](ppu_thread* owner, u32 pool, void* user) -> int {
+                    auto& callback = *static_cast<Callback*>(user); auto& program = *callback.program;
+                    if (pool != 0x50000 || owner->gpr[13] != pool + 0x7060)
+                        throw std::runtime_error("P68 production main TLS slot mismatch");
+                    try {
+                        std::unique_ptr<named_thread<ppu_thread>> peer;
+                        bool launched = false, joined = false; u32 peerTLS = 0;
+                        struct PeerCleanup {
+                            ppu_thread& owner; Program& program; decltype(peer)& slot;
+                            bool& started; bool& finished; u32 pool; u32& tls;
+                            void join() {
+                                vm::temporary_unlock(owner);
+                                if (slot && !finished) {
+                                    slot->state += cpu_flag::exit; slot->state.notify_one();
+                                    slot->cmd_notify.store(1); slot->cmd_notify.notify_one();
+                                    if (!started) { *slot = thread_state::created; started = true; }
+                                    (*slot)(); finished = true;
+                                }
+                            }
+                            ~PeerCleanup() {
+                                program.gate.cancel.store(true, std::memory_order_release);
+                                join();
+                                if (tls) armsx3_ios_ppu_probe_free_peer_tls(&owner, pool, tls);
+                            }
+                        } cleanup{*owner, program, peer, launched, joined, pool, peerTLS};
+                        peerTLS = armsx3_ios_ppu_probe_alloc_peer_tls(owner, pool);
+                        if (peerTLS != pool + 0x70d0 || armsx3_ios_ppu_probe_alloc_peer_tls(owner, pool))
+                            throw std::runtime_error("P68 real peer TLS allocation or duplicate guard failed");
+                        {
+                            struct ConstructionID { u32 previous = id_manager::g_id;
+                                explicit ConstructionID(u32 id) { id_manager::g_id = id; }
+                                ~ConstructionID() { id_manager::g_id = previous; } } constructionID{ppu_thread::id_base + 1};
+                            const ppu_thread_params params{static_cast<vm::addr_t>(0x40000), 0x8000, peerTLS, {}, 0, 0};
+                            peer = std::make_unique<named_thread<ppu_thread>>(stx::launch_retainer{}, params, "iOS resumed TLS peer", 1000);
+                        }
+                        if (peer->id == owner->id || peer->gpr[13] != peerTLS)
+                            throw std::runtime_error("P68 persistent peer constructor TLS register/ID mismatch");
+                        program.contexts[1] = peer.get();
+                        const ppu_intrp_func_t executePeer = +[](ppu_thread& context, ppu_opcode_t, be_t<u32>*, ppu_intrp_func*) {
+                            auto& callback = *reinterpret_cast<Callback*>(context.gpr[30]);
+                            auto& program = *callback.program; auto& job = program.jobs[1]; const u32 round = job.round;
+                            job.ready.store(round + 1, std::memory_order_release);
+                            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+                            while (program.gate.released.load(std::memory_order_acquire) < round + 1 &&
+                                !program.gate.cancel.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline)
+                                std::this_thread::yield();
+                            if (program.gate.released.load(std::memory_order_acquire) < round + 1 || program.gate.cancel.load(std::memory_order_acquire)) job.result = -6;
+                            else {
+                                try {
+                                    if (job.slice == 8 && (job.round / 12) % 2 == 1) callback.release(context, callback);
+                                    else callback.runner(context, job);
+                                } catch (const std::exception& error) {
+                                    ARMSX3StartupLog(error.what()); job.result = -11;
+                                    program.gate.cancel.store(true, std::memory_order_release);
+                                    auto* waiter = program.contexts[0];
+                                    waiter->state += cpu_flag::exit; waiter->state.notify_one();
+                                }
+                            }
+                            vm::temporary_unlock(context);
+                            // The callback performs no Program/guest-memory access after
+                            // this publication, and returns to the real command queue.
+                            job.completed.store(round + 1, std::memory_order_release);
+                        };
+                        const ppu_intrp_func_t exitPeer = +[](ppu_thread& context, ppu_opcode_t, be_t<u32>*, ppu_intrp_func*) {
+                            auto& callback = *reinterpret_cast<Callback*>(context.gpr[30]);
+                            context.state += cpu_flag::exit;
+                            callback.program->jobs[1].exitAck.fetch_add(1, std::memory_order_release);
+                        };
+                        peer->gpr[30] = u64(reinterpret_cast<uintptr_t>(&callback)); peer->cia = program.jobs[1].begin;
+                        peer->state -= cpu_flag::stop + cpu_flag::exit + cpu_flag::suspend + cpu_flag::memory + cpu_flag::wait;
+                        u64 waits = armsx3_ios_ppu_command_waits();
+                        *peer = thread_state::created; launched = true;
+                        const auto waitForQueue = [&] {
+                            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+                            while (armsx3_ios_ppu_command_waits() == waits && std::chrono::steady_clock::now() < deadline)
+                                std::this_thread::yield();
+                            if (armsx3_ios_ppu_command_waits() == waits || armsx3_ios_live_cpu_threads() != 2 ||
+                                cpu_thread::g_threads_created.load() != program.created + 2 || cpu_thread::g_threads_deleted.load() != program.deleted)
+                                throw std::runtime_error("P68 peer queue wait or unchanged owner/peer lifecycle mismatch");
+                            waits = armsx3_ios_ppu_command_waits();
+                        };
+                        waitForQueue();
+                        if (armsx3_ios_ppu_probe_free_peer_tls(owner, pool, peerTLS) != -1 ||
+                            armsx3_ios_ppu_probe_alloc_peer_tls(owner, pool))
+                            throw std::runtime_error("P68 active peer TLS allocation/free guards failed");
+                        const auto namesForHistory = [](u32 service) {
+                            const std::array<const char*, 4> names{"sys_spinlock_initialize", "sys_spinlock_lock", "sys_spinlock_trylock", "sys_spinlock_unlock"};
+                            return names[service];
+                        };
+                        std::vector<u8> expectedPool(0x40000, 0); program.expectedPool = &expectedPool;
+                        for (u32 i = 0; i < 3; ++i) std::memcpy(expectedPool.data() + 0x60 + i * 0x70, "iOSProbe", 9);
+                        for (u32 transaction = 0; transaction < 3; ++transaction)
+                        {
+                            const u32 firstWorker = transaction % 2;
+                            const u32 previousCounter = transaction * 2;
+                            const u32 previousSum = previousCounter * (previousCounter + 1) / 2;
+                            const u32 firstToken = transaction * 2 + firstWorker + 1;
+                            const u32 firstSum = previousSum + firstToken;
+                            const u32 finalSum = (previousCounter + 2) * (previousCounter + 3) / 2;
+                            for (u32 slice = 0; slice < 12; ++slice)
+                            {
+                                const u32 round = transaction * 12 + slice;
+                                for (u32 i = 0; i < 2; ++i) {
+                                    auto& job = program.jobs[i]; job.round = round; job.slice = slice;
+                                    job.output = 0x20200 + transaction * 0x100 + i * 0x80;
+                                    const std::array<u32, 12> firstBudgets{1, 1, 1, 2, 1, 6, 5, 2, 1, 2, 3, 1};
+                                    const std::array<u32, 12> secondBudgets{1, 1, 1, 1, 1, 3, 4, 2, 3, 8, 7, 6};
+                                    job.budget = i == firstWorker ? firstBudgets[slice] : secondBudgets[slice];
+                                }
+                                peer->cmd_list({{ppu_cmd::ptr_call, 0}, std::bit_cast<u64>(executePeer)});
+                                peer->cmd_notify.store(1); peer->cmd_notify.notify_one();
+                                const auto readyDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+                                while (program.jobs[1].ready.load(std::memory_order_acquire) < round + 1 && std::chrono::steady_clock::now() < readyDeadline)
+                                    std::this_thread::yield();
+                                if (program.jobs[1].ready.load(std::memory_order_acquire) != round + 1 || armsx3_ios_live_cpu_threads() != 2)
+                                    throw std::runtime_error("P68 peer did not reach next spinlock slice gate");
+                                // Waiter enters native lock while still held. Its
+                                // native CPU wait flag proves the busy body is paused.
+                                // The first worker validates it, unlocks, then resumes it.
+                                const bool ordered = slice == 8;
+                                program.gate.released.store(round + 1, std::memory_order_release);
+                                if (ordered && firstWorker == 0) callback.release(*owner, callback);
+                                else { callback.runner(*owner, program.jobs[0]); vm::temporary_unlock(*owner); }
+                                const auto finishDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+                                while (program.jobs[1].completed.load(std::memory_order_acquire) < round + 1 && std::chrono::steady_clock::now() < finishDeadline)
+                                    std::this_thread::yield();
+                                if (program.jobs[1].completed.load(std::memory_order_acquire) != round + 1)
+                                    throw std::runtime_error("P68 peer spinlock slice deadline/count mismatch");
+                                waitForQueue();
+                                if (ordered && (program.blocked != transaction + 1 ||
+                                    program.jobs[1 - firstWorker].lockEntered.load(std::memory_order_acquire) != round + 1 ||
+                                    program.jobs[1 - firstWorker].lockReturned.load(std::memory_order_acquire) != round + 1 ||
+                                    program.fixups.load(std::memory_order_acquire) != transaction + 1))
+                                    throw std::runtime_error("P68 native blocked/resumed handoff count differs");
+                                const auto expectedWord = [&](u32 offset, u32 value) {
+                                    const be_t<u32> word = value;
+                                    std::memcpy(program.expectedData->data() + offset, &word, sizeof(word));
+                                };
+                                const u32 lock = slice < 2 && !transaction ? 0x12345678u :
+                                    slice < 4 || slice == 8 || slice >= 10 ? 0u : 0xabadcafeu;
+                                expectedWord(0x3000, lock);
+                                expectedWord(0x3080, previousCounter + (slice >= 9 ? 2u : slice >= 6 ? 1u : 0u));
+                                expectedWord(0x3084, slice >= 10 ? finalSum : slice >= 6 ? firstSum : previousSum);
+                                for (u32 i = 0; i < 2; ++i) {
+                                    const auto& job = program.jobs[i]; const bool first = i == firstWorker;
+                                    const std::array<u32, 12> firstPC{4, 256, 8, 260, 16, 80, 100, 268, 108, 116, 128, 272};
+                                    const std::array<u32, 12> secondPC{136, 140, 144, 148, 24, 32, 44, 52, 260, 84, 108, 272};
+                                    const u64 busy = u64(s64(s32(CELL_EBUSY)));
+                                    std::array<u64, 35> expected{};
+                                    for (u32 reg = 0; reg < 32; ++reg) expected[reg] = 0xa5a5000000000000ull + reg;
+                                    expected[1] = 0x38000u + i * 0x10000u - ppu_stack_start_offset;
+                                    expected[5] = 0x23000; expected[6] = job.output;
+                                    if (first) expected[3] = slice >= 4 && slice <= 6 ? 0u : 0x23000u;
+                                    else if (slice >= 5) expected[3] = slice <= 6 ? busy : slice == 7 || slice == 8 || slice >= 10 ? 0x23000u : 0u;
+                                    expected[10] = transaction * 2 + i + 1;
+                                    if (slice >= (first ? 5u : 9u)) {
+                                        expected[9] = previousCounter + (first ? 1u : 2u);
+                                        expected[11] = first ? firstSum : finalSum;
+                                    }
+                                    if (first && slice == 9) expected[12] = transaction;
+                                    if (slice >= (first ? 10u : 11u)) expected[12] = transaction + 1;
+                                    expected[13] = 0x57060u + i * 0x70;
+                                    expected[30] = u64(reinterpret_cast<uintptr_t>(&callback));
+                                    expected[32] = 0x76540000;
+                                    expected[33] = first ? (slice == 0 ? 0x12340000u : job.begin + (slice < 3 ? 8u : slice < 7 ? 16u : 108u)) :
+                                        slice < 5 ? 0x12340000u : job.begin + (slice == 5 ? 32u : slice < 8 ? 44u : slice < 10 ? 56u : 108u);
+                                    expected[34] = job.begin + (first ? firstPC[slice] : secondPC[slice]);
+                                    const u32 seedCR = 0x8a6c5e79u ^ (transaction << 8) ^ (i << 12);
+                                    const u32 xer = (i ? 0u : 0x80000000u) | ((transaction & 1u) << 30) | (i ? 0x20000000u : 0u) | (0x15 + transaction + i);
+                                    const std::array<u32, 4> expectedStatus{seedCR, xer,
+                                        0x13579bdfu ^ (transaction << 20) ^ (i << 24), 0x5aa50000u | (transaction << 8) | i};
+                                    const std::array<u32, 12> firstCalls{0, 0, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3};
+                                    const std::array<u32, 12> secondCalls{0, 0, 0, 0, 0, 1, 2, 2, 3, 4, 5, 5};
+                                    const u32 count = first ? firstCalls[slice] : secondCalls[slice];
+                                    const u64 historyBase = transaction == 0 ? 0u : transaction == 1 ? (i ? 5u : 3u) : 8u;
+                                    if (job.historyIndex != historyBase + count)
+                                        throw std::runtime_error("P68 registered HLE call count differs");
+                                    if (count) {
+                                        const u32 service = first ? (slice < 4 ? 0u : slice < 8 ? 1u : 3u) : slice < 8 ? 2u : slice < 10 ? 1u : 3u;
+                                        const bool interrupted = !first && slice == 8;
+                                        const u64 error = interrupted ? 0x23000u : service == 1 ? 0u : service == 2 ? busy : 0x23000u;
+                                        const std::array<u64, 4> args{0x23000, expected[4], expected[5], expected[6]};
+                                        std::array<u64, 8> abi{};
+                                        abi[0] = 0x23000;
+                                        for (u32 arg = 1; arg < 8; ++arg) abi[arg] = expected[arg + 3];
+                                        abi[6] = service == 3 ? previousCounter + (first ? 1u : 2u) : 0xa5a5000000000009ull;
+                                        if ((interrupted ? job.historyName != nullptr : !job.historyName || std::strcmp(job.historyName, namesForHistory(service))) ||
+                                            job.historyCIA != job.begin + 256 + service * 4 || job.historyError != error || job.historyArgs != args ||
+                                            !job.lastName || std::strcmp(job.lastName, namesForHistory(service)) || job.syscallArgs != abi)
+                                            throw std::runtime_error("P68 production HLE ABI/history/return metadata differs");
+                                    } else if (job.lastName || job.syscallArgs != std::array<u64, 8>{})
+                                        throw std::runtime_error("P68 HLE ran before the guest call");
+                                    const bool expectedInterrupt = i ? transaction > 0 || slice >= 8 : transaction > 1 || (transaction == 1 && slice >= 8);
+                                    if (job.interrupt != expectedInterrupt || (expectedInterrupt ?
+                                        !job.moduleName || std::strcmp(job.moduleName, "sysPrxForUser") : job.moduleName != nullptr))
+                                        throw std::runtime_error("P68 retained native replay module/interrupt state differs");
+                                    if (!job.tls || !job.clean || !job.resumed || !job.reservationClean || !job.replayed ||
+                                        job.continuation != expected || job.status != expectedStatus || job.exitAck.load() ||
+                                        job.result != (slice < 11 ? -2 : first ? 1 : 6))
+                                        throw std::runtime_error("P68 exact HLE spinlock context/status/PC/reservation/result differs");
+                                    for (u64 value : job.floating)
+                                        if (value != std::bit_cast<u64>(7.0)) throw std::runtime_error("P68 untouched FPR canary differs");
+                                    for (u8 value : job.vectors)
+                                        if (value != 0x3c) throw std::runtime_error("P68 untouched VR canary differs");
+                                    const u32 offset = job.output - 0x20000u;
+                                    if (slice >= (first ? 6u : 10u)) {
+                                        expectedWord(offset, previousCounter + (first ? 1u : 2u));
+                                        expectedWord(offset + 4, first ? firstSum : finalSum);
+                                        expectedWord(offset + 8, transaction * 2 + i + 1);
+                                    }
+                                    if (first && slice >= 5) expectedWord(offset + 16, 0);
+                                    if (!first && slice >= 6) expectedWord(offset + 20, u32(CELL_EBUSY));
+                                    if (!first && slice >= 7) expectedWord(offset + 24, u32(CELL_EBUSY));
+                                    if (!first && slice >= 9) expectedWord(offset + 28, 0);
+                                    if (slice >= (first ? 9u : 11u)) expectedWord(offset + 32, 0x23000);
+                                    if (slice >= (first ? 10u : 11u)) {
+                                        const be_t<u32> word = transaction + 1;
+                                        std::memcpy(expectedPool.data() + 0x6c + i * 0x70, &word, sizeof(word));
+                                        expectedWord(offset + 12, transaction + 1);
+                                    }
+                                    if (slice == 11) program.totals[i] = transaction + 1;
+                                }
+                                if (std::memcmp(vm::base(pool), expectedPool.data(), expectedPool.size()) ||
+                                    std::memcmp(vm::get_super_ptr(pool), expectedPool.data(), expectedPool.size()) ||
+                                    std::memcmp(vm::base(0x20000), program.expectedData->data(), 0x10000) ||
+                                    std::memcmp(vm::get_super_ptr(0x20000), program.expectedData->data(), 0x10000))
+                                    throw std::runtime_error("P68 lock/protected values/deferred outputs/TLS/aliases differ");
+                                for (u32 i = 0; i < 2; ++i)
+                                    if (std::memcmp(vm::base(0x30000u + i * 0x10000u), (*program.expectedStacks)[i].data(), 0x10000) ||
+                                        std::memcmp(vm::get_super_ptr(0x30000u + i * 0x10000u), (*program.expectedStacks)[i].data(), 0x10000))
+                                        throw std::runtime_error("P68 untouched stack canary/alias differs");
+                                ++program.slices;
+                            }
+                            ++program.batches;
+                            char message[256];
+                            std::snprintf(message, sizeof(message), "P68 PASS: transaction=%u first worker=%u, registered lock/EBUSY/stop-again/input preserved/native cold replay/unlock/retry success, counter=%u checksum=%u TLS=%u/%u results=%d/%d",
+                                transaction + 1, firstWorker, previousCounter + 2, finalSum, program.totals[0], program.totals[1],
+                                program.jobs[0].result, program.jobs[1].result);
+                            ARMSX3StartupLog(message);
+                        }
+                        peer->cmd_list({{ppu_cmd::ptr_call, 0}, std::bit_cast<u64>(exitPeer)});
+                        peer->cmd_notify.store(1); peer->cmd_notify.notify_one();
+                        vm::temporary_unlock(*owner);
+                        (*peer)(); joined = true;
+                        if (program.jobs[1].exitAck.load(std::memory_order_acquire) != 1 || peer->gpr[13] != peerTLS ||
+                            armsx3_ios_ppu_probe_free_peer_tls(owner, pool, peerTLS) != 0 ||
+                            armsx3_ios_ppu_probe_free_peer_tls(owner, pool, peerTLS) != -1)
+                            throw std::runtime_error("P68 queued peer exit/retained TLS/join/release mismatch");
+                        peerTLS = 0; program.tlsMemory = true;
+                        return program.jobs[0].result;
+                    } catch (const std::exception& error) { ARMSX3StartupLog(error.what()); throw; }
+                };
+                program.result = armsx3_ios_ppu_probe_tls_and_call(&context, 0x20080, 9, 64, callWithTLS, &callback);
+                program.restored = !context.gpr[13] && !vm::check_addr(0x50000);
+                context.state += cpu_flag::exit;
+                program.completed.store(true, std::memory_order_release);
+            };
+            owner->gpr[30] = u64(reinterpret_cast<uintptr_t>(&callback)); owner->cia = codeAddress;
+            owner->cmd_list({{ppu_cmd::ptr_call, 0}, std::bit_cast<u64>(executeOwner)});
+            owner->state -= cpu_flag::stop + cpu_flag::exit + cpu_flag::suspend + cpu_flag::memory + cpu_flag::wait;
+            *owner = thread_state::created; launched = true;
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(8);
+            while (!program.completed.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline)
+                std::this_thread::yield();
+            if (!program.completed.load(std::memory_order_acquire)) throw std::runtime_error("P68 persistent owned TLS deadline exceeded");
+            (*owner)(); joined = true;
+            if (!program.tlsMemory || !program.restored || program.result != 1 || program.batches != 3 || program.slices != 36 || program.blocked != 3 || program.fixups.load(std::memory_order_acquire) != 3 ||
+                program.totals != std::array<u32, 2>{3, 3})
+                throw std::runtime_error("P68 resumed TLS callback/final totals/pool release mismatch");
+        }
+        for (u32 address = 0x50000; address < 0x90000; address += 0x1000)
+            if (vm::check_addr(address)) throw std::runtime_error("P68 TLS pool remains mapped after persistent pair cleanup");
+        for (const auto& region : std::array<std::pair<u32, const std::vector<u8>*>, 4>{
+            std::pair{codeAddress, &expectedCode}, std::pair{dataAddress, &expectedData},
+            std::pair{addresses[2], &expectedStacks[0]}, std::pair{addresses[3], &expectedStacks[1]}})
+            if (std::memcmp(vm::base(region.first), region.second->data(), 0x10000) ||
+                std::memcmp(vm::get_super_ptr(region.first), region.second->data(), 0x10000))
+                throw std::runtime_error("P68 full persistent guest code/data/stack guard or alias mismatch");
+        for (u32 i = 0; i < opcodes.size(); ++i)
+            if (cache[i].fn != expectedCache[i]) throw std::runtime_error("P68 shared code cache changed");
+        if (armsx3_ios_live_cpu_threads() != live || cpu_thread::g_threads_created.load() != created + 2 ||
+            cpu_thread::g_threads_deleted.load() != deleted + 2)
+            throw std::runtime_error("P68 persistent owner/peer CPU lifecycle counters did not balance");
+        segmentCleanup.release();
+        for (u32 address : addresses)
+            if (vm::dealloc(address, vm::main) != 0x10000 || vm::check_addr(address))
+                throw std::runtime_error("P68 persistent guest deallocation failed");
+        vm::close(); initialized = false;
+        ARMSX3StartupLog("P68 PASS: two persistent native PPU workers/production TLS slots execute24 registered HLE calls/21 guest BL calls through72 dispatches/66 budget pauses/192 bounded steps; three held-lock requests pause inside native service then stop, native lock sets again, binder suppresses success and preserves r3/input/syscall args with null interrupted history name and sysPrxForUser replay module, no guest memory/output/TLS mutation before real first-worker unlock; actual cold fast_call consumes loaded_from_savestate, restores all eight saved arguments after deliberate post-cancel volatile clobber and rewinds CIA264 to260 without diagnostic register repair, logging prefix restored and native interrupt/module state retained, three bounded retries acquire once and finish; first roles0/1/0, six EBUSY, final lock0 counter6 checksum21 TLS3/3, full live/interrupted/paused contexts/history/cache/VM/joins/settings/cleanup PASS; controlled stopped-call replay integration, serialized savestate reload/arbitrary contention/LV2 mutex scheduling/weak-memory stress/renderer/firmware/game boot remain untested");
+        return 0;
+    }
+    catch (const std::exception& error) { ARMSX3StartupLog(error.what()); if (initialized) vm::close(); return -1; }
+}
