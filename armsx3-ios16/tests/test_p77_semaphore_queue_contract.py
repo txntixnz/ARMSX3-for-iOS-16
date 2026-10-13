@@ -23,7 +23,7 @@ def source_contract(text):
         "post validation": r"if\s*\(count\s*<=\s*0\)",
         "maximum bound": r"count\s*\+\s*0u\s*<=\s*sema\.max\s*\+\s*0u\s*-\s*val",
         "wake count": r"std::min<s32>\(-std::min<s32>\(val,\s*0\),\s*count\)",
-        "ordered scheduler": r"sema\.schedule<ppu_thread>\(sem->sq,\s*sem->protocol\)",
+        "ordered scheduler": r"sem->\.schedule<ppu_thread>\(sem->sq,\s*sem->protocol\)",
         "awake scheduling": r"lv2_obj::awake_all\(\);",
         "visible nonnegative value": r"std::max<s32>\(0,\s*sema\.val\)",
     }
@@ -33,7 +33,7 @@ def source_contract(text):
     post = text.split("error_code sys_semaphore_post(", 1)[1].split("error_code sys_semaphore_get_value(", 1)[0]
     for piece in ("prepare_for_sleep(ppu)", "sema.sleep(ppu, timeout)", "wait_timeout(timeout, &ppu)", "sem->unqueue"):
         assert piece in wait, "missing wait path: " + piece
-    for piece in ("sema.val.fetch_op", "sem->schedule<ppu_thread>", "lv2_obj::awake_all()"):
+    for piece in ("sem->val.fetch_op", "sem->schedule<ppu_thread>", "lv2_obj::awake_all()"):
         assert piece in post, "missing post path: " + piece
 
 
