@@ -14,6 +14,8 @@ assert hashlib.sha1(b'blob '+str(len(old)).encode()+b'\0'+old).hexdigest()=='87b
 s=marker.decode()+new.decode()
 assert 'int armsx3_core_test_semaphore_blocking_wake()' in s
 assert 'const bool handoff = ordered && operation == 2;' in s
+assert 'job.waiter = firstWorker ? static_cast<ppu_thread*>(peer.get()) : owner;' in s
+assert '&**peer' not in s  # named_thread is not pointer-dereferenceable
 assert 'if (ownerFirst && !handoff)' in s and 'if (peerFirst && !handoff)' in s
 assert 'if (!ordered || handoff)' in s
 for token in ('value.val == -1 && value.sq == job.waiter',
