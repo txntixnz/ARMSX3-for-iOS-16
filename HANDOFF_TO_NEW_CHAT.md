@@ -6097,3 +6097,46 @@ send startup.txt. Keep responses concise. Native P78PASS is required before
 next semaphore stage. Timeout-vs-post boundary races/multiwaiter/sharedIPC/
 serialized savestate/renderer/firmware/game boot remain untested; Midnight
 Club Los Angeles remains eventual game target.
+
+
+## 2026-10-13 — Build100 device PASS; Build101/P79 timeout then requeue/wake
+
+Device evidence: ARMSX3-startup-20261013-220929-610-20833.txt, build100,
+all77 diagnostics P2–P78 PASS and final AUTO PASS. P78 observed three exact
+100000us queued deadlines; native CELL_ETIMEDOUT restored zero permits and
+empty semaphore FIFO/timer queues, then same-object permit reuse passed.
+Roles0/1/0, TLS12/12 ->24/24 ->36/36, results6/6. No game boot claim.
+
+Build101 appends P79 armsx3_core_test_semaphore_timeout_then_wake and UI stage79.
+Entire Build100 bridge prefix remains byte-identical (git blob
+350d5213610a2ba711dd2232b25194db0a34e5f5); all49 patches unchanged.
+Three13-operation transactions retain the same semaphore handle and waiter
+across a100000us timeout and a fresh1000000us queued wait. The peer observes
+the second native FIFO entry/deadline, posts one permit through guest SC,
+and both workers must return success with zero permits and empty FIFO/timer
+queues. Full ABI/history/context/DATA/TLS/alias/cache/stack/lifecycle checks
+remain; max/overflow/invalid posts/get-value canaries/destroy/stale IDs retained.
+Totals:78SC (create9,destroy6,wait15,trywait9,post21,get-value18), nine BE32
+value outputs,234dispatches/156pauses/936instructions, TLS39/39, six queue
+observations/three expiries/three wakes; worker roles0/1/0.
+
+Validation PASS: test_p79_fixture.py preserves earlier fixture chain, freezes
+whole Build100 prefix, independently models all permit/queue/count changes,
+and verifies78 UI stages/build101/iOS16. Workflow uses the new fixture.
+Extracted native semaphore/queue/scheduler-scope/observer/SC/binder/TLS/bounded
+host harness passes eight normal runs/16workers with C++20 Wall/Wextra/Werror
+ASAN+UBSAN (detect_leaks0). Retained setup/API/ABI/context/cleanup negatives and
+260/261/263–266 pass. Fault262 initially exposed host timer fallback masking a
+missing wake signal: new host consistency guard rejects expiry after a timer
+was already canceled. This guard is a host-model check, not a native latency
+assertion. CPU/VM/ID/atomic/clock/scheduler remain models. Native timer/ARM
+scheduling and UIKit/Xcode build remain CI/device pending. Patch49 application,
+registry harness, Python/YAML/plist syntax and whitespace checks pass.
+
+Next: let user report Actions result; DO NOT poll Actions after publishing.
+After successful build, install ARMSX3_iOS16_INSTALL_THIS_IPA with TrollStore,
+reopen and run all78 diagnostics, then request startup.txt. Wait for native
+P79PASS before advancing. Target iPhone13ProMax/iOS16.0/Dopamine/TrollStore.
+Timeout-post boundary races, multiwaiter/shared IPC, serialized savestate,
+renderer, firmware and game boot remain untested. Midnight Club Los Angeles
+remains eventual target. Keep user replies concise.
