@@ -5994,3 +5994,48 @@ Device log ARMSX3-startup-20261013-042500-763-15790.txt verifies Build97 P2-P76 
 P77 replays the same production guest syscall/PPU/TLS/ID/scheduler-isolated P76 scaffold for three 12-operation transactions, but replaces operation2's nonblocking get-value/trywait on empty permits with a real timed semaphore wait of 2000000us and guest post1. Both worker-role orientations are exercised: first roles0/1/0. Peer gate is released first only for that stage. The poster observes native semaphore val -1 and exact PPU FIFO sq under its own mutex, verifies DATA/TLS and aliases have not been prematurely written, then runs the real guest SC94 to post1. The waiter must return CELL_OK through production wake and SC92; the resulting val is zero and queue empty. Queue observation count must be3. Remaining max-post/overflow/negative post, remaining permits/get-value/destroy/stale guards, all 72 SC, complete guest context/whole DATA/TLS/aliases and two PPU worker lifetime/cleanup invariants are retained from P76; six get-value writes expected instead of nine, post debug count grows from3 to4 per transaction. Expected syscall usage: create9/destroy6/wait12/trywait9/post21/get_value15. Two-second bounded queue observation and explicit failure logs are diagnostic only; actual wake timing and timeout behavior require a real device run.
 
 Host fixture independently simulates three queued negative permit and successful post-handoff transitions and verifies frozen source, guest syscall tables, roles, counts, context guards, and 72-SC totals. This is a static/scalar oracle, **not** native runtime or ARM atomic/scheduler validation. GitHub Actions Xcode compile and device P77 remain pending until CI/user test. On workflow success, install ARMSX3_iOS16_INSTALL_THIS_IPA through TrollStore, run all76 stages, share exported startup .txt. Do not infer firmware, RSX or game boot from diagnostics. Midnight Club Los Angeles remains eventual game-boot target.
+
+
+## Build 99 / P77 scheduler registration repair (2026-10-13)
+
+Latest phone log ARMSX3-startup-20261013-112735-849-17192.txt
+(libfile_efbcf3a45c248191b10e97ea0c62263e) identifies Build98: P2-P76 PASS;
+P77 hangs in first real sys_semaphore_wait and is aborted by the eight-second
+controller deadline. No native P77 success, renderer, firmware or game boot.
+Repository baseline main4abcd7e8aadc90385ac3b65246056fd812cc1dba.
+
+Root implementation defect: P77 copied the immediate-service P76 scaffold,
+but omitted the native stopped-core scheduler scope needed by blocking waits.
+P72-P75 already use armsx3_ios_ppu_probe_mutex_scheduler_and_call. Build99
+wraps the P77 workload in that same guarded two-worker admission/ready scope,
+joins the peer before restoring queues/priority/time state on success and
+exception, and leaves all49 patches and all production semaphore APIs intact.
+The poster now observes BOTH exact val=-1/FIFO waiter under semaphore mutex
+and the actual registered2000000us scheduler deadline via the existing
+read-only timeout observer before SC94. DATA/TLS premature-output checks
+remain. Observer failure signals exit to the waiter for bounded cleanup;
+returned contexts must have neither suspend nor signal flags left.
+Whole P2-P76 bridge prefix and old tests remain unchanged. Bundle99/iOS16.0;
+76 ordered diagnostics still P2-P77. No P78 added before native P77 PASS.
+
+Validation: test_p77_scheduler.py runs the unchanged P77/P76/foundational
+scalar fixtures and checks scope placement, peer join before restoration,
+registered deadline observation, failure wake and bundle metadata. Workflow
+runs this test instead of the older P77 entry point. New test_p77_pair.py
+extracts the full native semaphore API bodies, FIFO/emplace/unqueue algorithms,
+existing scheduler scope/timeout observer, guestSC/binder/dispatcher/bounded
+execution and TLS bodies onto explicit CPU/VM/ID/atomic/clock/scheduler models.
+C++20 Wall/Wextra/Werror with ASAN+UBSAN (detect_leaks=0) passes eight normal
+runs/16workers, three timed queued/post handoffs per run, first roles0/1/0,
+72SC/full DATA/TLS/context/permit/debug metadata/cleanup invariants. Retained
+immediate-service/ABI negatives pass; new mutations260 bypasses scheduler
+scope,261 refuses queue/deadline observation,262 omits wake signal are all
+rejected. These are HOST model tests, not native timer or ARM atomics evidence.
+Unchanged49-patch application/read-only observers and native semaphore/mutex
+registry allocation harnesses pass. Xcode/iPhone compile remains CI-only.
+
+On successful workflow install ARMSX3_iOS16_INSTALL_THIS_IPA via TrollStore,
+reopen the app, run all76 diagnostics, send exported startup.txt. Do not
+monitor Actions after pushing; user reports completion/failure. Keep replies
+concise. Midnight Club Los Angeles remains eventual game target; timeout
+expiry/multiwaiter/sharedIPC/renderer/firmware/game boot remain untested.

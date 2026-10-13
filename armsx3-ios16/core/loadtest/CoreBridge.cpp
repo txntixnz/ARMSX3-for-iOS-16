@@ -31671,10 +31671,11 @@ extern "C" __attribute__((visibility("default"))) int armsx3_core_test_semaphore
                                 std::lock_guard lock(value.mutex);
                                 queued = value.val == -1 && value.sq == job.waiter && value.exists == 1;
                             });
-                            if (sem && queued) { observed = true; break; }
+                            if (sem && queued && armsx3_ios_ppu_probe_mutex_timeout_state(job.waiter, &context, 2000000) == 1) { observed = true; break; }
                             std::this_thread::yield();
                         }
                         if (!observed) throw std::runtime_error("P77 actual queued native semaphore waiter was not observed");
+                        ARMSX3StartupLog("P77 observed native semaphore FIFO waiter and registered scheduler deadline before post");
                         if (std::memcmp(vm::base(0x20000), job.dataSnapshot->data(), 0x10000) ||
                             std::memcmp(vm::get_super_ptr(0x20000), job.dataSnapshot->data(), 0x10000) ||
                             std::memcmp(vm::base(0x50000), job.tlsSnapshot->data(), 0x40000) ||
@@ -31684,7 +31685,13 @@ extern "C" __attribute__((visibility("default"))) int armsx3_core_test_semaphore
                     }
                     job.result = armsx3_ios_ppu_exec_bounded(&context, job.begin, job.end, job.budget);
                 }
-                catch (const std::exception& error) { ARMSX3StartupLog(error.what()); job.result = -7; }
+                catch (const std::exception& error) {
+                    ARMSX3StartupLog(error.what()); job.result = -7;
+                    if (job.observeQueue && job.waiter) {
+                        job.waiter->state += cpu_flag::exit; job.waiter->state.notify_one();
+                        job.waiter->cmd_notify.store(1); job.waiter->cmd_notify.notify_one();
+                    }
+                }
             }
             job.registers = {context.gpr[1], context.gpr[2], context.gpr[3], context.gpr[4], context.gpr[6],
                 context.gpr[7], context.gpr[8], context.gpr[9], context.gpr[10], context.gpr[13], context.ctr, context.cia,
@@ -31707,7 +31714,7 @@ extern "C" __attribute__((visibility("default"))) int armsx3_core_test_semaphore
                 const be_t<v128> value = context.vr[i + 1];
                 std::memcpy(job.selectedVectors.data() + i * 16, &value, sizeof(value));
             }
-            job.clean = !context.current_function && !context.interrupt_thread_executing && !(context.state & cpu_flag::exit) && !(context.state & cpu_flag::again);
+            job.clean = !context.current_function && !context.interrupt_thread_executing && !(context.state & cpu_flag::exit) && !(context.state & cpu_flag::again) && !(context.state & cpu_flag::suspend) && !(context.state & cpu_flag::signal);
         };
         auto* data = static_cast<u8*>(vm::base(dataAddress));
         std::memset(data, 0xa5, 0x10000); std::memcpy(data + 0x80, "iOSProbe", 9);
@@ -31842,195 +31849,203 @@ extern "C" __attribute__((visibility("default"))) int armsx3_core_test_semaphore
                         if (armsx3_ios_ppu_probe_free_peer_tls(owner, pool, peerTLS) != -1 ||
                             armsx3_ios_ppu_probe_alloc_peer_tls(owner, pool))
                             throw std::runtime_error("P77 active peer TLS allocation/free guards failed");
-                        const auto namesForHistory = [](u32 code) -> const char* {
-                            switch (code) { case 90: return "sys_semaphore_create"; case 91: return "sys_semaphore_destroy";
-                                case 92: return "sys_semaphore_wait"; case 93: return "sys_semaphore_trywait";
-                                case 94: return "sys_semaphore_post"; case 114: return "sys_semaphore_get_value"; }
-                            return "invalid";
-                        };
-                        std::vector<u8> expectedPool(0x40000, 0);
-                        for (u32 i = 0; i < 3; ++i) std::memcpy(expectedPool.data() + 0x60 + i * 0x70, "iOSProbe", 9);
-                        for (u32 transaction = 0; transaction < 3; ++transaction)
-                        {
-                            const u32 firstWorker = transaction % 2;
-                            u32 semaphoreID = 0;
-                            for (u32 operation = 0; operation < 12; ++operation)
-                            for (u32 slice = 0; slice < 3; ++slice)
-                            {
-                                const u32 call = transaction * 12 + operation, round = call * 3 + slice;
-                                for (u32 i = 0; i < 2; ++i) {
-                                    auto& job = program.jobs[i]; job.round = round; job.slice = slice;
-                                    job.input = 0x21000 + call * 0x40 + i * 0x20;
-                                    job.output = 0x20200 + call * 0x20 + i * 0x10;
-                                    const bool first = i == firstWorker;
-                                    job.observeQueue = operation == 2 && slice == 1 && !first;
-                                    job.semaphore = semaphoreID;
-                                    job.waiter = firstWorker ? static_cast<ppu_thread*>(peer.get()) : owner;
-                                    job.observations = &program.queueObserved;
-                                    job.dataSnapshot = program.expectedData;
-                                    job.tlsSnapshot = &expectedPool;
-                                    const std::array<u32, 12> firstCodes{90, 92, 92, 94, 94, 92, 93, 94, 114, 91, 91, 90};
-                                    const std::array<u32, 12> secondCodes{90, 93, 94, 114, 94, 93, 114, 94, 92, 114, 94, 114};
-                                    const std::array<u32, 12> firstErrors{0, 0, 0, 0, CELL_EBUSY, 0, 0, CELL_EINVAL, 0, 0, CELL_ESRCH, CELL_EINVAL};
-                                    const std::array<u32, 12> secondErrors{CELL_EFAULT, 0, 0, 0, CELL_EINVAL, 0, CELL_EFAULT, 0, 0, CELL_ESRCH, CELL_ESRCH, CELL_ESRCH};
-                                    const u32 syscall = first ? firstCodes[operation] : secondCodes[operation];
-                                    const std::array<u64, 3> timeouts{0, 0x1122334455667788ull, 0xfedcba9876543210ull};
-                                    const u32 countOutput = 0x24000 + call * 0x10 + i * 4;
-                                    const u64 second = syscall == 90 ? 0x23040ull : syscall == 92 ? (first && operation == 2 ? 2000000ull : timeouts[(call + i) % timeouts.size()]) :
-                                        syscall == 114 ? (!first && operation == 6 ? 0ull : countOutput) :
-                                        syscall == 94 ? (first && operation == 3 ? 3ull : first && operation == 7 ? 0xffffffffull :
-                                            !first && operation == 4 ? 0ull : 1ull) : 0ull;
-                                    job.arguments = {syscall == 90 ? (operation == 0 && !first ? 0u : 0x23000u) :
-                                            !first && operation == 11 ? 0u : semaphoreID, second, syscall,
-                                        syscall == 90 ? (operation == 11 ? 0xffffffffull : 2ull) : 0ull, syscall == 90 ? 3ull : 0ull};
-                                    job.expectedError = first ? firstErrors[operation] : secondErrors[operation];
-                                    if (!slice) {
-                                        // Keep32bit IDs/initial/max and full64 second argument in a24byte descriptor.
-                                        const std::array<be_t<u32>, 2> header{u32(job.arguments[0]), u32(job.arguments[2])};
-                                        const be_t<u64> second = job.arguments[1];
-                                        const std::array<be_t<u32>, 2> trailing{u32(job.arguments[3]), u32(job.arguments[4])};
-                                        std::memcpy(vm::base(job.input), header.data(), sizeof(header));
-                                        std::memcpy(vm::base(job.input + 8), &second, sizeof(second));
-                                        std::memcpy(vm::base(job.input + 16), trailing.data(), sizeof(trailing));
-                                        std::memcpy(program.expectedData->data() + job.input - 0x20000, header.data(), sizeof(header));
-                                        std::memcpy(program.expectedData->data() + job.input - 0x20000 + 8, &second, sizeof(second));
-                                        std::memcpy(program.expectedData->data() + job.input - 0x20000 + 16, trailing.data(), sizeof(trailing));
-                                    }
-                                    const std::array<u32, 3> budgets{5, 1, 6}; job.budget = budgets[slice];
-                                }
-                                peer->cmd_list({{ppu_cmd::ptr_call, 0}, std::bit_cast<u64>(executePeer)});
-                                peer->cmd_notify.store(1); peer->cmd_notify.notify_one();
-                                const auto readyDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
-                                while (program.jobs[1].ready.load(std::memory_order_acquire) < round + 1 && std::chrono::steady_clock::now() < readyDeadline)
-                                    std::this_thread::yield();
-                                if (program.jobs[1].ready.load(std::memory_order_acquire) != round + 1 || armsx3_ios_live_cpu_threads() != 2)
-                                    throw std::runtime_error("P77 peer did not reach next semaphore slice gate");
-                                // Order permit mutations/count output/destruction explicitly in both worker roles.
-                                const bool ordered = slice == 1;
-                                const bool handoff = ordered && operation == 2;
-                                const bool ownerFirst = ordered && firstWorker == 0;
-                                const bool peerFirst = ordered && firstWorker == 1;
-                                if (ownerFirst && !handoff) { callback.runner(*owner, program.jobs[0]); vm::temporary_unlock(*owner); }
-                                program.gate.released.store(round + 1, std::memory_order_release);
-                                if (!ordered || handoff) { callback.runner(*owner, program.jobs[0]); vm::temporary_unlock(*owner); }
-                                const auto finishDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
-                                while (program.jobs[1].completed.load(std::memory_order_acquire) < round + 1 && std::chrono::steady_clock::now() < finishDeadline)
-                                    std::this_thread::yield();
-                                if (program.jobs[1].completed.load(std::memory_order_acquire) != round + 1)
-                                    throw std::runtime_error("P77 peer semaphore slice deadline/count mismatch");
-                                waitForQueue();
-                                if (peerFirst && !handoff) { callback.runner(*owner, program.jobs[0]); vm::temporary_unlock(*owner); }
-                                if (handoff && program.queueObserved.load(std::memory_order_acquire) != transaction + 1)
-                                    throw std::runtime_error("P77 three native blocking wake observations differ");
-                                const auto expectedWord = [&](u32 offset, u32 value) {
-                                    const be_t<u32> word = value;
-                                    std::memcpy(program.expectedData->data() + offset, &word, sizeof(word));
+                        // Use the same stopped-core scheduler scope proven by P72-P75.
+                        // The peer must join before scope restoration touches either worker.
+                        auto scopeWork = [&]() -> int {
+                            try {
+                                const auto namesForHistory = [](u32 code) -> const char* {
+                                    switch (code) { case 90: return "sys_semaphore_create"; case 91: return "sys_semaphore_destroy";
+                                        case 92: return "sys_semaphore_wait"; case 93: return "sys_semaphore_trywait";
+                                        case 94: return "sys_semaphore_post"; case 114: return "sys_semaphore_get_value"; }
+                                    return "invalid";
                                 };
-                                if (operation == 0 && slice == 1) {
-                                    semaphoreID = *static_cast<be_t<u32>*>(vm::base(0x23000));
-                                    if (!semaphoreID || (semaphoreID & 0xff000000u) != lv2_sema::id_base)
-                                        throw std::runtime_error("P77 native create did not publish a semaphore handle");
-                                    expectedWord(0x3000, semaphoreID);
-                                }
-                                const bool liveSemaphore = operation == 0 ? slice >= 1 : operation < 9 || (operation == 9 && slice == 0);
-                                const std::array<s32, 12> afterValues{2, 0, 0, 3, 3, 1, 0, 1, 0, 0, 0, 0};
-                                const s32 expectedValue = slice ? afterValues[operation] : operation ? afterValues[operation - 1] : 0;
-                                const u64 expectedPosts = operation < 2 || (operation == 2 && !slice) ? 0u :
-                                    operation == 2 || (operation == 3 && !slice) ? 1u :
-                                    operation == 3 || (operation == 4 && !slice) ? 2u :
-                                    operation < 7 || (operation == 7 && !slice) ? 3u : 4u;
-                                const u32 expectedPoster = expectedPosts ? ppu_thread::id_base +
-                                    ((expectedPosts == 1 || expectedPosts == 4) ? 1 - firstWorker : firstWorker) : 0u;
-                                bool objectValid = false;
-                                const auto object = idm::get<lv2_obj, lv2_sema>(semaphoreID, [&](lv2_sema& sema) {
-                                    objectValid = sema.val == expectedValue && !sema.sq && sema.exists == 1 &&
-                                        sema.max == 3 && sema.protocol == SYS_SYNC_FIFO && !sema.key &&
-                                        !std::memcmp(&sema.name, "iOSSema!", 8) && sema.dbg_post_count == expectedPosts &&
-                                        sema.dbg_last_poster == expectedPoster &&
-                                        sema.dbg_last_post_lr == (expectedPosts ? 0x12340000u : 0u) &&
-                                        (expectedPosts ? sema.dbg_last_post_us != 0 : sema.dbg_last_post_us == 0);
-                                });
-                                if (bool(object) != liveSemaphore || (liveSemaphore && !objectValid) ||
-                                    SemaphoreCleanup::ids().size() != (liveSemaphore ? 1u : 0u))
-                                    throw std::runtime_error("P77 native semaphore permits/max/metadata/queue/lifecycle differs");
-                                if (slice == 1) for (u32 i = 0; i < 2; ++i) {
-                                    const auto& job = program.jobs[i];
-                                    if (job.arguments[2] == 114 && !job.expectedError) {
-                                        const u32 value = operation == 3 ? 3u : operation == 8 ? 1u : 0u;
-                                        expectedWord(u32(job.arguments[1]) - 0x20000, value);
+                                std::vector<u8> expectedPool(0x40000, 0);
+                                for (u32 i = 0; i < 3; ++i) std::memcpy(expectedPool.data() + 0x60 + i * 0x70, "iOSProbe", 9);
+                                for (u32 transaction = 0; transaction < 3; ++transaction)
+                                {
+                                    const u32 firstWorker = transaction % 2;
+                                    u32 semaphoreID = 0;
+                                    for (u32 operation = 0; operation < 12; ++operation)
+                                    for (u32 slice = 0; slice < 3; ++slice)
+                                    {
+                                        const u32 call = transaction * 12 + operation, round = call * 3 + slice;
+                                        for (u32 i = 0; i < 2; ++i) {
+                                            auto& job = program.jobs[i]; job.round = round; job.slice = slice;
+                                            job.input = 0x21000 + call * 0x40 + i * 0x20;
+                                            job.output = 0x20200 + call * 0x20 + i * 0x10;
+                                            const bool first = i == firstWorker;
+                                            job.observeQueue = operation == 2 && slice == 1 && !first;
+                                            job.semaphore = semaphoreID;
+                                            job.waiter = firstWorker ? static_cast<ppu_thread*>(peer.get()) : owner;
+                                            job.observations = &program.queueObserved;
+                                            job.dataSnapshot = program.expectedData;
+                                            job.tlsSnapshot = &expectedPool;
+                                            const std::array<u32, 12> firstCodes{90, 92, 92, 94, 94, 92, 93, 94, 114, 91, 91, 90};
+                                            const std::array<u32, 12> secondCodes{90, 93, 94, 114, 94, 93, 114, 94, 92, 114, 94, 114};
+                                            const std::array<u32, 12> firstErrors{0, 0, 0, 0, CELL_EBUSY, 0, 0, CELL_EINVAL, 0, 0, CELL_ESRCH, CELL_EINVAL};
+                                            const std::array<u32, 12> secondErrors{CELL_EFAULT, 0, 0, 0, CELL_EINVAL, 0, CELL_EFAULT, 0, 0, CELL_ESRCH, CELL_ESRCH, CELL_ESRCH};
+                                            const u32 syscall = first ? firstCodes[operation] : secondCodes[operation];
+                                            const std::array<u64, 3> timeouts{0, 0x1122334455667788ull, 0xfedcba9876543210ull};
+                                            const u32 countOutput = 0x24000 + call * 0x10 + i * 4;
+                                            const u64 second = syscall == 90 ? 0x23040ull : syscall == 92 ? (first && operation == 2 ? 2000000ull : timeouts[(call + i) % timeouts.size()]) :
+                                                syscall == 114 ? (!first && operation == 6 ? 0ull : countOutput) :
+                                                syscall == 94 ? (first && operation == 3 ? 3ull : first && operation == 7 ? 0xffffffffull :
+                                                    !first && operation == 4 ? 0ull : 1ull) : 0ull;
+                                            job.arguments = {syscall == 90 ? (operation == 0 && !first ? 0u : 0x23000u) :
+                                                    !first && operation == 11 ? 0u : semaphoreID, second, syscall,
+                                                syscall == 90 ? (operation == 11 ? 0xffffffffull : 2ull) : 0ull, syscall == 90 ? 3ull : 0ull};
+                                            job.expectedError = first ? firstErrors[operation] : secondErrors[operation];
+                                            if (!slice) {
+                                                // Keep32bit IDs/initial/max and full64 second argument in a24byte descriptor.
+                                                const std::array<be_t<u32>, 2> header{u32(job.arguments[0]), u32(job.arguments[2])};
+                                                const be_t<u64> second = job.arguments[1];
+                                                const std::array<be_t<u32>, 2> trailing{u32(job.arguments[3]), u32(job.arguments[4])};
+                                                std::memcpy(vm::base(job.input), header.data(), sizeof(header));
+                                                std::memcpy(vm::base(job.input + 8), &second, sizeof(second));
+                                                std::memcpy(vm::base(job.input + 16), trailing.data(), sizeof(trailing));
+                                                std::memcpy(program.expectedData->data() + job.input - 0x20000, header.data(), sizeof(header));
+                                                std::memcpy(program.expectedData->data() + job.input - 0x20000 + 8, &second, sizeof(second));
+                                                std::memcpy(program.expectedData->data() + job.input - 0x20000 + 16, trailing.data(), sizeof(trailing));
+                                            }
+                                            const std::array<u32, 3> budgets{5, 1, 6}; job.budget = budgets[slice];
+                                        }
+                                        peer->cmd_list({{ppu_cmd::ptr_call, 0}, std::bit_cast<u64>(executePeer)});
+                                        peer->cmd_notify.store(1); peer->cmd_notify.notify_one();
+                                        const auto readyDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+                                        while (program.jobs[1].ready.load(std::memory_order_acquire) < round + 1 && std::chrono::steady_clock::now() < readyDeadline)
+                                            std::this_thread::yield();
+                                        if (program.jobs[1].ready.load(std::memory_order_acquire) != round + 1 || armsx3_ios_live_cpu_threads() != 2)
+                                            throw std::runtime_error("P77 peer did not reach next semaphore slice gate");
+                                        // Order permit mutations/count output/destruction explicitly in both worker roles.
+                                        const bool ordered = slice == 1;
+                                        const bool handoff = ordered && operation == 2;
+                                        const bool ownerFirst = ordered && firstWorker == 0;
+                                        const bool peerFirst = ordered && firstWorker == 1;
+                                        if (ownerFirst && !handoff) { callback.runner(*owner, program.jobs[0]); vm::temporary_unlock(*owner); }
+                                        program.gate.released.store(round + 1, std::memory_order_release);
+                                        if (!ordered || handoff) { callback.runner(*owner, program.jobs[0]); vm::temporary_unlock(*owner); }
+                                        const auto finishDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+                                        while (program.jobs[1].completed.load(std::memory_order_acquire) < round + 1 && std::chrono::steady_clock::now() < finishDeadline)
+                                            std::this_thread::yield();
+                                        if (program.jobs[1].completed.load(std::memory_order_acquire) != round + 1)
+                                            throw std::runtime_error("P77 peer semaphore slice deadline/count mismatch");
+                                        waitForQueue();
+                                        if (peerFirst && !handoff) { callback.runner(*owner, program.jobs[0]); vm::temporary_unlock(*owner); }
+                                        if (handoff && program.queueObserved.load(std::memory_order_acquire) != transaction + 1)
+                                            throw std::runtime_error("P77 three native blocking wake observations differ");
+                                        const auto expectedWord = [&](u32 offset, u32 value) {
+                                            const be_t<u32> word = value;
+                                            std::memcpy(program.expectedData->data() + offset, &word, sizeof(word));
+                                        };
+                                        if (operation == 0 && slice == 1) {
+                                            semaphoreID = *static_cast<be_t<u32>*>(vm::base(0x23000));
+                                            if (!semaphoreID || (semaphoreID & 0xff000000u) != lv2_sema::id_base)
+                                                throw std::runtime_error("P77 native create did not publish a semaphore handle");
+                                            expectedWord(0x3000, semaphoreID);
+                                        }
+                                        const bool liveSemaphore = operation == 0 ? slice >= 1 : operation < 9 || (operation == 9 && slice == 0);
+                                        const std::array<s32, 12> afterValues{2, 0, 0, 3, 3, 1, 0, 1, 0, 0, 0, 0};
+                                        const s32 expectedValue = slice ? afterValues[operation] : operation ? afterValues[operation - 1] : 0;
+                                        const u64 expectedPosts = operation < 2 || (operation == 2 && !slice) ? 0u :
+                                            operation == 2 || (operation == 3 && !slice) ? 1u :
+                                            operation == 3 || (operation == 4 && !slice) ? 2u :
+                                            operation < 7 || (operation == 7 && !slice) ? 3u : 4u;
+                                        const u32 expectedPoster = expectedPosts ? ppu_thread::id_base +
+                                            ((expectedPosts == 1 || expectedPosts == 4) ? 1 - firstWorker : firstWorker) : 0u;
+                                        bool objectValid = false;
+                                        const auto object = idm::get<lv2_obj, lv2_sema>(semaphoreID, [&](lv2_sema& sema) {
+                                            objectValid = sema.val == expectedValue && !sema.sq && sema.exists == 1 &&
+                                                sema.max == 3 && sema.protocol == SYS_SYNC_FIFO && !sema.key &&
+                                                !std::memcmp(&sema.name, "iOSSema!", 8) && sema.dbg_post_count == expectedPosts &&
+                                                sema.dbg_last_poster == expectedPoster &&
+                                                sema.dbg_last_post_lr == (expectedPosts ? 0x12340000u : 0u) &&
+                                                (expectedPosts ? sema.dbg_last_post_us != 0 : sema.dbg_last_post_us == 0);
+                                        });
+                                        if (bool(object) != liveSemaphore || (liveSemaphore && !objectValid) ||
+                                            SemaphoreCleanup::ids().size() != (liveSemaphore ? 1u : 0u))
+                                            throw std::runtime_error("P77 native semaphore permits/max/metadata/queue/lifecycle differs");
+                                        if (slice == 1) for (u32 i = 0; i < 2; ++i) {
+                                            const auto& job = program.jobs[i];
+                                            if (job.arguments[2] == 114 && !job.expectedError) {
+                                                const u32 value = operation == 3 ? 3u : operation == 8 ? 1u : 0u;
+                                                expectedWord(u32(job.arguments[1]) - 0x20000, value);
+                                            }
+                                        }
+                                        for (u32 i = 0; i < 2; ++i) {
+                                            const auto& job = program.jobs[i]; const u64 error = u64(s64(s32(job.expectedError)));
+                                            std::array<u64, 35> expected{};
+                                            for (u32 reg = 0; reg < 32; ++reg) expected[reg] = 0xa5a5000000000000ull + reg;
+                                            expected[1] = 0x38000u + i * 0x10000u - ppu_stack_start_offset;
+                                            expected[3] = slice ? error : job.arguments[0]; expected[4] = job.arguments[1];
+                                            expected[5] = job.arguments[3]; expected[6] = job.arguments[4]; expected[9] = job.output; expected[11] = job.arguments[2];
+                                            if (slice == 2) expected[12] = call + 1;
+                                            expected[13] = 0x57060u + i * 0x70;
+                                            expected[30] = u64(reinterpret_cast<uintptr_t>(&callback));
+                                            expected[32] = 0x76540000; expected[33] = 0x12340000;
+                                            const std::array<u32, 3> pcs{20, 24, 48}; expected[34] = job.begin + pcs[slice];
+                                            const u32 xer = (i ? 0u : 0x80000000u) | ((call & 1u) << 30) | (i ? 0x20000000u : 0u) | (0x15 + call + i);
+                                            const std::array<u32, 4> expectedStatus{0x8a6c5e79u ^ (call << 8) ^ (i << 12), xer,
+                                                0x13579bdfu ^ (call << 20) ^ (i << 24), 0x5aa50000u | (call << 8) | i};
+                                            if (job.historyIndex != call + (slice ? 1u : 0u))
+                                                throw std::runtime_error("P77 production syscall count differs");
+                                            if (slice) {
+                                                const std::array<u64, 4> args{job.arguments[0], job.arguments[1], job.arguments[3], job.arguments[4]};
+                                                std::array<u64, 8> abi{}; abi[0] = job.arguments[0];
+                                                for (u32 arg = 1; arg < 8; ++arg) abi[arg] = expected[arg + 3];
+                                                if (!job.historyName || std::strcmp(job.historyName, namesForHistory(job.arguments[2])) ||
+                                                    job.historyCIA != job.begin + 20 || job.historyError != error || job.historyArgs != args ||
+                                                    !job.lastName || std::strcmp(job.lastName, namesForHistory(job.arguments[2])) || job.syscallArgs != abi)
+                                                    throw std::runtime_error("P77 native SC ABI/history/signed result differs");
+                                            } else if (job.lastName || job.syscallArgs != std::array<u64, 8>{})
+                                                throw std::runtime_error("P77 syscall executed before its paused SC boundary");
+                                            if (!job.tls || !job.clean || !job.resumed || !job.reservationClean ||
+                                                job.continuation != expected || job.status != expectedStatus || job.exitAck.load() ||
+                                                job.result != (slice < 2 ? -2 : 6))
+                                                throw std::runtime_error("P77 exact paused syscall context/result differs");
+                                            for (u64 value : job.floating)
+                                                if (value != std::bit_cast<u64>(7.0)) throw std::runtime_error("P77 untouched FPR differs");
+                                            for (u8 value : job.vectors)
+                                                if (value != 0x3c) throw std::runtime_error("P77 untouched VR differs");
+                                            if (slice == 2) {
+                                                expectedWord(job.output - 0x20000, job.expectedError);
+                                                expectedWord(job.output - 0x20000 + 4, call + 1);
+                                                const be_t<u32> word = call + 1;
+                                                std::memcpy(expectedPool.data() + 0x6c + i * 0x70, &word, sizeof(word));
+                                                program.totals[i] = call + 1;
+                                            }
+                                        }
+                                        if (std::memcmp(vm::base(pool), expectedPool.data(), expectedPool.size()) ||
+                                            std::memcmp(vm::get_super_ptr(pool), expectedPool.data(), expectedPool.size()) ||
+                                            std::memcmp(vm::base(0x20000), program.expectedData->data(), 0x10000) ||
+                                            std::memcmp(vm::get_super_ptr(0x20000), program.expectedData->data(), 0x10000))
+                                            throw std::runtime_error("P77 semaphore/deferred outputs/TLS/aliases differ");
+                                        for (u32 i = 0; i < 2; ++i)
+                                            if (std::memcmp(vm::base(0x30000u + i * 0x10000u), (*program.expectedStacks)[i].data(), 0x10000) ||
+                                                std::memcmp(vm::get_super_ptr(0x30000u + i * 0x10000u), (*program.expectedStacks)[i].data(), 0x10000))
+                                                throw std::runtime_error("P77 untouched stack canary/alias differs");
+                                        ++program.slices;
                                     }
+                                    ++program.batches;
+                                    char message[256];
+                                    std::snprintf(message, sizeof(message), "P77 PASS: transaction=%u first worker=%u, semaphore create/consume/queued native wait-post wake/max post/overflow EBUSY/zero-negative post EINVAL/value output and error canaries/destroy/stale ESRCH/full64 wait ABI, TLS=%u/%u results=%d/%d",
+                                        transaction + 1, firstWorker, program.totals[0], program.totals[1],
+                                        program.jobs[0].result, program.jobs[1].result);
+                                    ARMSX3StartupLog(message);
                                 }
-                                for (u32 i = 0; i < 2; ++i) {
-                                    const auto& job = program.jobs[i]; const u64 error = u64(s64(s32(job.expectedError)));
-                                    std::array<u64, 35> expected{};
-                                    for (u32 reg = 0; reg < 32; ++reg) expected[reg] = 0xa5a5000000000000ull + reg;
-                                    expected[1] = 0x38000u + i * 0x10000u - ppu_stack_start_offset;
-                                    expected[3] = slice ? error : job.arguments[0]; expected[4] = job.arguments[1];
-                                    expected[5] = job.arguments[3]; expected[6] = job.arguments[4]; expected[9] = job.output; expected[11] = job.arguments[2];
-                                    if (slice == 2) expected[12] = call + 1;
-                                    expected[13] = 0x57060u + i * 0x70;
-                                    expected[30] = u64(reinterpret_cast<uintptr_t>(&callback));
-                                    expected[32] = 0x76540000; expected[33] = 0x12340000;
-                                    const std::array<u32, 3> pcs{20, 24, 48}; expected[34] = job.begin + pcs[slice];
-                                    const u32 xer = (i ? 0u : 0x80000000u) | ((call & 1u) << 30) | (i ? 0x20000000u : 0u) | (0x15 + call + i);
-                                    const std::array<u32, 4> expectedStatus{0x8a6c5e79u ^ (call << 8) ^ (i << 12), xer,
-                                        0x13579bdfu ^ (call << 20) ^ (i << 24), 0x5aa50000u | (call << 8) | i};
-                                    if (job.historyIndex != call + (slice ? 1u : 0u))
-                                        throw std::runtime_error("P77 production syscall count differs");
-                                    if (slice) {
-                                        const std::array<u64, 4> args{job.arguments[0], job.arguments[1], job.arguments[3], job.arguments[4]};
-                                        std::array<u64, 8> abi{}; abi[0] = job.arguments[0];
-                                        for (u32 arg = 1; arg < 8; ++arg) abi[arg] = expected[arg + 3];
-                                        if (!job.historyName || std::strcmp(job.historyName, namesForHistory(job.arguments[2])) ||
-                                            job.historyCIA != job.begin + 20 || job.historyError != error || job.historyArgs != args ||
-                                            !job.lastName || std::strcmp(job.lastName, namesForHistory(job.arguments[2])) || job.syscallArgs != abi)
-                                            throw std::runtime_error("P77 native SC ABI/history/signed result differs");
-                                    } else if (job.lastName || job.syscallArgs != std::array<u64, 8>{})
-                                        throw std::runtime_error("P77 syscall executed before its paused SC boundary");
-                                    if (!job.tls || !job.clean || !job.resumed || !job.reservationClean ||
-                                        job.continuation != expected || job.status != expectedStatus || job.exitAck.load() ||
-                                        job.result != (slice < 2 ? -2 : 6))
-                                        throw std::runtime_error("P77 exact paused syscall context/result differs");
-                                    for (u64 value : job.floating)
-                                        if (value != std::bit_cast<u64>(7.0)) throw std::runtime_error("P77 untouched FPR differs");
-                                    for (u8 value : job.vectors)
-                                        if (value != 0x3c) throw std::runtime_error("P77 untouched VR differs");
-                                    if (slice == 2) {
-                                        expectedWord(job.output - 0x20000, job.expectedError);
-                                        expectedWord(job.output - 0x20000 + 4, call + 1);
-                                        const be_t<u32> word = call + 1;
-                                        std::memcpy(expectedPool.data() + 0x6c + i * 0x70, &word, sizeof(word));
-                                        program.totals[i] = call + 1;
-                                    }
-                                }
-                                if (std::memcmp(vm::base(pool), expectedPool.data(), expectedPool.size()) ||
-                                    std::memcmp(vm::get_super_ptr(pool), expectedPool.data(), expectedPool.size()) ||
-                                    std::memcmp(vm::base(0x20000), program.expectedData->data(), 0x10000) ||
-                                    std::memcmp(vm::get_super_ptr(0x20000), program.expectedData->data(), 0x10000))
-                                    throw std::runtime_error("P77 semaphore/deferred outputs/TLS/aliases differ");
-                                for (u32 i = 0; i < 2; ++i)
-                                    if (std::memcmp(vm::base(0x30000u + i * 0x10000u), (*program.expectedStacks)[i].data(), 0x10000) ||
-                                        std::memcmp(vm::get_super_ptr(0x30000u + i * 0x10000u), (*program.expectedStacks)[i].data(), 0x10000))
-                                        throw std::runtime_error("P77 untouched stack canary/alias differs");
-                                ++program.slices;
-                            }
-                            ++program.batches;
-                            char message[256];
-                            std::snprintf(message, sizeof(message), "P77 PASS: transaction=%u first worker=%u, semaphore create/consume/queued native wait-post wake/max post/overflow EBUSY/zero-negative post EINVAL/value output and error canaries/destroy/stale ESRCH/full64 wait ABI, TLS=%u/%u results=%d/%d",
-                                transaction + 1, firstWorker, program.totals[0], program.totals[1],
-                                program.jobs[0].result, program.jobs[1].result);
-                            ARMSX3StartupLog(message);
-                        }
-                        peer->cmd_list({{ppu_cmd::ptr_call, 0}, std::bit_cast<u64>(exitPeer)});
-                        peer->cmd_notify.store(1); peer->cmd_notify.notify_one();
-                        vm::temporary_unlock(*owner);
-                        (*peer)(); joined = true;
-                        if (program.jobs[1].exitAck.load(std::memory_order_acquire) != 1 || peer->gpr[13] != peerTLS ||
-                            armsx3_ios_ppu_probe_free_peer_tls(owner, pool, peerTLS) != 0 ||
-                            armsx3_ios_ppu_probe_free_peer_tls(owner, pool, peerTLS) != -1)
-                            throw std::runtime_error("P77 queued peer exit/retained TLS/join/release mismatch");
-                        peerTLS = 0; program.tlsMemory = true;
-                        return program.jobs[0].result;
+                                peer->cmd_list({{ppu_cmd::ptr_call, 0}, std::bit_cast<u64>(exitPeer)});
+                                peer->cmd_notify.store(1); peer->cmd_notify.notify_one();
+                                vm::temporary_unlock(*owner);
+                                (*peer)(); joined = true;
+                                if (program.jobs[1].exitAck.load(std::memory_order_acquire) != 1 || peer->gpr[13] != peerTLS ||
+                                    armsx3_ios_ppu_probe_free_peer_tls(owner, pool, peerTLS) != 0 ||
+                                    armsx3_ios_ppu_probe_free_peer_tls(owner, pool, peerTLS) != -1)
+                                    throw std::runtime_error("P77 queued peer exit/retained TLS/join/release mismatch");
+                                peerTLS = 0; program.tlsMemory = true;
+                                return program.jobs[0].result;
+                            } catch (...) { program.gate.cancel.store(true, std::memory_order_release); cleanup.join(); throw; }
+                        };
+                        const auto invokeScope = +[](void* user) -> int { return (*static_cast<decltype(scopeWork)*>(user))(); };
+                        return armsx3_ios_ppu_probe_mutex_scheduler_and_call(owner, peer.get(), invokeScope, &scopeWork);
                     } catch (const std::exception& error) { ARMSX3StartupLog(error.what()); throw; }
                 };
                 program.result = armsx3_ios_ppu_probe_tls_and_call(&context, 0x20080, 9, 64, callWithTLS, &callback);
