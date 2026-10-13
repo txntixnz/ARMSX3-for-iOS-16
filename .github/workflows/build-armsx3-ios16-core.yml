@@ -56,7 +56,7 @@ jobs:
           set -euo pipefail
           python3 armsx3-ios16/ios/scripts/audit-hook-consumers.py upstream-armsx3
           python3 armsx3-ios16/tests/test_p43_patch.py upstream-armsx3/rpcs3/Emu/Cell/lv2/sys_memory.cpp
-          python3 armsx3-ios16/tests/test_p74_fixture.py
+          python3 armsx3-ios16/tests/test_p75_fixture.py
           python3 armsx3-ios16/tests/test_p73_patch.py upstream-armsx3
           python3 armsx3-ios16/tests/test_p69_registry.py upstream-armsx3
           for patch in armsx3-ios16/patches/*.patch; do

@@ -5745,3 +5745,116 @@ log. No P75 before nativeP74PASS. Exact wall-time latency/deadline-boundary unlo
 races/multiwaiter/cancellation replay/weak-memory stress/recursive overflow/
 serialized savestate/import loader/renderer/firmware/game boot remain untested.
 Midnight Club Los Angeles goal retained.
+
+## Build 96 / P75 — same-mutex timeout then timed wake reuse (2026-10-12)
+
+Phone evidence ARMSX3-startup-20261012-214622-999-12165.txt (Library
+libfile_147b3c5b130c81919f6a18b4fd66d816), also supplied as identical-named
+run duplicate ARMSX3-startup-20261012-214622-999-12165(1).txt (Library
+libfile_2d6487e42b148191a20b04a2801733c7). Original read header/tail via Library;
+new attachment read locally and independently verified Build95 ALL73 ordered
+P2–P74 AUTO PASS/final all-stage PASS/no FAIL. P74native transactions1/2/3:
+roles0/1/0, TLS12/12→24/24→36/36, results6/6. Actual timed deadline registration,
+guest unlock/reown/signal/success/pending timer removal and ID/scheduler cleanup
+PASS. Native P74start1791841580.971345→finish1580.983964 (~12.6ms for3timed
+wake lifecycles, observation only). P73 expiry also remains PASS in this run.
+Standing continue authorization and nativeP74PASS permit next build.
+
+Build96 appends armsx3_core_test_mutex_timeout_then_wake / P75, UI stage74,
+bundle96/minimumiOS16.0. Entire Build95 CoreBridge2395588-byte prefix frozen,
+SHA256d8f971381ef9347e4abe0c01c8ac138fb4d8a3a899891e978a9a6b98b1b05455.
+All49 patches and all previous test files unchanged. Uses patch48 native pair
+scope and patch49 read-only native timeout-state/finished-state observers.
+Upstream pin unchanged92b931b9fb5eef7f1317cb482917dfc19aceebd9. No production
+service/dispatcher/timer/scheduler/guest clock or ownership changes/hooks.
+
+New workload composes native-proven P73 expiry and P74 timed-wake on the SAME
+mutex handle and SAME waiter within each transaction, keeping holder active
+between the two requests. Copies P73 isolated two-worker/TLS/guestSC scaffold
+with two observed queued slices rather than one. Same recursive FIFO private
+mutex, table100/101/102/103/104, CODE10000/DATA20000/stacks30000/40000/TLS pool
+50000..90000, descriptor16bytes BE32handle/output+BE32syscall+BE64secondarg.
+Same10words/40bytes SHA1=6fb8b669d0f97364f3ece4e1171767e2f5ca3a21, budgets
+3/1/6, exactCIA12/16/40/full paused context/history/8arguments/reservations/
+whole DATA/TLS/stacks/code/aliases/cache checks retained.
+
+Three12-operation lifecycles firstroles0/1/0:
+0create/nulloutputEFAULT;1lock/invalidlockESRCH;2recursive/tryEBUSY;
+3helddestroyEBUSY/wrongunlockEPERM;4partialunlock retainsowner/tryEBUSY;
+5helddestroyEBUSY/100000us timed wait expires ETIMEDOUT, holder remainsowner;
+6holderfinalunlock/NEW1000000us timed wait succeeds by reown/signal;
+7wrongunlockEPERM/recursive lock;8helddestroyEBUSY/partialunlock;
+9helddestroyEBUSY/finalunlock (destroy ordered before release);
+10destroy/invalidtryESRCH;11staledestroyESRCH/staletryESRCH.
+Other102arguments cycle0/1122334455667788/FEDCBA9876543210 full64 as before.
+
+Operation5 holder waits for atomic owner/count0/mutex queue plus exact native
+100000us deadline registration/active-holder/suspended-waiter under g_mutex;
+checks unchanged whole DATA/TLS then executes held destroy EBUSY. Actual kernel
+wait_timeout/rescheduling/API unqueue reports signed ETIMEDOUT and preserves
+holder. After both SCcallbacks/peer queue return, native finished observer
+requires no timer/startup queue, clean active pair/flags/links, then exact
+ownership/error/history and normal guest stores. Operation6 is concurrent:
+same waiter calls102 on SAME handle while holder still owns it; holder waits
+for NEW1000000us registration and unchanged bytes BEFORE guest finalunlock.
+Actual unlock/reown/awake removes new timer/signals success; empty mutex/timer
+queues/secondowner/count0/current success history required before stores.
+Holder's observer uses job.waiterTimeout set separately for operations5/6;
+request encoding/full64 ABI independently checked. Six observations required,
+three expiry then wake transitions, no stale timeout/signal/CPU links accepted.
+
+72SC:100create6/101destroy18/102lock18/103try12/104unlock18. Nine immediate/
+recursive successes+3timed expiry+3timed wake successes+3invalidlockESRCH.
+216dispatches/144pauses/720instructions/216guestSTW (144outputs+72TLS),
+3nativeIDstores/110pubs+callbacks/2workersconstructed+joined. TLS12/12→24/24→
+36/36, results6/6. Stops/notifies waiter on observationfailure. Peer joins before
+TLS release and scheduler restore; owner joins before VM/cache/mutex cleanup.
+Registry/settings/native scheduler restoration and zero mutex ID leaks retained.
+No strict wall-time threshold or clock/config mutation; deadline-boundary race
+not tested.1s second timeout supplies ordinary scheduling margin.
+
+Validation PASS:
+- test_p75_fixture.py chains unchanged P43–P74 and freezes entire Build95
+  prefix. Independent scalar oracle registers6timers on3handles/same waiter,
+  first3expire without transfer and fully clear; second3require different new
+  deadline then guest unlock transfers owner/removes timer/returns success.
+  Full ownership/depth/errors/stale/handle/full64 ABI/history/PC/LR/CTR and all
+ 720steps/144pauses/216stores/72SC/whole DATA+TLS checked. Not native scheduling.
+- Unchanged test_p73_patch.py again applies frozen48+49 on exact pinned target
+  files and verifies original implementations/read-only observers PASS.
+  Workflow latest fixture now P75; P73patch/P69registry tests retained.
+- test_p75_pair.py adapts P74 host harness without running previous workloads;
+  extracts actual five APIs/full timeout and signal-return branches/native
+  mutex methods/FIFO/unqueue/binder/SC/dispatcher/TLS/bounded and patch48/49
+  diagnostic bodies. CPU/VM/ID allocator/storage/atomic control/priority/actual
+  guest clock/wait_timeout/CPU check_state/sleep-awake scheduler/notify/FXO/
+  decoder/GPR casts remain explicit HOST MODELS. Real kernel timer/scheduling
+  not locally executed. Mixed100000us/1000000us host clock model,6modeled
+  timer removals including3expiry reschedules+3unlock wakes; actual extracted
+  API timeout-unqueue and signal-consume returns executed. C++20 Wall/Wextra/
+  Werror pthread ASAN+UBSAN detect_leaks0 PASS:8runs/16workers/1728paired slices
+  plus fresh registry recovery;6registered waits/3modeled expiries/3native wake
+  successes/18API timeout observations/720instructions/110pubs/TLS36/36 each.
+  Applicable foundation/207..224/LD22, queue225..229, scope230..231 and BOTH
+  expiry232/233/235 and deadline234/timer236/wake237..239 fault models retained.
+  Nonrecursive deadlock209 inapplicable, not claimed. New240secondrequest reuses
+  old100000us duration,241omits fresh timer registration all detected. Faults
+  HOST ONLY; fault0 extracted method operations unchanged. Registry init/reuse/
+  rejected/omitted init/nonempty namespace preservation/settings/allocations/
+  setup/TLS guards/prior scheduler-ready seed preservation PASS. Unsupported
+  mutated timeout throws in model for bounded failure unwind. LSan disabled
+  for runtime ptrace restriction; ASAN/UBSAN stayed enabled.
+- Phone73orderedPASS/3exactP74transactions;74uniqueUI/export stages;whole prior
+  bridge frozen;all49patches unchanged;bundle96/iOS16/Python syntax/git whitespace
+  PASS. Scratch p75-fixture-check.log/p75-host-check.log/p75-patch-check.log.
+  No local Xcode/iOS SDK: native P75compile/device execution remain PENDING.
+
+Publication baseline mainc5daa64558ec5129f2b3cbd4cadea48f713a93d5,
+tree056d2695d1c9310d522b5c95af3053ce84e179f3 (173blobs). Publish7files,
+2newtests→175blobs; verify every baseline/target hash and preserve remote100755
+scripts. DO NOT monitor/query Actions after push unless user explicitly asks
+for an operation requiring a run ID. Install ARMSX3_iOS16_INSTALL_THIS_IPA via
+TrollStore, run all74diagnostics, send startup log. No P76 before nativeP75PASS.
+Exact wall-time latency/deadline-boundary unlock races/multiwaiter/cancellation
+replay/weak-memory stress/recursive overflow/serialized savestate/import loader/
+renderer/firmware/game boot remain untested. Midnight Club Los Angeles retained.
