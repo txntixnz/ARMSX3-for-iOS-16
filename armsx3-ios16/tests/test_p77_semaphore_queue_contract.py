@@ -21,7 +21,7 @@ def source_contract(text):
         "return timeout": r"ppu\.gpr\[3\]\s*=\s*CELL_ETIMEDOUT;",
         "busy destroy": r"if\s*\(sema\.val\s*<\s*0\)",
         "post validation": r"if\s*\(count\s*<=\s*0\)",
-        "maximum bound": r"count\s*\+\s*0u\s*<=\s*sema\.max\s*\+\s*0u\s*-\s*val",
+        "maximum bound": r"count\s*\+\s*0u\s*<=\s*sem->max\s*\+\s*0u\s*-\s*val",
         "wake count": r"std::min<s32>\(-std::min<s32>\(val,\s*0\),\s*count\)",
         "ordered scheduler": r"sem->schedule<ppu_thread>\(sem->sq,\s*sem->protocol\)",
         "awake scheduling": r"lv2_obj::awake_all\(\);",
