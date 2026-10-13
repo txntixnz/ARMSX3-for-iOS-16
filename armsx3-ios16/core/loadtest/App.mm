@@ -82,6 +82,7 @@ static constexpr DiagnosticStage stages[] = {
     {74, "Timed mutex unlock and timer cancellation", "armsx3_core_test_mutex_timed_wake"},
     {75, "Mutex timeout then timed wake on the same object", "armsx3_core_test_mutex_timeout_then_wake"},
     {76, "Semaphore permits and lifecycle services", "armsx3_core_test_semaphore_lifecycle"},
+    {77, "Semaphore blocking wait and native post wake", "armsx3_core_test_semaphore_blocking_wake"},
 };
 static constexpr NSUInteger stageCount = sizeof(stages) / sizeof(stages[0]);
 static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
