@@ -5858,3 +5858,130 @@ TrollStore, run all74diagnostics, send startup log. No P76 before nativeP75PASS.
 Exact wall-time latency/deadline-boundary unlock races/multiwaiter/cancellation
 replay/weak-memory stress/recursive overflow/serialized savestate/import loader/
 renderer/firmware/game boot remain untested. Midnight Club Los Angeles retained.
+
+## Build 97 / P76 — production semaphore permits and lifecycle (2026-10-13)
+
+Latest phone ARMSX3-startup-20261013-020910-274-15090.txt (Library
+libfile_bdf8bc3e796c819193aa84965f48fc21) is Build96 ALL74 ordered P2–P75 AUTO
+PASS, final all-stage PASS, no FAIL. P75transactions1/2/3 firstroles0/1/0,
+TLS12/12→24/24→36/36, results6/6: actual first100000us timeout then NEW1000000us
+queued wait on SAME mutex/waiter, guest unlock/reown/signal/success/timer removal,
+full contexts and ID/scheduler cleanup PASS. Native start1791857345.765851→
+finish7346.076864 (~311ms for3expiry+3wake lifecycles, observation only).
+Build96 publication had been interrupted before ref update; resumed and
+published353ec562562275117ce1bb122163d274ad15da3e after revalidating the entire
+175file tree and main lease. Standing continue/nativeP75PASS permit P76.
+
+Build97 appends armsx3_core_test_semaphore_lifecycle / P76, UI stage75,
+bundle97/minimumiOS16.0. Entire Build96 CoreBridge2444296-byte prefix frozen,
+SHA2561aded3ac213c5a7024704618a6acd44f8c6ac021d3f931be20e802ef4bcacea1.
+All49 patches and old tests unchanged. No new native patch; sys_semaphore.h
+included in appended section. Native syscall APIs/table/scheduler unchanged.
+Pinned ARMSX2/ARMSX3 commit92b931b9fb5eef7f1317cb482917dfc19aceebd9 remains.
+Retrieved exact pinned sys_semaphore.cpp/.h through GitHub primary source and
+staged in scratch upstream mirror. Verified table90create/91destroy/92wait/
+93trywait/94post/114get_value and header id_base96000000/attribute32bytes.
+
+P76 expands to a new service family using proven P71 persistent native PPU pair
+and production TLS scaffold. No scheduler activation/sleep instrumentation.
+Real guestSC0→normal interpreter→production dispatcher/binder→six actual
+semaphore APIs. Isolated FIFO/not-process-shared attr23040, zero initialized
+32bytes with key/flags/pad0/nameiOSSema!, outputID23000. Native shared LV2 FXO
+id_map initialized conditionally; existing semaphore namespace rejected before
+worker construction and preserved. Cleanup selects only lv2_sema objects and
+runs after both worker joins. No injected permits or syscall-table hooks.
+
+New exact guest12words/48bytes SHA1=241b53df6fbad64e716f4b0e009c418f5fa571b5:
+LWZr11,r5,4;LWZr3,r5,0;LDr4,r5,8;LWZr6,r5,20;LWZr5,r5,16;SC0;
+STWr3,r9,0;LWZr12,r13,-6ff4;ADDI1;STWTLS;STWr12,r9,4;NOP.
+Twenty-four-byte descriptor BE32arg0+BE32code+BE64arg1+BE32arg2+BE32arg3.
+Inputr5 becomes third ABI argument only AFTER final descriptor read; outputr9
+keeps result pointer separate from fourth ABI argumentr6. Budgets5/1/6 require
+CIA20/24/48. Full saved8argument ABI/first4history args/native signed errors
+and GPR/FPR/VR/status/reservation/code/cache/whole DATA/TLS/stacks/aliases checks
+retained. CODE10000/DATA20000/stacks30000/40000/TLS pool50000..90000 unchanged.
+Requests21000+call40hex+worker20hex; results20200+call20hex+worker10hex;
+native count outputs24000+call10hex+worker4. Entire unused output/padding guarded.
+
+Three12-operation lifecycles firstroles0/1/0, every SCpair explicitly ordered
+first worker before second in both roles (non-SC slices still paired):
+0create(initial2,max3)/null-outputcreateEFAULT;
+1wait consumes2→1/trywait consumes1→0;
+2get_value writes0/emptytrywaitEBUSY;
+3post3 reaches max/get_value writes3;
+4post1 overflowEBUSY/post0EINVAL, value remains3;
+5wait consumes3→2/trywait consumes2→1;
+6trywait consumes1→0/get_valueNULL EFAULT;
+7post(-1)EINVAL/post1 succeeds value1;
+8get_value writes1/wait consumes1→0;
+9destroy/get_value staleESRCH;
+10staledestroyESRCH/stalepostESRCH;
+11create(initial-1,max3)EINVAL/invalidhandle0get_valueESRCH.
+Wait timeouts cycle0/1122334455667788/FEDCBA9876543210 full64; all waits have a
+positive permit and must return immediately. Signed initial-1 and post-1
+loaded as u32ffffffff then actual binder casts s32; native errors prove handling.
+All18get-value calls preserve canaries on error;9valid BE32 count writes.
+At every boundary check actual sem.val/max3/exists1/FIFO/key0/name/empty sq.
+Stock native post debug fields checked: positive attempts3/overflow/1 count
+1→2→3, poster role first/first/second, LR12340000, nonzero time; zero/negative
+posts do not update metadata. No precise latency/profiling-counter claim.
+
+72SC:90create9 (3valid/3NULL/3negative),91destroy6 (3valid/3stale),92wait9
+(success),93trywait12 (9success/3emptyEBUSY),94post18 (6success/3overflow/
+6zero-negativeEINVAL/3stale),114get_value18 (9writes/3NULL/6stale-invalid).
+216dispatches/144pauses/864guest instructions/216guestSTW (144outputs+72TLS),
+3nativeIDstores+9nativecountstores/110pubs+callbacks/2workersconstructed+joined.
+TLS12/12→24/24→36/36, results6/6. Peer joins before TLS release; owner joins
+before VM/cache/object cleanup. ID last scratch/settings restored, zero IDs
+leaked. No blocking semaphore wait, queue/scheduler wake or timeout tested yet.
+
+Validation PASS:
+- test_p76_fixture.py chains unchanged P43–P75/frozen prefixes and freezes
+  whole Build96. Independent scalar oracle covers12words/new24byte descriptor,
+  four-create-argument/full64-wait ABI, all permit mutations/max/errors/native
+  count outputs/canaries/stale IDs/post metadata/whole DATA+TLS/context/history/
+  PC/LR/CTR and864instructions/144pauses/216stores/72SC. Does not execute kernel.
+- test_p76_pair.py adapts P71 host harness WITHOUT executing old workloads;
+  extracts ALL six pinned API bodies including full wait/post slow branches,
+  real guestSC/binder/dispatcher/TLS/bounded core bodies. CPU/VM/ID allocator/
+  storage/atomic storage/notify/clock/profiler/FXO/decoder/GPR casts remain HOST
+  MODELS. Scalar std::atomic interface model supplies compare_and_swap/try_dec/
+  fetch_op; no ARM atomic/concurrent-CAS claim. Native semaphore class layout
+  modeled from pinned header. Timer/profile support compiled with modeled
+  profiler disabled; ALL sleep/queue/scheduler stubs throw if reached, so this
+  validates only immediate waits. Real production iOS service bodies unchanged.
+  C++20 Wall/Wextra/Werror pthread ASAN+UBSAN detect_leaks0 PASS:
+  8runs/16workers/1728paired slices plus fresh registry recovery;9actual API
+  full64 wait observations/864instructions/110pubs/TLS36/36 each. Applicable
+  foundational/history/LD22/ID212/213/214/216/registry218/219/ABI224 negatives
+  retained; old mutex faults inapplicable and not claimed. New242trywait skips
+  consume,243wait skips decrement,244false EBUSY success,245post skips increment,
+  246bad get_value,247NULL falsely succeeds,248negative initial accepted,
+  250wrong max,252missing post debug increment,253missing native count store all
+  detected. HOST ONLY fault mutations; baseline APIs operate unchanged. Registry
+  init/reuse/rejected/omitted init/nonempty namespace preservation/settings/
+  allocations/setup/TLS guards/join/deallocation checks PASS. Final host report
+  wording corrected ID212..216→ID212/213/214/216 after run; executable unchanged.
+- test_p76_registry.py first runs unchanged P69 registry regression then repeats
+  same extracted native id_key/default id_map/allocate_id for header-confirmed
+  semaphore namespace96000000. Trap-valued unconstructed registry rejects;
+  default-constructed8192entry map allocates/publishes/types/deletes/reuses cookies/
+  exhausts capacity PASS under ASAN+UBSAN; pointer/FXO/get_index remain shims.
+- Unchanged P73patch test applies49frozen patches to exact pinned targets and
+  read-only observers/preservation PASS. Workflow now runs latest P76fixture,
+  P73patch and P76registry (which also runs P69registry) before native build.
+- Phone74orderedPASS/3exactP75transactions;75uniqueUI/export stages;whole bridge
+  prefix/all49patches unchanged;bundle97/iOS16/Python syntax/git whitespace PASS.
+  Scratch p76-fixture-check.log/p76-host-check.log/p76-registry-check.log/
+  p76-patch-check.log. No local Xcode/iOS SDK: native P76compile/device execution
+  remain PENDING. Host models are not native scheduling or ARM atomic evidence.
+
+Publication baseline main353ec562562275117ce1bb122163d274ad15da3e,
+tree777a7cb743ce6b815a33c2e1ceaac4554f9d4ac8 (175blobs). Publish8files,
+3newtests→178blobs; verify every baseline/target hash/preserve remote100755
+scripts. DO NOT monitor/query Actions after push unless user explicitly asks
+for an operation requiring a run ID. Install ARMSX3_iOS16_INSTALL_THIS_IPA via
+TrollStore, run all75diagnostics, send startup log. No P77 before nativeP76PASS.
+Blocking semaphore queues/wake/timeouts/multiwaiter/shared IPC/invalid attr
+variations/serialized savestate/renderer/firmware/game boot remain untested.
+Midnight Club Los Angeles goal retained.
