@@ -31865,7 +31865,7 @@ extern "C" __attribute__((visibility("default"))) int armsx3_core_test_semaphore
                                     const bool first = i == firstWorker;
                                     job.observeQueue = operation == 2 && slice == 1 && !first;
                                     job.semaphore = semaphoreID;
-                                    job.waiter = firstWorker ? &**peer : owner;
+                                    job.waiter = firstWorker ? static_cast<ppu_thread*>(peer.get()) : owner;
                                     job.observations = &program.queueObserved;
                                     job.dataSnapshot = program.expectedData;
                                     job.tlsSnapshot = &expectedPool;
