@@ -6039,3 +6039,61 @@ reopen the app, run all76 diagnostics, send exported startup.txt. Do not
 monitor Actions after pushing; user reports completion/failure. Keep replies
 concise. Midnight Club Los Angeles remains eventual game target; timeout
 expiry/multiwaiter/sharedIPC/renderer/firmware/game boot remain untested.
+
+
+## Build 100 / P78 — semaphore timeout expiry and permit recovery (2026-10-13)
+
+Phone ARMSX3-startup-20261013-214942-771-20688.txt (Library
+libfile_a7a9a126b26c819197abda549763ffa9) confirms Build99 ALL76 P2-P77 PASS.
+P77 native FIFO waiter/deadline observations and wait/post handoffs pass all
+three transactions, first roles0/1/0, TLS12/12,24/24,36/36 and results6/6.
+The Build99 scheduler-scope repair is now device-proven. Baseline commit
+4eb8a4e9558caf257ca924cf40da2f9e2e39bfaa/tree16e41b6d0c6e8f814f522bb2b5170da1b4400e46.
+
+Build100 appends P78 armsx3_core_test_semaphore_timeout_recovery. Entire
+Build99 CoreBridge prefix remains byte-identical, Git blob
+941ffaffe9fc88a0b161b6ae12d5ce9ab6d9dd49. Old stages/tests/all49 patches and
+production native services/scheduler unchanged; UI adds stage78 (77 tests),
+bundle100/minimumiOS16.0. Same guarded scheduler scope, native retained PPU
+pair/TLS and 12-word guest SC workload, budgets5/1/6.
+
+P78 changes operation2 after initial permits have been consumed: first worker
+SC92 waits100000us, peer observes exact val=-1/sq waiter AND registered native
+deadline under existing read-only observer. No post is issued. Peer then
+observes native expiry cleanup: val0, empty semaphore FIFO, no post metadata,
+empty timer queue and both workers re-admitted without suspend/signal. Whole
+DATA/TLS/aliases must still match the deferred-output snapshots before peer
+SC114 returns0. Waiter must return signed CELL_ETIMEDOUT through native binder
+and history; next guest slice writes the result. Subsequent post3/max overflow
+and wait/trywait consume permits on the SAME semaphore, proving recovery.
+Three transactions swap roles0/1/0. Existing invalid-output/negative create/
+negative post/stale IDs/context/cache/stack/ID/scheduler cleanup retained.
+72SC: create9/destroy6/wait12/trywait9/post18/get_value18; nine BE32 value writes,
+216dispatches/144pauses/864instructions and TLS36/36. No precise wall-time
+latency claim. Host code catches an overly long transaction log and a carry
+constant substitution before publication; final source keeps original carry
+mask0x20000000, short transaction messages and exact frozen earlier prefix.
+
+Validation PASS: test_p78_fixture.py runs unchanged P77/P76/foundational
+oracles, verifies whole Build99 freeze, independently models three timeout
+negative-permit/queue/reuse lifecycles and 72SC/nine-output counts, and checks
+77 unique UI stages/build100/iOS16. Workflow now runs this fixture. New
+test_p78_pair.py reuses P77 extracted native semaphore bodies/queue methods/
+SC/binder/dispatcher/TLS/bounded helpers and native scheduler scope/observers
+on explicit CPU/VM/ID/atomic/clock/scheduler host models. C++20 Wall/Wextra/
+Werror ASAN+UBSAN detect_leaks0: eight normal runs/16workers, three100000us
+expiries per run and same-object reuse pass. Retained API/ABI/registry/setup/
+cleanup negatives pass, plus missing scope260, rejected observation261, false
+timeout success263, missing permit increment264, missing unqueue265 and stale
+timer266 all rejected. Native timer scheduling/ARM atomics not simulated as
+hardware evidence. Host extraction uses patched PPUThread/TLS files, native
+semaphore files, and the original pinned lv2.cpp syscall dispatcher (before
+iOS scoped-statistics patch), as in P77. UIKit/Xcode compilation and native
+P78 execution remain CI/device pending. Python/workflow/plist/whitespace valid.
+
+Do not poll Actions after push. User reports build result. On success install
+ARMSX3_iOS16_INSTALL_THIS_IPA through TrollStore, reopen, run all77diagnostics,
+send startup.txt. Keep responses concise. Native P78PASS is required before
+next semaphore stage. Timeout-vs-post boundary races/multiwaiter/sharedIPC/
+serialized savestate/renderer/firmware/game boot remain untested; Midnight
+Club Los Angeles remains eventual game target.
