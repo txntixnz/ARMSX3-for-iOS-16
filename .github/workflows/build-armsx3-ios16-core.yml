@@ -18,7 +18,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   synchronization-host:
-    name: Check synchronization (${{ matrix.profile }})
+    name: Check ${{ matrix.script }} (${{ matrix.profile }})
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -36,6 +36,14 @@ jobs:
             profile: clear
           - script: test_p82_pair.py
             profile: clear_all
+          - script: test_p86_pair.py
+            profile: fifo
+          - script: test_p86_pair.py
+            profile: recursive
+          - script: test_p86_pair.py
+            profile: broadcast
+          - script: test_p86_pair.py
+            profile: recursive_broadcast
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -50,8 +58,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 armsx3-ios16/tests/test_p82_fixture.py
+          python3 armsx3-ios16/tests/test_p86_fixture.py
           python3 armsx3-ios16/tests/test_p82_registry.py upstream-armsx3
+          python3 armsx3-ios16/tests/test_p86_registry.py upstream-armsx3
           for patch in armsx3-ios16/patches/*.patch; do
             git -C upstream-armsx3 apply --check "../$patch"
             git -C upstream-armsx3 apply "../$patch"
@@ -111,10 +120,11 @@ jobs:
           set -euo pipefail
           python3 armsx3-ios16/ios/scripts/audit-hook-consumers.py upstream-armsx3
           python3 armsx3-ios16/tests/test_p43_patch.py upstream-armsx3/rpcs3/Emu/Cell/lv2/sys_memory.cpp
-          python3 armsx3-ios16/tests/test_p82_fixture.py
+          python3 armsx3-ios16/tests/test_p86_fixture.py
           python3 armsx3-ios16/tests/test_p73_patch.py upstream-armsx3
           python3 armsx3-ios16/tests/test_p76_registry.py upstream-armsx3
           python3 armsx3-ios16/tests/test_p82_registry.py upstream-armsx3
+          python3 armsx3-ios16/tests/test_p86_registry.py upstream-armsx3
           for patch in armsx3-ios16/patches/*.patch; do
             git -C upstream-armsx3 apply --check "../$patch"
             git -C upstream-armsx3 apply "../$patch"

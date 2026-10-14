@@ -91,6 +91,10 @@ static constexpr DiagnosticStage stages[] = {
     {83, "Event flags: or mode and timed wake", "armsx3_core_test_event_flag_or"},
     {84, "Event flags: clear mode and timed wake", "armsx3_core_test_event_flag_clear"},
     {85, "Event flags: clear all mode and timed wake", "armsx3_core_test_event_flag_clear_all"},
+    {86, "Condition variables: fifo wait and wake", "armsx3_core_test_cond_fifo"},
+    {87, "Condition variables: recursive wait and wake", "armsx3_core_test_cond_recursive"},
+    {88, "Condition variables: broadcast wait and wake", "armsx3_core_test_cond_broadcast"},
+    {89, "Condition variables: recursive broadcast wait and wake", "armsx3_core_test_cond_recursive_broadcast"},
 };
 static constexpr NSUInteger stageCount = sizeof(stages) / sizeof(stages[0]);
 static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";

@@ -2317,3 +2317,96 @@ new mode results before extending the next synchronization family; continue
 iOS16.0, Dopamine/TrollStore. Timeout-set boundary races/multiple waiters/
 blocked cancellation/priority/shared IPC/firmware/renderer/game boot remain
 untested. Midnight Club Los Angeles remains eventual game target. Replies short.
+
+
+## 2026-10-14 — Build103 device PASS; Build104 four condition-variable profiles
+
+Device evidence: ARMSX3-startup-20261014-055644-075-22253.txt, build103,
+all84 diagnostics P2–P85 PASS and final AUTO PASS. AND/OR/CLEAR/CLEAR_ALL
+native event-flag modes all passed on iPhone. Still no firmware/renderer/game
+boot evidence. User wants faster4–6-stage batches and fewer build/install cycles.
+
+Build104 adds shared armsx3_core_test_cond_batch plus four exported diagnostics:
+P86 cond_fifo (FIFO ordinary mutex/signal); P87 cond_recursive (FIFO recursive/
+signal); P88 cond_broadcast (priority ordinary/broadcast); P89
+cond_recursive_broadcast (priority recursive/broadcast). Each symbol begins
+armsx3_core_test_. Entire Build103 bridge prefix frozen at git blob
+3233e091778b1a809e9e0b65aeb394caea9331f7; all49 production patches unchanged.
+UI88 stages P2–P89, CFBundleVersion104, iOS16 minimum.
+
+Each profile performs three18-operation linked mutex/condition lifecycles on
+retained two-worker/TLS slots, roles0/1/0. Native ten APIs100/101/103/104 and
+105/106/107/108/109/110 execute via guest SC/table/binder. Actual constructors
+and condition on_id_create associate mutex pointer/shared reference and
+increment cond_count. Native contract detail: destroying an UNLOCKED mutex
+with cond_count1 returns EPERM, not EBUSY; queued condition destroy returns
+EBUSY. Foreign cond_wait/unlock errors preserve ownership. Ordinary repeated
+trylock returns EDEADLK; recursive trylock increments the extra count.
+Observed100000us wait queues condition and fully releases mutex owner/count;
+peer queued destroy gets EBUSY; timeout reacquires the same mutex and restores
+recursive count. A fresh same-worker/handle1000000us wait is signaled, then
+reacquires/restores again. Ordinary partial/full unlock and recursive count
+restoration are checked throughout. Empty signal/broadcast and invalid
+thread0 targeted signal update native signal metadata as implemented; real
+registered targeted wake and multiple waiters are not tested. Stale creation,
+wait/signal/destroy/unlock calls must return ESRCH without output publication.
+
+Profile totals108SC;100create6/101destroy6/103trylock24/104unlock21/
+105condcreate9/106conddestroy9/107condwait15/110signal_to3. Signal profile
+108signal9/109all6; broadcast profile108signal6/109all9. Six native BE32 handle
+writes, full DATA output/error canaries,324dispatches/216pauses/1296instructions/
+TLS54/54. Guest12words/48bytes, budgets5/1/6, PCs20/24/48, full64 foreign/stale
+wait timeouts0xfedcba9876543210 observed at native ABI. Six exact queue/deadline
+observations, three expiries/three wakes. Native link/refcount/owner/recursive
+count/signal metadata/queue/context/history/memory/TLS/stacks/aliases/cache/
+settings/worker/ID/scheduler cleanup all checked. Cold syscall state guard
+rejects missing optional_savestate_state or loaded_from_savestate; real pinned
+PPU constructor initializes serial state. Emergency cleanup withdraws private
+conditions before mutexes and skips already-destroyed bookkeeping, preventing
+double link/refcount decrement after a failed withdrawal. New ABI errors log
+transaction/op/slice/worker/SC and expected/observed error for device debugging.
+
+Validation PASS: test_p86_fixture.py preserves prior fixture chain, freezes
+whole Build103 prefix and independently models four linked object/owner/count/
+queue/lifecycle/error protocols and108SC/six handles/88 stage metadata.
+test_p86_pair.py extracts four native mutex API bodies and try_lock/try_unlock/
+try_own/reown, six condition API bodies, native constructor and active ordinary
+on_id_create branch, actual binder/SC/dispatcher/TLS/bounded/queue/probe bodies.
+Deferred serialized on_id_create branch is rejected in host model; optional
+syscall serialization interface is a model. CPU/VM/ID/storage atomic/control/
+clock/scheduler remain models. C++20 Wall/Wextra/Werror ASAN+UBSAN detect_leaks0:
+eight normal runs/16workers per profile (32runs/64workers total), applicable
+setup/ABI/context/registry/queue/cleanup negatives pass. New faults301 missing
+mutex link increment,302 ignoring linked-mutex destruction guard,303 false
+queued destroy success,304 missing link decrement,305 unreleased recursive
+count and306 lost restored count (recursive profiles),307 bad signal metadata,
+308 false permission success,309 missing serial state and310 loaded-state
+misuse all detected; false timeout263/missing unqueue265/stale timer266 retained.
+212 failed service withdrawal is injected only in worker syscall context so
+fallback namespace cleanup remains available. Missing admission260 retains
+host priority snapshot cleanup: native cond_wait emplaces and assigns order
+before sleep, unlike semaphore ordering. Native scheduler scope still supplies
+actual restoration under normal/other fault cases.262 remains host canceled-
+timer consistency guard. Host normal run initially caught wrong EPERM expected
+result; corrected to pinned native contract before final checks. Local native
+condition namespace0x86000000 allocator harness test_p86_registry.py checks
+constructed-map publication/type/cookie/capacity/reuse and unconstructed-map
+rejection. Python/YAML/plist/whitespace checks pass. ARM/Xcode/native pending.
+
+Workflow now includes ten parallel synchronization-host matrix profiles:
+previous two semaphore/four event-flag workloads plus four condition profiles.
+Job names include script and profile to disambiguate fifo. Common fixture is
+test_p86_fixture.py; new namespace registry test runs before patch application
+in host and core checkouts. Original pinned lv2.cpp dispatcher restoration
+remains confined to isolated host checkout with modeled stats. iOS core keeps
+all49 patches. Core waits for all ten matrix entries before one IPA build.
+No Actions polling after publishing; user reports result.
+
+Next: after Actions succeeds install ARMSX3_iOS16_INSTALL_THIS_IPA through
+TrollStore, reopen, run all88 diagnostics and send startup.txt. Verify four
+new native stage results, then continue meaningful4–6-stage batches toward
+boot-critical coverage. Target iPhone13ProMax/iOS16.0/Dopamine/TrollStore.
+Multiwaiter/broadcast among multiple waiters/contended reacquisition/valid
+registered targeted wake/shared IPC/serialized state/firmware/renderer/game
+boot remain untested; Midnight Club Los Angeles eventual game target.
+Keep user replies short.
