@@ -6140,3 +6140,65 @@ P79PASS before advancing. Target iPhone13ProMax/iOS16.0/Dopamine/TrollStore.
 Timeout-post boundary races, multiwaiter/shared IPC, serialized savestate,
 renderer, firmware and game boot remain untested. Midnight Club Los Angeles
 remains eventual target. Keep user replies concise.
+
+
+## 2026-10-14 — Build101 device PASS; Build102 batches P80 and P81
+
+New user preference: batch multiple related device tests into one workflow/IPA
+when logical, to reduce build/install cycles and speed up porting. Preserve
+separate stage results and bounded failures. Do not poll Actions after push.
+
+Device evidence: ARMSX3-startup-20261013-223238-535-20915.txt, build101,
+all78 diagnostics P2–P79 PASS and final AUTO PASS. P79 confirms three100000us
+native expiries followed by same-worker/object1000000us waits successfully
+woken by posts; roles0/1/0, TLS13/13 ->26/26 ->39/39, results6/6. Native
+FIFO/timer cleanup passed. No renderer/firmware/game boot evidence.
+
+Build102 appends a shared surplus-semaphore diagnostic with two public stages:
+P80 armsx3_core_test_semaphore_fifo_surplus; P81
+armsx3_core_test_semaphore_priority_surplus. Entire Build101 bridge frozen at
+git blob52e84736ca373db4718e99fd6820f7c2b9f115a9; all49 patches unchanged.
+Each profile has three14-operation lifecycles with roles0/1/0:100000us timeout,
+fresh1000000us queued wait, peer guest post2 wakes one worker and retains
+exactly one spare permit; subsequent post2 reaches max3. INT_MAX positive
+post must return EBUSY without permit changes; INT_MIN negative post must
+return EINVAL without permit/post-metadata changes. Native priority protocol
+is created/retained and its single-waiter schedule branch executes; ordering
+among multiple priority waiters is explicitly untested. Other API/error/ABI/
+context/output canary/ID/worker/TLS/cache/alias/scheduler cleanup checks retained.
+Each profile84SC (create9,destroy6,wait15,trywait9,post24,get-value21),12 BE32
+value writes,252dispatches/168pauses/1008instructions/TLS42/42, six queue
+observations/three expiries/three wakes. UI now80 stages P2–P81; build102/iOS16.
+
+Validation PASS: test_p80_fixture.py preserves earlier fixture chain and full
+Build101 bridge prefix, independently models both profiles and exact84SC/
+12-output counts. test_p80_pair.py takes optional fifo/priority profile and
+extracts shared helper plus both public wrappers, real native semaphore/
+queue/scheduler-scope/observers/SC/binder/TLS/bounded bodies. C++20 Wall/Wextra/
+Werror ASAN+UBSAN detect_leaks0: eight normal runs/16workers per profile;
+16 normal runs/32workers total. Retained setup/API/ABI/context/cleanup negatives
+pass plus267 lost surplus,268 false INT_MAX success,269 false INT_MIN success,
+and270 wrong protocol in priority profile.262 remains a canceled-timer host
+consistency guard, not a native latency assertion. CPU/VM/ID/atomic/clock/
+scheduler remain explicit host models. Python/YAML/plist/whitespace checks pass.
+
+Workflow now has ubuntu24.04 semaphore-host job before macOS core build:
+checkout pinned native source, verify batch fixture, apply all49 patches,
+restore original pinned lv2.cpp dispatcher only in isolated host checkout,
+run fifo then priority extracted workloads under sanitizers. Core job needs
+semaphore-host and repeats fixture before its own full patch application;
+production iOS source is fully patched. Added tests/** to workflow triggers.
+CI preparation was reproduced locally: all49 patches apply sequentially on
+pinned original files, dispatcher restoration yields same sources as validated
+local extraction. Host compiler/binary subprocesses have180second timeouts,
+job10minute timeout. Xcode/iOS compilation and native P80/P81 execution pending.
+
+After Actions succeeds user should install ARMSX3_iOS16_INSTALL_THIS_IPA with
+TrollStore, reopen and run all80 diagnostics, then send startup.txt. Review
+both new native stage results before next family. Continue sensible batches
+rather than one small variant per IPA; next distinct LV2 synchronization
+family can bundle immediate ABI/lifecycle checks and related bounded queue
+cases when supported. Target iPhone13ProMax/iOS16.0/Dopamine/TrollStore.
+Multiwaiter/priority ordering/shared IPC/savestate, timeout-post boundary races,
+renderer/firmware/game boot remain untested. Midnight Club Los Angeles remains
+eventual target. Keep responses concise.

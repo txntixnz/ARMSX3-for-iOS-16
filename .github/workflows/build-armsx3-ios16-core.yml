@@ -8,6 +8,7 @@ on:
       - 'armsx3-ios16/ios/Entitlements.plist'
       - 'armsx3-ios16/ios/scripts/verify-bundle.py'
       - 'armsx3-ios16/patches/**'
+      - 'armsx3-ios16/tests/**'
       - '.github/workflows/build-armsx3-ios16-core.yml'
   workflow_dispatch:
 permissions:
@@ -16,7 +17,46 @@ concurrency:
   group: armsx3-ios16-core-${{ github.ref }}
   cancel-in-progress: false
 jobs:
+  semaphore-host:
+    name: Check FIFO and priority semaphore guest workloads
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Checkout pinned native source
+        uses: actions/checkout@v4
+        with:
+          repository: ARMSX2/ARMSX3
+          ref: 92b931b9fb5eef7f1317cb482917dfc19aceebd9
+          path: upstream-armsx3
+          submodules: false
+      - name: Verify fixtures and prepare extracted native bodies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 armsx3-ios16/tests/test_p80_fixture.py
+          for patch in armsx3-ios16/patches/*.patch; do
+            git -C upstream-armsx3 apply --check "../$patch"
+            git -C upstream-armsx3 apply "../$patch"
+          done
+          # The host model provides syscall statistics; extract the original
+          # pinned dispatcher. This checkout is isolated from the iOS build.
+          git -C upstream-armsx3 show HEAD:rpcs3/Emu/Cell/lv2/lv2.cpp > upstream-armsx3/rpcs3/Emu/Cell/lv2/lv2.cpp
+      - name: Run both extracted native semaphore profiles under sanitizers
+        shell: bash
+        env:
+          ASAN_OPTIONS: detect_leaks=0
+        run: |
+          set -euo pipefail
+          for profile in fifo priority; do
+            python3 armsx3-ios16/tests/test_p80_pair.py \
+              upstream-armsx3/rpcs3/Emu/Cell/PPUThread.cpp \
+              armsx3-ios16/core/loadtest/CoreBridge.cpp \
+              upstream-armsx3/rpcs3/Emu/Cell/Modules/sys_ppu_thread_.cpp \
+              "$profile"
+          done
   core:
+    needs: semaphore-host
     name: Cross-compile real rpcs3_emu for iOS 16 arm64
     runs-on: macos-15
     timeout-minutes: 120
@@ -56,7 +96,7 @@ jobs:
           set -euo pipefail
           python3 armsx3-ios16/ios/scripts/audit-hook-consumers.py upstream-armsx3
           python3 armsx3-ios16/tests/test_p43_patch.py upstream-armsx3/rpcs3/Emu/Cell/lv2/sys_memory.cpp
-          python3 armsx3-ios16/tests/test_p79_fixture.py
+          python3 armsx3-ios16/tests/test_p80_fixture.py
           python3 armsx3-ios16/tests/test_p73_patch.py upstream-armsx3
           python3 armsx3-ios16/tests/test_p76_registry.py upstream-armsx3
           for patch in armsx3-ios16/patches/*.patch; do
