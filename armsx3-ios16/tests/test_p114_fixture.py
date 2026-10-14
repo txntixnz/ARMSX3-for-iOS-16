@@ -1,4 +1,4 @@
-"""Build110 intake routing, native header contracts, UI gating and prior-core freeze."""
+"""Build111 intake/runtime contracts, UI gating and prior-core freeze."""
 from pathlib import Path
 import hashlib,plistlib,re
 here=Path(__file__).resolve().parent
@@ -28,9 +28,19 @@ cmake=(here.parent/'core/loadtest/CMakeLists.txt').read_text()
 assert 'FrontendHooks.cpp Intake.cpp' in cmake and '-framework UniformTypeIdentifiers' in cmake
 assert 'Emu.BootGame(' not in intake and 'Emu.Run(' not in intake # inspection does not launch uncontrolled guest workers
 info=plistlib.loads((here.parent/'core/loadtest/Info.plist.in').read_bytes())
-assert info['CFBundleVersion']=='110' and info['MinimumOSVersion']=='16.0'
+assert info['CFBundleVersion']=='111' and info['MinimumOSVersion']=='16.0'
 workflow=(here.parent.parent/'.github/workflows/build-armsx3-ios16-core.yml').read_text()
 assert 'needs: [synchronization-host, intake-host]' in workflow
 assert len(re.findall(r'^\s+- script: test_p\d+_pair.py$',workflow,re.M))==34
 assert re.search(r'^  intake-host:$',workflow,re.M) and 'python3 armsx3-ios16/tests/test_p114_intake.py upstream-armsx3' in workflow
-print('PASS: full Build108 bridge freeze;120 ordered device stages/8 intake probes; header-routed SELF/raw ELF, native firmware paths, UIKit scoped file intake/gating, staged publication, Build110/iOS16/host dependencies; real PUP/iOS install pending')
+runtime=(here.parent/'core/loadtest/Runtime.cpp').read_text()
+assert 'Emu.BootGame(prepared.string(), "", true, cfg_mode::config_override, temporary.path.string())' in runtime
+assert 'configuration.misc.autostart.set(false)' in runtime and 'Emu.SetForceBoot(false)' in runtime
+assert 'Emu.Run(' not in runtime and 'Emu.Resume(' not in runtime
+assert 'Emu.IsStopped(true)' in runtime and 'drain_main_queue()' in runtime
+assert 'liblv2 firmware loading failed' in runtime and 'g_cfg.from_string(previous)' in runtime
+assert 'Runtime.cpp RuntimeFrontend.cpp RuntimeDispatch.mm' in cmake
+assert 'armsx3_core_check_runtime' in app and 'self.runtimeButton.enabled = intakeReady' in app
+assert 'self.failed = result == -2' in app and 'Runtime load check' in app
+assert 'python3 armsx3-ios16/tests/test_runtime.py upstream-armsx3' in workflow
+print('PASS: prior bridge freeze;120 ordered stages; native intake and load-only BootGame configuration/cleanup gates; scoped UIKit actions; Build111/iOS16;34+1 host dependencies')

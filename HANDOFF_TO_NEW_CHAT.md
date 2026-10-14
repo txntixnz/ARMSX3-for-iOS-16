@@ -6921,3 +6921,100 @@ PS3UPDAT.PUP, keep the app open, share startup log after completion/failure.
 Inspect EBOOT/ELF prepares their selected executable after firmware installation;
 it does not launch the game. Advance actual firmware/runtime boot evidence next.
 Do not poll Actions after publication. User reports completion. Keep replies short.
+
+
+## Build111 — actual native runtime loading after real firmware/EBOOT intake
+
+Build110 device evidence:
+- ARMSX3-startup-20261014-225142-714-28147.txt: all120 unique ordered stages
+  P2-P121 PASS, including repaired P120 raw ELF/both debug SELF encodings and
+  P121 publication/rollback. The user selected PS3UPDAT.PUP; native PUP/HMAC,
+  SCE package decryption and TAR extraction installed firmware4.93,23packages.
+  INTAKE UI PASS and transactional dev_flash publication completed. This is
+  actual firmware on the iPhone, not a synthetic installer result.
+- ARMSX3-startup-20261014-231002-454-28147.txt: same installed firmware. Initial
+  PS3_DISC.SFB selection correctly rejects metadata with no SELF/ELF header.
+  EBOOT.BIN then decrypts via native SELF, parses via native PPU ELF, has5
+  loadable segments and entry descriptor11963416. Prepared ELF saved at
+  Library/Caches/rpcs3/ARMSX3-prepared-executable.elf. User's target is Midnight
+  Club LA, but game identity/title ID was not confirmed through PARAM.SFO.
+User says Let's gooo: proceed to actual runtime load integration. Do not return
+by default to more synchronization variants or request firmware again.
+
+Build111 adds Check runtime load after the existing120 stages. New Runtime.cpp,
+RuntimeFrontend.cpp, RuntimeDispatch.mm and Runtime.h link into the existing core.
+CoreBridge.cpp is entirely unchanged from Build110. All49 production patches,
+pinned source/dependencies, stage order and34 synchronization profiles retained.
+CFBundleVersion111, iOS16.0/A15/Dopamine/TrollStore. User reports Actions result;
+do not poll Actions after publication.
+
+The action uses the existing prepared ELF in cache and installed dev_flash.
+Reject main-thread invocation, non-fully-stopped emulator, live CPU contexts,
+missing/invalid/oversized prepared ELF or missing liblv2 before attempting load.
+Copy config to a unique temporary file, static PPU/SPU decoders, LLVM precompile
+OFF, force liblv2.sprx LLE, null video/audio, null keyboard/mouse, autostart OFF,
+autoexit/big-picture/GameMode/display-sleep prevention OFF, internet/PSN disabled.
+No modification to persistent config.yml. Native BootGame uses direct=true and
+cfg_mode::config_override, which survives Init's default reset and avoids custom
+or database config overriding the request. SetForceBoot(false) prevents the
+other native autostart path. No Emu.Run/Resume invocation in this implementation.
+
+All49 fields of the exact pinned emu_callbacks ABI are bound. Main dispatch uses
+GCD to UIKit main with wake flag/notify acknowledgement; actual native null RSX,
+Keyboard/Mouse/Pad/Audio/Camera/Music factories and log-only progress dialog.
+There is no Vulkan/Metal display, controller device or audio hardware integration
+claimed. on_run rejects unexpected execution, on_resume/missing-firmware/stop
+watchdog/callback exception flag frontend failure. Unsupported package installs
+return failure. Callback bindings remain installed for the process lifetime;
+operations are serialized by the UIKit intakeBusy/main-thread control state.
+
+After BootGame, require no_errors + native ready state and effective static/null/
+autostart-OFF settings. Inspect actual registered main module entry and every
+loadable segment's guest readable mapping; count must match the prepared ELF.
+List registered firmware PRX modules with paths, IDs, segment/function counts.
+Require loaded liblv2.sprx with PRX_STATE_STARTED and actual segments; forcing HLE
+fallback is explicitly not success. Require at least one PPU context, all with
+cpu_flag::stop. Native CPU thread startup defaults STOP+WAIT and its task loop
+cannot execute queued guest entry while STOP is set. Firmware/library start
+calls and guest entry remain queued for a later Run step.
+
+Always call native Kill(false) after an attempted load, even a failed/throwing
+load. Wait up to30seconds for Emu.IsStopped(true) + zero live CPU threads, then
+synchronously drain UIKit's main queue: native on_stop occurs before the final
+main cleanup lambda returns, so the queue barrier prevents racing later config
+restoration/import. Restore both g_cfg and g_backup_cfg snapshots after cleanup.
+On timeout/cleanup/frontend failure return-2, latch UI failed, retain the pending
+runtime crash marker and require reopening. Recoverable load failures return-1
+only after successful cleanup; share log. Runtime C ABI bounds detail buffer.
+Intake idle guard now also uses IsStopped(true), since default IsStopped treats
+stopping as stopped and zero CPU count can precede final object cleanup.
+
+Runtime uses only the cached ELF. It has no PARAM.SFO/game-folder/title metadata
+and does not import game assets, mount a real disc, start guest entry or produce
+video/audio. Do not claim playable Midnight Club or actual execution on success.
+Next native evidence should establish real mapping/firmware PRX/context/cleanup,
+then advance full game-folder import and boot/execution/render integration.
+
+Host validation test_runtime.py compiles unchanged production runtime/frontend
+logic against the actual49-field native callback ABI and actual Emulator::BootGame
+and SetForceBoot bodies. Native Load, config serializer, fs/FXO/VM/input/RSX and
+UIKit queue are explicit host interfaces. Tests include prerequisite/main-thread/
+fully-stopped/C ABI guards, native BootGame config routing, success, failed load,
+throw after contexts, absent main registration, unreadable/wrong count segments,
+wrong entry, missing real firmware PRX, unexpected Run/frontend failure, missing
+or started PPU contexts, delayed stop, cleanup timeout, restoration, reusable
+success after failure, and queue/wake acknowledgement. Host only substitutes a
+30ms timeout for the app's30sec budget. G++ C++23 Wall/Wextra/Werror ASAN/UBSAN
+with detect_leaks=0 PASS. Existing intake suite PASS, including native PUP/SHA1/
+SELF-routing/debug removal and new zero-worker-but-stopping intake rejection.
+Common fixture checks120 ordered stages/old bridge freeze/Build111 metadata/
+runtime config and UI gates; Apple frontend compile/native Load still await
+Actions/user device testing. Workflow adds runtime host check to intake-host,
+retains34+1 host jobs gating the sole installable IPA.
+
+Next device flow: update existing app using Build111 ARMSX3_iOS16_INSTALL_THIS_IPA
+in TrollStore, reopen, Run all120 tests, tap Check runtime load and share startup
+log after completion or failure. Installed firmware/prepared ELF may be reused.
+If prepared file was evicted, Inspect EBOOT/ELF again; reinstall firmware only
+if the app says it is missing. No Actions monitoring; user reports workflow.
+Keep replies concise. Both handoffs and current core README updated.

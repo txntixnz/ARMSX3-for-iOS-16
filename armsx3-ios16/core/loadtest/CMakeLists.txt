@@ -1,6 +1,7 @@
 # P2 requires all core objects to participate in a real link. Undefined symbols
 # remain errors; do not use dynamic_lookup or dead-strip the unreferenced core.
 add_library(ARMSX3Core SHARED CoreBridge.cpp FrontendHooks.cpp Intake.cpp
+    Runtime.cpp RuntimeFrontend.cpp RuntimeDispatch.mm
     "${CMAKE_SOURCE_DIR}/ios/src/StartupLog.mm"
     "${CMAKE_SOURCE_DIR}/rpcs3/rpcs3_version.cpp"
     "${CMAKE_SOURCE_DIR}/rpcs3/Input/pad_thread.cpp"

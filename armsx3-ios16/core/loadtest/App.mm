@@ -143,6 +143,7 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
 @property(nonatomic,strong) UIButton* resultsCopyButton;
 @property(nonatomic,strong) UIButton* firmwareButton;
 @property(nonatomic,strong) UIButton* executableButton;
+@property(nonatomic,strong) UIButton* runtimeButton;
 @property(nonatomic,assign) BOOL intakeBusy;
 @property(nonatomic,assign) NSInteger intakeMode;
 @property(nonatomic,assign) BOOL previousRunPending;
@@ -211,6 +212,10 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
     UIStackView* intakeControls = [[UIStackView alloc] initWithArrangedSubviews:@[self.firmwareButton,self.executableButton]];
     intakeControls.distribution = UIStackViewDistributionFillEqually; intakeControls.spacing = 12;
     [stack addArrangedSubview:intakeControls];
+    self.runtimeButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    [self.runtimeButton setTitle:@"Check runtime load" forState:UIControlStateNormal];
+    [self.runtimeButton addTarget:self action:@selector(checkRuntime) forControlEvents:UIControlEventTouchUpInside];
+    [stack addArrangedSubview:self.runtimeButton];
     self.output = [[UITextView alloc] init];
     self.output.editable = NO;
     self.output.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
@@ -238,6 +243,7 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
     self.resultsCopyButton.enabled = !self.running && !self.intakeBusy;
     const BOOL intakeReady = self.coreHandle && !self.running && !self.intakeBusy && !self.failed && self.nextStage == stageCount;
     self.firmwareButton.enabled = intakeReady; self.executableButton.enabled = intakeReady;
+    self.runtimeButton.enabled = intakeReady;
     [self.runButton setTitle:self.nextStage ? @"Run remaining tests" : @"Run all tests" forState:UIControlStateNormal];
     self.progress.progress = float(self.nextStage) / float(stageCount);
 }
@@ -369,6 +375,42 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
 }
 - (void)selectFirmware { [self selectIntake:1]; }
 - (void)selectExecutable { [self selectIntake:2]; }
+- (void)checkRuntime {
+    if (self.running || self.intakeBusy || self.failed || self.nextStage != stageCount || !self.coreHandle) return;
+    auto action = reinterpret_cast<int (*)(char*,size_t)>(dlsym(self.coreHandle,"armsx3_core_check_runtime"));
+    if (!action) { [self showLogMessage:@"Runtime loading unavailable" detail:@"The core runtime function is missing."]; return; }
+    self.intakeBusy = YES; self.previousRunPending = NO;
+    const BOOL previousIdle = UIApplication.sharedApplication.idleTimerDisabled;
+    UIApplication.sharedApplication.idleTimerDisabled = YES;
+    [NSUserDefaults.standardUserDefaults setObject:@"Runtime load check" forKey:pendingStageKey];
+    [NSUserDefaults.standardUserDefaults synchronize];
+    self.progressLabel.text = @"Loading executable and firmware modules…";
+    [self.transcript appendString:@"\nRUN · Native runtime load and cleanup\n"];
+    self.output.text = self.transcript;
+    ARMSX3StartupLog("RUNTIME UI BEFORE native load check; prepared executable, no guest execution");
+    [self refreshControls];
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0), ^{
+        @autoreleasepool {
+            char buffer[4096] = {};
+            const int result = action(buffer,sizeof(buffer));
+            NSString* detail = [NSString stringWithUTF8String:buffer] ?: @"Runtime returned no detail.";
+            dispatch_async(dispatch_get_main_queue(), ^{
+                self.intakeBusy = NO; UIApplication.sharedApplication.idleTimerDisabled = previousIdle;
+                self.failed = result == -2; // Unfinished teardown requires a fresh process.
+                if (result != -2) {
+                    [NSUserDefaults.standardUserDefaults removeObjectForKey:pendingStageKey];
+                    [NSUserDefaults.standardUserDefaults synchronize];
+                }
+                [self.transcript appendFormat:@"%@ · %@\n",result == 0 ? @"PASS" : @"FAILED",detail];
+                self.output.text = self.transcript;
+                [self.output scrollRangeToVisible:NSMakeRange(self.output.text.length,0)];
+                self.progressLabel.text = result == 0 ? @"Runtime load complete · share the log" : @"Runtime load failed · share the log";
+                ARMSX3StartupLog([NSString stringWithFormat:@"RUNTIME UI %@: %@",result == 0 ? @"PASS" : @"FAIL",detail].UTF8String);
+                [self refreshControls];
+            });
+        }
+    });
+}
 - (void)selectIntake:(NSInteger)mode {
     if (self.running || self.intakeBusy || self.failed || self.nextStage != stageCount || !self.coreHandle) return;
     self.intakeMode = mode;

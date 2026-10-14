@@ -1,11 +1,10 @@
-# ARMSX3 iOS 16 core — Build 110
+# ARMSX3 iOS 16 core — Build 111
 
 Target: iPhone 13 Pro Max/A15, iOS 16.0, Dopamine and TrollStore.
-The installable app links the actual pinned rpcs3_emu core. Build 108 passed
-all 112 device diagnostics. Build 109 passed P2–P119, including native PUP
-authentication and staged TAR extraction, then failed P120 executable intake.
-Build 110 fixes plain ELF routing and keeps 120 readiness checks. Firmware
-installation and executable inspection become available after they all pass.
+The installable app links the actual pinned rpcs3_emu core. Build 110 passed
+all 120 device diagnostics, installed the user's firmware 4.93 (23 packages),
+and decrypted/parsed their EBOOT.BIN with five loadable segments. Build 111
+adds **Check runtime load** while keeping the same 120 readiness checks.
 
 After the workflow succeeds, download **ARMSX3_iOS16_INSTALL_THIS_IPA** and
 install its IPA through TrollStore. Reopen the app and tap **Run all tests**.
@@ -13,10 +12,11 @@ The sequence stops at the first failed stage; share the startup log if it fails.
 
 Once all 120 tests pass:
 
-1. Tap **Install firmware** and choose your **PS3UPDAT.PUP** in Files.
-2. Keep the app open until installation finishes, then share the startup log.
-3. **Inspect EBOOT / ELF** can validate your own executable and prepare its
-   decrypted ELF for the next runtime milestone. It does not start the game.
+1. If firmware is missing, tap **Install firmware** and choose **PS3UPDAT.PUP**.
+2. **Inspect EBOOT / ELF** decrypts and prepares your selected executable.
+3. Tap **Check runtime load**. Keep the app open until loading and cleanup
+   finish, then share the startup log. The prepared ELF and installed firmware
+   from Build 110 can be reused if they remain available after the update.
 
 Firmware import uses native PUP authentication, SCE package decryption and TAR
 extraction. Files are extracted into a fresh staging directory. Required firmware
@@ -29,6 +29,20 @@ It checks loadable segment bounds and stores the prepared ELF in the core cache.
 Only the selected executable is imported; a complete game's assets are not
 imported here. P120 also checks both native debug SELF header encodings and
 rejects unknown or truncated ELF headers.
+
+Runtime loading calls native Emulator::BootGame with a temporary config override:
+static PPU/SPU decoders, null video/audio devices, and autostart disabled. Native
+frontend callbacks dispatch to UIKit's main queue and create the real null RSX,
+input and audio objects. The check requires the ready state, readable mapped
+executable segments, the registered entry descriptor, a loaded liblv2 firmware
+module and stopped PPU contexts. HLE fallback does not count as a firmware load.
+It then calls native Kill(false), waits for a fully stopped emulator with zero
+live CPU threads, drains final main-queue cleanup, and restores configuration.
+Incomplete cleanup disables further actions until the app is reopened.
+
+This loads the cached executable without the game's folder, PARAM.SFO or assets.
+Title identity, disc mounting and complete game import are subsequent work.
+The guest entry is not run and no picture or audio is produced by this check.
 
 The production core still uses the validated interpreter/immutable JIT path.
 LLVM and Vulkan/MoltenVK are disabled. Real game execution, renderer presentation,
@@ -44,5 +58,12 @@ Local intake validation uses actual native PUP/SHA1 code, SELF routing/debug
 header removal and real filesystem rename/rollback. It reproduces the Build 109
 failure and verifies that rejected inputs preserve the last prepared ELF.
 TAR/retail crypto/ELF/backend interfaces are modeled in the host harness; device
-probes use the original native implementations. Native firmware installation
-must be verified using the user's PUP on the phone.
+probes use the original native implementations. Real firmware installation and
+real EBOOT decryption were verified in Build 110's device logs.
+
+The runtime host check compiles production runtime/frontend code against all 49
+native callback signatures and the actual BootGame wrapper. It tests temporary
+configuration, prerequisites, mapped-segment/firmware/context checks, partial
+failure, delayed cleanup, timeout, queue/wake behavior and restoration. Native
+Load/VM/FXO/device/config backends are modeled there; the new iOS runtime load
+must still be verified on the phone. Apple compilation is performed by Actions.

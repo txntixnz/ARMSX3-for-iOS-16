@@ -69,10 +69,10 @@ constexpr u32 operator""_u32(const char*s,usz n){u32 v=0;for(usz i=0;i<n&&i<4;++
 namespace fmt{template<class...T>std::string format(const char*s,T...){return s;}}
 #define AUDIT(x) assert(x)
 void mbedtls_zeroize(void*p,usz n){volatile u8*bytes=static_cast<volatile u8*>(p);while(n--)*bytes++=0;}
-std::string host_root;bool host_idle=true;u64 host_workers=0;int decoder_fault=0;
+std::string host_root;bool host_idle=true,host_stopping=false;u64 host_workers=0;int decoder_fault=0;
 void ARMSX3StartupLog(const char*){}
 extern "C" u64 armsx3_ios_live_cpu_threads(){return host_workers;}
-struct {std::string boot;bool IsStopped()const{return host_idle;}const std::string&GetBoot()const{return boot;}}Emu;
+struct {std::string boot;bool IsStopped(bool fully = false)const{return host_idle&&(!fully||!host_stopping);}const std::string&GetBoot()const{return boot;}}Emu;
 struct {std::string get_dev_flash()const{return host_root+"/installed/";}}g_cfg_vfs;
 namespace fs{
 constexpr int read=1,rewrite=2;
@@ -165,6 +165,9 @@ int main(int argc,char**argv){
  ios_intake::write_file(executable,accepted);Emu.boot="unrelated.BIN";
  assert(armsx3_core_inspect_executable(executable.c_str(),detail,sizeof(detail))==0);assert(Emu.GetBoot()=="unrelated.BIN");
  host_idle=false;assert(armsx3_core_import_firmware(argv[2],detail,sizeof(detail))==-1);host_idle=true;
+ host_stopping=true;assert(Emu.IsStopped()&&!Emu.IsStopped(true));
+ assert(armsx3_core_import_firmware(argv[2],detail,sizeof(detail))==-1);
+ assert(armsx3_core_inspect_executable(executable.c_str(),detail,sizeof(detail))==-1);host_stopping=false;
  host_workers=1;assert(armsx3_core_inspect_executable(executable.c_str(),detail,sizeof(detail))==-1);host_workers=0;
  assert(armsx3_core_import_firmware(nullptr,detail,sizeof(detail))==-1);assert(armsx3_core_import_firmware(argv[2],nullptr,0)==-1);
  for(auto&e:std::filesystem::directory_iterator(host_root))assert(!e.path().filename().string().starts_with(".ios-firmware-stage-"));

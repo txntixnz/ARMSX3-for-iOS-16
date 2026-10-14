@@ -27,7 +27,7 @@ namespace
 {
 void log(const std::string& value) { ARMSX3StartupLog(value.c_str()); }
 void require(bool condition, const char* message) { if (!condition) throw std::runtime_error(message); }
-void idle() { require(Emu.IsStopped() && !armsx3_ios_live_cpu_threads(), "Stop emulator activity before importing files"); }
+void idle() { require(Emu.IsStopped(true) && !armsx3_ios_live_cpu_threads(), "Stop emulator activity before importing files"); }
 std::string unique_tag()
 {
     static std::atomic<unsigned> sequence{0};
