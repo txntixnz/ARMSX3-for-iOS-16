@@ -99,6 +99,10 @@ static constexpr DiagnosticStage stages[] = {
     {91, "Priority readers waiting behind a writer", "armsx3_core_test_rwlock_reader_priority"},
     {92, "FIFO writers waiting behind readers", "armsx3_core_test_rwlock_writer_fifo"},
     {93, "Priority writers waiting behind readers", "armsx3_core_test_rwlock_writer_priority"},
+    {94, "FIFO event receive and 64-bit port messages", "armsx3_core_test_event_queue_fifo"},
+    {95, "Priority event receive and 64-bit port messages", "armsx3_core_test_event_queue_priority"},
+    {96, "FIFO event receive cancellation and port recovery", "armsx3_core_test_event_queue_cancel_fifo"},
+    {97, "Priority event receive cancellation and port recovery", "armsx3_core_test_event_queue_cancel_priority"},
 };
 static constexpr NSUInteger stageCount = sizeof(stages) / sizeof(stages[0]);
 static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";

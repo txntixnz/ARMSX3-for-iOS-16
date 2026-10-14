@@ -2519,3 +2519,108 @@ when last queued writer times out, shared IPC, serialized savestate, firmware,
 renderer and actual game boot remain untested. Target iPhone13ProMax/iOS16.0/
 Dopamine/TrollStore; eventual game Midnight Club Los Angeles. Keep replies
 short and proceed autonomously within the established publish workflow.
+
+
+## 2026-10-14 — Build106 expands the next IPA to eight new diagnostics
+
+User explicitly requested eight diagnostics after Build105 publication.
+Build106 adds P94–P97 event queue/local port tests alongside the still-device-
+unverified P90–P93 reader/writer tests. Relative to the last verified Build104,
+the next IPA contains eight NEW diagnostics P90–P97 and96 total P2–P97.
+CFBundleVersion106, iOS16 minimum. Entire Build105 bridge prefix frozen at
+ git blob792bb98f6b7f47ac46ece9a2e0d713e8b9453077; all49 production patches and
+upstream pin92b931b9fb5eef7f1317cb482917dfc19aceebd9 unchanged.
+Build105 commitd4ec539fb8f1ce19b692150e22752caf3834807a is superseded by this
+expanded build; use the latest Build106 IPA. No new device log was processed.
+
+New profiles:
+P94 event_queue_fifo; P95 event_queue_priority;
+P96 event_queue_cancel_fifo; P97 event_queue_cancel_priority.
+Exports start armsx3_core_test_. Shared function
+armsx3_core_test_event_queue_batch(u32 protocol, bool cancelReceive).
+All profiles test PPU queues and local ports, three20-operation transactions
+on the retained two-worker/TLS pair, first roles0/1/0. Ten native APIs:
+128queue_create/129destroy/130receive/131tryreceive/133drain/
+134port_create/135destroy/136connect_local/137disconnect/138send.
+Native queue/port constructors and queue::send execute unchanged. Queue
+capacity2, protocolFIFO/priority, typePPU, key0, nameiOSQevt!. Port named
+0xfedcba9876543210 for transactions1/3; name0 in transaction2 exercises native
+source(process_getpid()<<32)|portID (pinned process_getpid returns1).
+
+Guest descriptor now32bytes: BE32 handle/SC plus three BE64 fields.12 guest
+instructions unchanged in count but r5/r6 loads are LD instead of LWZ, so
+port names, data1/data2/data3 and receive timeout retain64 bits. Native receive
+returns source/data1/data2/data3 in r4–r7 and ignores dummy_event; its entire
+canary buffer must remain unchanged. Input history/syscall_args stay exact
+while result registers change. Tryreceive writes exact BE64 event arrays and
+BE32 count; zero-size, empty, one-item and bulk requests preserve unused bytes.
+
+Each profile: create queue/port; empty tryreceive; invalid port type0 preserves
+output; connect, duplicate connect/connected destroy EISCONN; disconnect;
+disconnected send ENOTCONN; reconnect; receive100000us queues with exact native
+PPU pq/empty event buffer/registered deadline; normal queued destroy EBUSY;
+timeout removes waiter and timer. Fresh same-worker/queue1000000us receive:
+ordinary profiles send full64 payload directly to the waiter, bypassing the
+buffer; cancel profiles force-destroy queue, returning ECANCELED, leaving the
+port reference to a queue whose exists count is0. Dead-link sends ENOTCONN.
+Cancellation profiles recreate the queue in a separate operation, then
+reconnect the existing port in the next operation before payload sends. Track
+linkedQueueID separately from the fresh live queueID until reconnect; this
+verifies the retired reference and prevents using a handle before creation.
+All profiles then exercise buffered FIFO payload order, capacity2 overflow
+EBUSY, exact bulk/count outputs, effective draining of two queued events,
+invalid queue size0/destroy mode2 with canary preservation, disconnect and
+port removal, empty queue destruction and stale receive/tryreceive/drain/
+connect/send/queue-destroy/port-destroy ESRCH. Queue/port namespaces0x8d/0x0e
+are empty before and after; emergency cleanup removes ports/references before
+queues after worker joins.
+
+Per profile120SC/360dispatches/240pauses/1440instructions/TLS60 perworker;
+three ordinary queue + three port handles (six writes), or cancellation queue
+replacement adds three writes (nine). Six observed queues, three expiries and
+three native wakes/delivery-or-cancellation completions. Paused/SC/continuation
+GPR/FPR/VR/status/reservation/history/ABI/signed results/DATA/arrays/counts/
+canaries/TLS/stacks/VM aliases/cache/settings/CPU lifecycle/ID/scheduler scope
+cleanup all checked. Combined eight new stages960SC/2880dispatches/
+1920pauses/11520guest instructions.
+
+Validation PASS: test_p94_fixture.py preserves prior chain/Build105 bytes and
+independently models all four port-link/source/payload/order/capacity/buffer/
+count/timeout/delivery/cancel/replacement/drain/error lifecycles, validates
+code/error arrays,96 UI stages/eight new symbols, Build106/iOS16 metadata.
+test_p94_pair.py extracts ten native API bodies, native constructors, native
+queue::send/queue algorithms/probes/binder/SC/dispatcher/TLS/bounded helper and
+production guest workload. Four profiles, eight normal runs/16workers each,
+plus applicable setup/context/ABI/registry/timer/cleanup failures, all PASS
+under C++20 Wall/Wextra/Werror ASAN+UBSAN detect_leaks0. New faults341 corrupted
+buffered payload;342 bad delivered register (ordinary);343 false full-queue
+success;344 failed drain;345 false EISCONN;346 false ENOTCONN;347 failed
+disconnect;348 wrong count;349 wrong event source;350 false cancellation
+success (cancel);351 false queued destruction success;352 invalid mode
+accepted;353 corrupt BE event output, all detected where applicable. Retains
+false timeout263/missing unqueue265/stale timer266 and other relevant faults.
+CPU/VM/ID allocator/atomic storage/clock/scheduler/notification are explicit
+host models; unused SPU paths reject entry. No native ARM/device result claimed.
+Both native allocator namespaces pass test_p94_registry.py (constructed8192-
+entry map type/publication/capacity/delete/cookie reuse and unconstructed-map
+rejection). Python/YAML/plist/whitespace/prefix checks PASS. Previous14 host
+profiles passed earlier in this same task and their production bodies remain
+byte-identical; four additional event profiles now pass,18 configured total.
+Xcode/full ARM build and P90–P97 device execution await Actions/user install.
+
+Workflow has18 independent synchronization-host matrix profiles and one IPA
+core build that waits for all profiles. Common fixture test_p94_fixture.py;
+queue/port allocator tests run before patch application in both checkouts.
+Host-only original lv2.cpp restoration remains isolated from production.
+Concurrency cancel-in-progress is now TRUE, as discussed with the user, to
+cancel superseded versions and avoid waiting behind the previous four-test
+Build105. No Actions polling after push; user reports build/device outcome.
+
+Next: when the latest Build106 workflow succeeds, install
+ARMSX3_iOS16_INSTALL_THIS_IPA via TrollStore, reopen, run all96 tests and send
+the startup log. Verify all eight new native results before advancing further.
+SPU queue delivery, multiwaiter FIFO/priority ordering, priority-dependent port
+is_busy handoff, shared IPC, serialized savestate, firmware/renderer/game boot
+remain untested. Target remains iPhone13ProMax/iOS16.0/Dopamine/TrollStore;
+Midnight Club Los Angeles eventual game target. Keep replies short. Standing
+batch request is now eight meaningful diagnostics per next IPA where logical.
