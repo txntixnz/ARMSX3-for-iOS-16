@@ -6781,3 +6781,91 @@ mutations and occupied-key preservation. Independent test_p106_fixture,
 Build107 device stage parser, Python AST/YAML/plist/34-profile dependency
 validation, three core shell syntax checks and git diff --check PASS. All
 production patches are unchanged. New native ARM/iOS execution awaits Build108.
+
+
+## Build109 — faster porting: firmware import and real executable intake
+
+User explicitly clarified on2026-10-14 that the requested speedup is overall
+porting, if appropriate at this stage; their PS3 firmware is already ready.
+Shift to actual game prerequisites instead of more synchronization variations.
+Build108 device log ARMSX3-startup-20261014-211100-268-27760.txt, PID27760,
+passes112 unique ordered stages P2-P113 and the final all-stages completion.
+Last verified native stageP113. No failed diagnostic in this device log.
+
+Build109 adds two functional UIKit actions after the full readiness sequence:
+Install firmware and Inspect EBOOT/ELF. UIDocumentPicker uses UTTypeData and
+asCopy:YES; scope is held while copying to an app-owned temporary file. Core
+operations run off-main with one intake action at a time, controls/idle timer
+managed on main, crash marker persisted before the call and temporary input
+removed afterward. User chooses their own PS3UPDAT.PUP in Files, no PC needed.
+Both actions append details to the same startup log/transcript/export path.
+
+Intake.cpp uses real native pup_object with SHA1-HMAC validation, bounded
+header/entry preflight, version0x100 and update TAR0x300, SCEDecrypter with
+native SCEPKG keys and the third decompressed TAR from each dev_flash package.
+All TAR headers/checksums/lengths/types and relative dev_flash paths are checked
+before native tar_object extraction into a fresh sibling staging directory.
+Require sys/external/liblv2.sprx and vsh/etc/version.txt before publication.
+Rename the prior dev_flash to a private backup, then rename staged dev_flash
+into place; publication failure restores the prior directory. Extraction or
+decryption failure leaves the existing installation untouched. Cleanup is
+scoped to the operation's fresh stage; failed backup removal retains backup.
+Destination is g_cfg_vfs.get_dev_flash() already configured by native Emu.Init;
+no remount or Emu.Init reset during import. Native logs name package progress
+and publication boundaries. Actual official-firmware installation awaits user
+PUP selection on device; do not claim that HMAC fixtures install real firmware.
+
+Executable intake uses native decrypt_self and ppu_exec_object on the selected
+real file, validates loadable segment guest-address/memory bounds, then writes
+the decrypted ELF atomically to cache/ARMSX3-prepared-executable.elf. No game
+worker or renderer is started, and no assets from a game folder are imported
+by this single-file inspection. UI states that execution is a subsequent
+milestone; no playable game or real title memory-load claim. No license/RAP
+management is added. Unsupported decryption is reported with a startup log.
+
+Eight focused readiness stages P114-P121 (120 total): native disk read/write/
+rename; missing/truncated/bad-magic PUP rejection; bounded tables/entry ranges
+and native size rejection; authenticated PUP version/update/missing-entry;
+PUP hash tamper rejection; native staged TAR extraction/path guards; the actual
+selected-executable inspection path with synthetic ELF and invalid data;
+transactional publication with an injected rename failure and rollback.
+All synthetic files use unique disposable cache subdirectories and never
+replace installed firmware. The entire Build108 CoreBridge prefix is frozen
+at git blob ec4bb6ac7c2d47c52dc55256a08a87e7fb4b03bc; all49 production patches
+and pinned upstream92b931b9fb5eef7f1317cb482917dfc19aceebd9 unchanged.
+
+New local host test compiles the production intake source and portable policy
+with actual pinned PUP parser and SHA1/HMAC code. An independent Python fixture
+uses HMAC plus a known RFC HMAC vector. Real disk rename/rollback, all eight
+probe bodies, complete install/inspect entry points, injected decoder failure
+preservation and C ABI idle/input guards are checked under ASAN/UBSAN and
+warnings as errors. TAR/SCE/ELF/backend/Emu interfaces are host models in that
+check; new on-device P119/P120 and real PUP installation use original core
+implementations. Do not confuse modeled decoder success with native SCE proof.
+
+Workflow adds one intake-host job alongside existing34 synchronization jobs;
+both gate the sole iOS IPA. Common fixture is test_p114_fixture.py. CMake links
+Intake.cpp into the actual core and UniformTypeIdentifiers into UIKit app.
+CFBundleVersion109, deployment16.0. No Actions polling after publish; user
+reports completion. Both handoffs updated; current core README describes the
+functional intake stage instead of the old compile-only P1 checkpoint.
+
+Next device flow: install latest ARMSX3_iOS16_INSTALL_THIS_IPA via TrollStore,
+reopen, Run all tests (120). If all pass, tap Install firmware, pick the user's
+PS3UPDAT.PUP, keep app open until it finishes, share startup log. Once installed,
+Inspect EBOOT/ELF may be used for their own executable and its intake log.
+Remaining real-game blockers include frontend callbacks/runtime boot lifecycle,
+RSX rendering (Vulkan/MoltenVK still disabled), audio/input integration, optional
+LLVM/JIT backends and actual game execution. Next implementation should use
+real firmware/title evidence to advance those prerequisites instead of returning
+to exhaustive synchronization variants by default. Keep responses short.
+
+Build109 local validation PASS: test_p114_intake under C++23 Wall/Wextra/Werror
+ASAN+UBSAN (detect_leaks=0 in this runtime), all eight production probe bodies,
+actual native PUP/SHA1 plus independent HMAC fixture/known vector, real host
+file writes/renames/publication/rollback, modeled decoder failure preservation,
+full install/inspect and stopped/no-worker/C ABI guards. test_p114_fixture,
+Build108 device stage parser, Python/YAML/plist/host dependency checks, pinned
+SCE/ELF/serialization API contract review, core shell syntax and diff whitespace
+PASS. UIKit/Apple compilation and native real PUP installation await Actions
+and device testing respectively. No game boot result claimed.

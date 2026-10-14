@@ -1,6 +1,6 @@
 # P2 requires all core objects to participate in a real link. Undefined symbols
 # remain errors; do not use dynamic_lookup or dead-strip the unreferenced core.
-add_library(ARMSX3Core SHARED CoreBridge.cpp FrontendHooks.cpp
+add_library(ARMSX3Core SHARED CoreBridge.cpp FrontendHooks.cpp Intake.cpp
     "${CMAKE_SOURCE_DIR}/ios/src/StartupLog.mm"
     "${CMAKE_SOURCE_DIR}/rpcs3/rpcs3_version.cpp"
     "${CMAKE_SOURCE_DIR}/rpcs3/Input/pad_thread.cpp"
@@ -30,7 +30,7 @@ add_executable(ARMSX3CoreLoadTest MACOSX_BUNDLE
     App.mm "${CMAKE_SOURCE_DIR}/ios/src/StartupLog.mm")
 target_include_directories(ARMSX3CoreLoadTest PRIVATE "${CMAKE_SOURCE_DIR}/ios/src")
 target_compile_options(ARMSX3CoreLoadTest PRIVATE -fobjc-arc)
-target_link_libraries(ARMSX3CoreLoadTest PRIVATE "-framework UIKit" "-framework Foundation")
+target_link_libraries(ARMSX3CoreLoadTest PRIVATE "-framework UIKit" "-framework Foundation" "-framework UniformTypeIdentifiers")
 # Deliberately loaded by the button after logging starts, never by dyld at launch.
 add_dependencies(ARMSX3CoreLoadTest ARMSX3Core)
 set_target_properties(ARMSX3CoreLoadTest PROPERTIES

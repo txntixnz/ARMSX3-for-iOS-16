@@ -38101,3 +38101,69 @@ extern "C" __attribute__((visibility("default"))) int armsx3_core_test_event_ipc
     if (!result) ARMSX3StartupLog("P113 PASS: native IPC event spu_priority_auto connection/payload/key-reuse/cleanup checks");
     return result;
 }
+
+// Build109 advances firmware import and actual executable intake.
+#include "Intake.h"
+extern "C" __attribute__((visibility("default"))) int armsx3_core_test_intake_storage()
+{
+    ARMSX3StartupLog("P114 BEFORE firmware/executable readiness storage");
+    const int result = ios_intake::probe(0);
+    if (!result) ARMSX3StartupLog("P114 PASS: firmware/executable readiness storage");
+    return result;
+}
+
+extern "C" __attribute__((visibility("default"))) int armsx3_core_test_intake_pup_headers()
+{
+    ARMSX3StartupLog("P115 BEFORE firmware/executable readiness pup_headers");
+    const int result = ios_intake::probe(1);
+    if (!result) ARMSX3StartupLog("P115 PASS: firmware/executable readiness pup_headers");
+    return result;
+}
+
+extern "C" __attribute__((visibility("default"))) int armsx3_core_test_intake_pup_bounds()
+{
+    ARMSX3StartupLog("P116 BEFORE firmware/executable readiness pup_bounds");
+    const int result = ios_intake::probe(2);
+    if (!result) ARMSX3StartupLog("P116 PASS: firmware/executable readiness pup_bounds");
+    return result;
+}
+
+extern "C" __attribute__((visibility("default"))) int armsx3_core_test_intake_pup_authenticated()
+{
+    ARMSX3StartupLog("P117 BEFORE firmware/executable readiness pup_authenticated");
+    const int result = ios_intake::probe(3);
+    if (!result) ARMSX3StartupLog("P117 PASS: firmware/executable readiness pup_authenticated");
+    return result;
+}
+
+extern "C" __attribute__((visibility("default"))) int armsx3_core_test_intake_pup_tamper()
+{
+    ARMSX3StartupLog("P118 BEFORE firmware/executable readiness pup_tamper");
+    const int result = ios_intake::probe(4);
+    if (!result) ARMSX3StartupLog("P118 PASS: firmware/executable readiness pup_tamper");
+    return result;
+}
+
+extern "C" __attribute__((visibility("default"))) int armsx3_core_test_intake_tar_staging()
+{
+    ARMSX3StartupLog("P119 BEFORE firmware/executable readiness tar_staging");
+    const int result = ios_intake::probe(5);
+    if (!result) ARMSX3StartupLog("P119 PASS: firmware/executable readiness tar_staging");
+    return result;
+}
+
+extern "C" __attribute__((visibility("default"))) int armsx3_core_test_intake_executable_intake()
+{
+    ARMSX3StartupLog("P120 BEFORE firmware/executable readiness executable_intake");
+    const int result = ios_intake::probe(6);
+    if (!result) ARMSX3StartupLog("P120 PASS: firmware/executable readiness executable_intake");
+    return result;
+}
+
+extern "C" __attribute__((visibility("default"))) int armsx3_core_test_intake_firmware_publication()
+{
+    ARMSX3StartupLog("P121 BEFORE firmware/executable readiness firmware_publication");
+    const int result = ios_intake::probe(7);
+    if (!result) ARMSX3StartupLog("P121 PASS: firmware/executable readiness firmware_publication");
+    return result;
+}

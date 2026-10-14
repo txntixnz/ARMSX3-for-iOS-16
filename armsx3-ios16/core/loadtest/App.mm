@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 #import <UIKit/UIKit.h>
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #include <dlfcn.h>
 #include <cstdio>
 #include "StartupLog.h"
@@ -119,11 +120,19 @@ static constexpr DiagnosticStage stages[] = {
     {111, "IPC spu fifo auto delivery and key reuse", "armsx3_core_test_event_ipc_spu_fifo_auto"},
     {112, "IPC spu priority named delivery and key reuse", "armsx3_core_test_event_ipc_spu_priority_named"},
     {113, "IPC spu priority auto delivery and key reuse", "armsx3_core_test_event_ipc_spu_priority_auto"},
+    {114, "Firmware storage and file rename", "armsx3_core_test_intake_storage"},
+    {115, "Native PUP header rejection", "armsx3_core_test_intake_pup_headers"},
+    {116, "Bounded firmware entry tables", "armsx3_core_test_intake_pup_bounds"},
+    {117, "Authenticated PUP entries and version", "armsx3_core_test_intake_pup_authenticated"},
+    {118, "Tampered firmware hash rejection", "armsx3_core_test_intake_pup_tamper"},
+    {119, "Native TAR extraction to staging", "armsx3_core_test_intake_tar_staging"},
+    {120, "Selected executable intake path", "armsx3_core_test_intake_executable_intake"},
+    {121, "Firmware publication and rollback", "armsx3_core_test_intake_firmware_publication"},
 };
 static constexpr NSUInteger stageCount = sizeof(stages) / sizeof(stages[0]);
 static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
 
-@interface LoadController : UIViewController
+@interface LoadController : UIViewController <UIDocumentPickerDelegate>
 @property(nonatomic,strong) UITextView* output;
 @property(nonatomic,strong) UILabel* progressLabel;
 @property(nonatomic,strong) UIProgressView* progress;
@@ -132,6 +141,10 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
 @property(nonatomic,strong) UIButton* stopButton;
 @property(nonatomic,strong) UIButton* shareButton;
 @property(nonatomic,strong) UIButton* resultsCopyButton;
+@property(nonatomic,strong) UIButton* firmwareButton;
+@property(nonatomic,strong) UIButton* executableButton;
+@property(nonatomic,assign) BOOL intakeBusy;
+@property(nonatomic,assign) NSInteger intakeMode;
 @property(nonatomic,assign) BOOL previousRunPending;
 @property(nonatomic,assign) void* coreHandle;
 @property(nonatomic,assign) NSUInteger nextStage;
@@ -149,7 +162,7 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.view.backgroundColor = UIColor.systemBackgroundColor;
-    self.title = @"ARMSX3 · diagnostics";
+    self.title = @"ARMSX3";
     self.transcript = [NSMutableString string];
     UIStackView* stack = [[UIStackView alloc] init];
     stack.axis = UILayoutConstraintAxisVertical;
@@ -189,6 +202,15 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
     logControls.distribution = UIStackViewDistributionFillEqually;
     logControls.spacing = 12;
     [stack addArrangedSubview:logControls];
+    self.firmwareButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    [self.firmwareButton setTitle:@"Install firmware" forState:UIControlStateNormal];
+    [self.firmwareButton addTarget:self action:@selector(selectFirmware) forControlEvents:UIControlEventTouchUpInside];
+    self.executableButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    [self.executableButton setTitle:@"Inspect EBOOT / ELF" forState:UIControlStateNormal];
+    [self.executableButton addTarget:self action:@selector(selectExecutable) forControlEvents:UIControlEventTouchUpInside];
+    UIStackView* intakeControls = [[UIStackView alloc] initWithArrangedSubviews:@[self.firmwareButton,self.executableButton]];
+    intakeControls.distribution = UIStackViewDistributionFillEqually; intakeControls.spacing = 12;
+    [stack addArrangedSubview:intakeControls];
     self.output = [[UITextView alloc] init];
     self.output.editable = NO;
     self.output.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
@@ -208,19 +230,21 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
     [NSNotificationCenter.defaultCenter removeObserver:self];
 }
 - (void)refreshControls {
-    const BOOL available = !self.running && !self.failed && self.nextStage < stageCount;
+    const BOOL available = !self.running && !self.intakeBusy && !self.failed && self.nextStage < stageCount;
     self.runButton.enabled = available;
     self.nextButton.enabled = available;
     self.stopButton.enabled = self.running && self.runAll && !self.stopRequested;
-    self.shareButton.enabled = !self.running;
-    self.resultsCopyButton.enabled = !self.running;
+    self.shareButton.enabled = !self.running && !self.intakeBusy;
+    self.resultsCopyButton.enabled = !self.running && !self.intakeBusy;
+    const BOOL intakeReady = self.coreHandle && !self.running && !self.intakeBusy && !self.failed && self.nextStage == stageCount;
+    self.firmwareButton.enabled = intakeReady; self.executableButton.enabled = intakeReady;
     [self.runButton setTitle:self.nextStage ? @"Run remaining tests" : @"Run all tests" forState:UIControlStateNormal];
     self.progress.progress = float(self.nextStage) / float(stageCount);
 }
 - (void)startAll { [self startSequence:YES]; }
 - (void)startNext { [self startSequence:NO]; }
 - (void)startSequence:(BOOL)all {
-    if (self.running || self.failed || self.nextStage >= stageCount) return;
+    if (self.running || self.intakeBusy || self.failed || self.nextStage >= stageCount) return;
     self.running = YES;
     self.previousRunPending = NO;
     self.runAll = all;
@@ -342,6 +366,60 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
     UIAlertController* alert = [UIAlertController alertControllerWithTitle:title message:detail preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
     [self presentViewController:alert animated:YES completion:nil];
+}
+- (void)selectFirmware { [self selectIntake:1]; }
+- (void)selectExecutable { [self selectIntake:2]; }
+- (void)selectIntake:(NSInteger)mode {
+    if (self.running || self.intakeBusy || self.failed || self.nextStage != stageCount || !self.coreHandle) return;
+    self.intakeMode = mode;
+    UIDocumentPickerViewController* picker = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTTypeData] asCopy:YES];
+    picker.delegate = self; picker.allowsMultipleSelection = NO;
+    [self presentViewController:picker animated:YES completion:nil];
+}
+- (void)documentPicker:(UIDocumentPickerViewController*)controller didPickDocumentsAtURLs:(NSArray<NSURL*>*)urls {
+    (void)controller;
+    NSURL* source = urls.firstObject;
+    if (!source || self.running || self.intakeBusy || !self.coreHandle) return;
+    const NSInteger mode = self.intakeMode;
+    const char* symbol = mode == 1 ? "armsx3_core_import_firmware" : "armsx3_core_inspect_executable";
+    auto action = reinterpret_cast<int (*)(const char*,char*,size_t)>(dlsym(self.coreHandle,symbol));
+    if (!action) { [self showLogMessage:@"Import unavailable" detail:@"The core import function is missing."]; return; }
+    self.intakeBusy = YES; self.previousRunPending = NO;
+    const BOOL previousIdle = UIApplication.sharedApplication.idleTimerDisabled;
+    UIApplication.sharedApplication.idleTimerDisabled = YES;
+    NSString* label = mode == 1 ? @"Install PS3 firmware" : @"Inspect PS3 executable";
+    [NSUserDefaults.standardUserDefaults setObject:label forKey:pendingStageKey];
+    [NSUserDefaults.standardUserDefaults synchronize];
+    self.progressLabel.text = mode == 1 ? @"Installing firmware…" : @"Preparing executable…";
+    [self.transcript appendFormat:@"\n%@ · %@\n",label,source.lastPathComponent]; self.output.text = self.transcript;
+    ARMSX3StartupLog([NSString stringWithFormat:@"INTAKE UI BEFORE %@ selected=%@",label,source.lastPathComponent].UTF8String);
+    [self refreshControls];
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0), ^{
+        @autoreleasepool {
+            const BOOL scoped = [source startAccessingSecurityScopedResource];
+            NSURL* local = [[NSURL fileURLWithPath:NSTemporaryDirectory() isDirectory:YES]
+                URLByAppendingPathComponent:[@"ARMSX3-intake-" stringByAppendingString:NSUUID.UUID.UUIDString]];
+            NSError* error = nil; NSString* detail = nil; int result = -1;
+            if ([NSFileManager.defaultManager copyItemAtURL:source toURL:local error:&error]) {
+                char buffer[4096] = {};
+                result = action(local.fileSystemRepresentation,buffer,sizeof(buffer));
+                detail = [NSString stringWithUTF8String:buffer] ?: @"Import returned no detail.";
+                [NSFileManager.defaultManager removeItemAtURL:local error:nil];
+            } else detail = error.localizedDescription ?: @"The selected file could not be copied.";
+            if (scoped) [source stopAccessingSecurityScopedResource];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                self.intakeBusy = NO; UIApplication.sharedApplication.idleTimerDisabled = previousIdle;
+                [NSUserDefaults.standardUserDefaults removeObjectForKey:pendingStageKey];
+                [NSUserDefaults.standardUserDefaults synchronize];
+                [self.transcript appendFormat:@"%@ · %@\n",result == 0 ? @"PASS" : @"FAILED",detail];
+                self.output.text = self.transcript;
+                [self.output scrollRangeToVisible:NSMakeRange(self.output.text.length,0)];
+                self.progressLabel.text = result == 0 ? @"Import complete · share the log" : @"Import failed · share the log";
+                ARMSX3StartupLog([NSString stringWithFormat:@"INTAKE UI %@ %@: %@",result == 0 ? @"PASS" : @"FAIL",label,detail].UTF8String);
+                [self refreshControls];
+            });
+        }
+    });
 }
 - (NSString*)logTextWithTail:(BOOL)tail {
     NSURL* docs = [[NSFileManager defaultManager] URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask].firstObject;

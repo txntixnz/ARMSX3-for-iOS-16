@@ -106,7 +106,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 armsx3-ios16/tests/test_p106_fixture.py
+          python3 armsx3-ios16/tests/test_p114_fixture.py
           python3 armsx3-ios16/tests/test_p82_registry.py upstream-armsx3
           python3 armsx3-ios16/tests/test_p86_registry.py upstream-armsx3
           python3 armsx3-ios16/tests/test_p90_registry.py upstream-armsx3
@@ -129,8 +129,28 @@ jobs:
             armsx3-ios16/core/loadtest/CoreBridge.cpp \
             upstream-armsx3/rpcs3/Emu/Cell/Modules/sys_ppu_thread_.cpp \
             "${{ matrix.profile }}"
+  intake-host:
+    name: Check firmware and executable intake
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Checkout pinned native source
+        uses: actions/checkout@v4
+        with:
+          repository: ARMSX2/ARMSX3
+          ref: 92b931b9fb5eef7f1317cb482917dfc19aceebd9
+          path: upstream-armsx3
+          submodules: false
+      - name: Verify intake fixtures and native PUP parser
+        env:
+          ASAN_OPTIONS: detect_leaks=0
+        run: |
+          set -euo pipefail
+          python3 armsx3-ios16/tests/test_p114_fixture.py
+          python3 armsx3-ios16/tests/test_p114_intake.py upstream-armsx3
   core:
-    needs: synchronization-host
+    needs: [synchronization-host, intake-host]
     name: Cross-compile real rpcs3_emu for iOS 16 arm64
     runs-on: macos-15
     timeout-minutes: 120
@@ -170,7 +190,7 @@ jobs:
           set -euo pipefail
           python3 armsx3-ios16/ios/scripts/audit-hook-consumers.py upstream-armsx3
           python3 armsx3-ios16/tests/test_p43_patch.py upstream-armsx3/rpcs3/Emu/Cell/lv2/sys_memory.cpp
-          python3 armsx3-ios16/tests/test_p106_fixture.py
+          python3 armsx3-ios16/tests/test_p114_fixture.py
           python3 armsx3-ios16/tests/test_p73_patch.py upstream-armsx3
           python3 armsx3-ios16/tests/test_p76_registry.py upstream-armsx3
           python3 armsx3-ios16/tests/test_p82_registry.py upstream-armsx3

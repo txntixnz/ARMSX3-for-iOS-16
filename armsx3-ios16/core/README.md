@@ -1,60 +1,41 @@
-# P1: actual emulator core compilation
+# ARMSX3 iOS 16 core — Build 109
 
-This separate workflow cross-compiles upstream **rpcs3_emu**, including CPU,
-RSX common code, PS3 modules, loaders and utilities, for arm64 iPhoneOS 16.0.
-It does not build another diagnostic replacement, link a runnable emulator,
-or package an IPA. The working P0.2 app remains available separately.
+Target: iPhone 13 Pro Max/A15, iOS 16.0, Dopamine and TrollStore.
+The installable app links the actual pinned rpcs3_emu core. Build 108 passed
+all 112 device diagnostics. Build 109 adds firmware installation and selected
+executable inspection, plus eight focused readiness checks (120 total).
 
-The workflow builds FFmpeg 8.0 from pinned source for iOS, applies the UIKit
-and unused hook-arena patches, excludes the Qt desktop frontend and uses
-libusb's null backend (physical USB passthrough unavailable). It does not
-use Android defines or link macOS FFmpeg prebuilts. LLVM, Vulkan, SDL, FAudio,
-OpenAL and OpenCV are disabled for this initial core compilation pass.
-The pinned cubeb desktop AudioUnit backend is also disabled; device audio
-remains pending. Other core dependencies are compiled from the pinned upstream submodules.
+After the workflow succeeds, download **ARMSX3_iOS16_INSTALL_THIS_IPA** and
+install its IPA through TrollStore. Reopen the app and tap **Run all tests**.
+The sequence stops at the first failed stage; share the startup log if it fails.
 
-The archive verification checks every object for arm64, iPhoneOS platform
-metadata and a deployment target no newer than iOS 16.0. Static archive
-creation does not resolve all external symbols. The artifact is **not a
-standalone SDK or a link-complete emulator**; transitive libraries are not
-bundled in it. Build logs and compile commands are uploaded on failure.
+Once all 120 tests pass:
 
-## Runtime work still required
+1. Tap **Install firmware** and choose your **PS3UPDAT.PUP** in Files.
+2. Keep the app open until installation finishes, then share the startup log.
+3. **Inspect EBOOT / ELF** can validate your own executable and prepare its
+   decrypted ELF for the next runtime milestone. It does not start the game.
 
-- Implement the actual iOS JIT allocation/publication and concurrent patching
-  protocol. Existing macOS thread-local JIT protection calls now go through
-  one Apple adapter. On iOS, absent support aborts explicitly; it never
-  silently substitutes a no-op. The tested single-page RW/RX helper is not
-  installed into the emulator as if it were a concurrent JIT backend.
-- Adapt core MAP_JIT mappings, memory reset and 4 KiB guest protection to
-  16 KiB host pages, and validate the real signal/fault handlers on device.
-- Build and integrate LLVM and iOS MoltenVK, then link a UIKit frontend with
-  explicit startup, firmware/title loading, input and audio lifecycles.
-- Run device validation before any PS3 boot or compatibility claim.
+Firmware import uses native PUP authentication, SCE package decryption and TAR
+extraction. Files are extracted into a fresh staging directory. Required firmware
+files are verified before the existing dev_flash directory is replaced; a failed
+publication restores the prior directory. Failure detail is included in the log.
 
-## Device evidence before P1
+Executable inspection uses native SELF decryption and PPU ELF parsing. It checks
+loadable segment bounds and stores the prepared ELF in the core cache. Only the
+selected executable is imported; a complete game's assets are not imported here.
 
-P0.2 on iPhone14,3 / A15 / iOS 16.0: Metal clear/readback, shared aliases,
-page lifecycle and simultaneous 8+12+4 GiB reservations passed. All 32 code
-rewrites with joined worker execution passed. MAP_JIT returned EINVAL and
-pthread_jit_write_protect_np was absent. These are platform-helper results,
-not evidence that the full emulator memory or JIT subsystem works.
+The production core still uses the validated interpreter/immutable JIT path.
+LLVM and Vulkan/MoltenVK are disabled. Real game execution, renderer presentation,
+device audio and controller input remain future integration work. Successful
+readiness checks and executable inspection are not a playable-game result.
 
-Run **ARMSX3 iOS 16 - P1 core compilation** in Actions. Report completion or
-failure; the agent does not poll the workflow after enqueueing it.
+The workflow keeps pinned dependencies and all 49 existing production patches.
+34 synchronization host profiles plus the new intake host check gate the iOS
+compile, full link, signed bundle validation and one installable IPA. Matching
+core symbols and build logs remain available as separate artifacts.
 
-## P2 full link and on-device load test
-
-After archive verification, the workflow now links all core objects into an
-embedded dylib with undefined symbols treated as errors. It packages an IPA
-only if that link and bundle verification succeed. LLVM and Vulkan remain
-disabled at this stage. A link failure is not a core compilation regression.
-
-Install the P2 IPA through TrollStore. It has a separate bundle ID. Tap
-**Load emulator core**, then **Share startup log**. If loading closes the app,
-reopen it and share the log before tapping Load again. The dylib is loaded on
-request so main/UI logging is available before its constructors. The test
-queries the core state after loading; it does not call Emulator::Init or boot
-a title. Core constructors may themselves allocate memory or generate code;
-that behavior remains unvalidated on-device. Do not treat a successful link
-or load as working emulation.
+Local intake validation uses the actual native PUP/SHA1 code and real filesystem
+rename/rollback. TAR/SCE/ELF/backend interfaces are modeled in that host harness;
+the app and its device probes link the original native implementations. Native
+firmware installation must be verified using the user's PUP on the phone.
