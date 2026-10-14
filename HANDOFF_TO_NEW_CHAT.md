@@ -6379,3 +6379,112 @@ Multiwaiter/broadcast among multiple waiters/contended reacquisition/valid
 registered targeted wake/shared IPC/serialized state/firmware/renderer/game
 boot remain untested; Midnight Club Los Angeles eventual game target.
 Keep user replies short.
+
+
+## 2026-10-14 — Build104 device PASS; Build105 P90–P93 reader/writer lock batch
+
+Latest user attachment read directly from its supplied local copy:
+ARMSX3-startup-20261014-072809-291-22897.txt. Device Build104 passed all88
+stages P2–P89, including FIFO ordinary/recursive condition waits and priority
+ordinary/recursive broadcast waits. Final AUTO PASS; no AUTO FAIL. Native
+condition queue observation, released mutex/count, timeout reacquisition,
+signaled reacquisition, recursive count restoration, links, ABI/TLS and final
+cleanup all confirmed on iPhone13ProMax/iOS16.0. This confirms single-waiter
+condition paths; multiwaiter ordering, registered targeted wake and contended
+mutex reacquisition still not tested.
+
+Build105 adds four tests in one workflow/IPA:
+P90 rwlock_reader_fifo; P91 rwlock_reader_priority;
+P92 rwlock_writer_fifo; P93 rwlock_writer_priority.
+Each exported function begins armsx3_core_test_. Shared implementation:
+armsx3_core_test_rwlock_batch(u32 protocol, bool writerWait).
+Whole Build104 bridge prefix remains byte-identical, frozen git blob
+ a7c6927d014824c1b7c368afd4610491525b7213.
+All49 production patches unchanged. UI92 stages P2–P93, CFBundleVersion105,
+MinimumOSVersion16.0. Pinned ARMSX2/ARMSX3 source remains
+92b931b9fb5eef7f1317cb482917dfc19aceebd9.
+
+Each profile performs three20-operation native rwlock lifecycles with the
+retained two-worker pair and TLS slots, first-worker roles0/1/0. Native APIs
+120create/121destroy/122rlock/123tryrlock/124runlock/125wlock/126trywlock/
+127wunlock and alias148 _sys_rwlock_trywlock run through guest SC/table/binder.
+Only one successful create per lifecycle; null output returns EFAULT and
+invalid protocol0 returns EINVAL with output canary and existing ID unchanged.
+Two distinct workers hold shared reads concurrently, owner=-4; try-write and
+alias report EBUSY. Native read unlock releases a count without checking which
+thread acquired it; exact transition -4 to -2 to0 is verified. Exclusive writer
+ownership, foreign writer unlock EPERM, repeat writer acquire EDEADLK, try-read
+exclusion and busy destruction are checked.
+
+Reader profiles: peer holds write; first worker queues read100000us; peer
+observes exact rq/wq/owner and scheduler deadline, then destroy EBUSY. Native
+reader timeout removes rq but RETAINS the owner's low wait bit. Same-worker/
+handle read1000000us queues again; peer write unlock wakes it, owner becomes-2
+and wait bit clears. Second guest reader joins, exact-4 count; both read
+releases restore0.
+Writer profiles: peer holds one read; first queues write100000us; peer observes
+exact wq/rq/owner=-1 and deadline, then destroy EBUSY. Native writer timeout
+removes wq and CLEARS the wait bit, restoring owner=-2. Same-worker/handle
+write1000000us queues again; final peer read release transfers exclusive
+ownership to the waiter. Own repeated write EDEADLK and foreign release EPERM
+must preserve it. Later immediate write acquire/release, destroy and stale
+read/write/try/alias/unlock/destroy ESRCH paths are checked in both profiles.
+
+Per-profile totals120SC/three BE32 handle writes/360dispatches/240pauses/
+1440instructions/TLS60 per worker. Guest12words/48bytes; budgets5/1/6,
+PCs20/24/48. Full64 immediate/self/stale wait timeout0xfedcba9876543210;
+100000us expiry and1000000us unlock wake. Six exact queued-state/deadline
+observations, three expiries/three wakes. Every paused/SC/continuation boundary
+checks GPR/FPR/VR/status/reservation/history/ABI/signed results/DATA/output
+canaries/TLS/stacks/VM aliases/cache. Worker joins precede scheduler scope
+restoration and emergency private ID withdrawal. Settings, mappings, CPU/TLS
+lifetime counts and native reader/writer namespace cleanup must balance.
+
+Validation PASS:
+- test_p90_fixture.py retains prior fixture chain, freezes Build104 prefix,
+  independently models all four reader-count/writer-owner/queue/timer/waitbit/
+  handle/error lifecycles, validates code/error tables,120SC,92 UI stages,
+  Build105 metadata and iOS16 minimum.
+- test_p90_pair.py extracts eight unchanged native rwlock API bodies and
+  native constructor, real queue/schedule/emplace algorithms, diagnostic
+  admission/restoration/deadline observer, binder/SC/dispatcher/TLS/bounded
+  helper and production bridge workload. Four profiles,8 normal runs and
+  16workers each (32runs/64workers total), plus applicable negative/setup/
+  ABI/context/registry/timeout/cleanup tests, all PASS with C++20,
+  Wall/Wextra/Werror, ASAN+UBSAN, ASAN_OPTIONS=detect_leaks=0.
+- New faults311 lost reader increment;312 invalid protocol accepted;313 false
+  permission success;314 false recursive write success;315 false try-busy
+  success;316 false busy destruction;317 lost reader wake count and319 wrongly
+  cleared reader timeout wait bit (reader profiles);318 missing writer timeout
+  wait-bit cleanup and320 lost writer handoff owner (writer profiles). False
+  timeout263, missing service unqueue265, stale timer266 and other applicable
+  inherited faults detected. Queue-unqueue mutation is explicitly reinserted
+  after replacing semaphore services, with a signature assertion.
+- test_p90_registry.py runs the extracted native id_key/map/allocate_id code
+  for namespace0x88000000: constructed8192-entry map publication/type/cookie/
+  capacity/reuse/deletion and unconstructed-map rejection all PASS.
+- Sanitizers caught concurrent writes to the host-only log vector during
+  injected worker failures; p53_host_shims.cpp now serializes log collection
+  with a mutex. All14 workflow host profiles rerun and PASS: two semaphore,
+  four event-flag, four condition and four reader/writer workloads. CPU/VM/ID
+  allocator/atomic storage/clock/scheduler/notification remain explicit host
+  models; these local checks do not claim native iOS or ARM timer execution.
+- Python/YAML/plist and git diff --check PASS. Full Xcode/ARM build and new
+  native device execution pending Actions/user install.
+
+Workflow runs14 independent synchronization-host matrix profiles with
+fail-fast:false, then builds one installable IPA. Common fixture updated to
+test_p90_fixture.py; native rwlock allocator test runs before patch application
+in host and core checkouts. Host-only original pinned lv2.cpp restoration for
+modeled syscall statistics retained; iOS core still uses all49 patches.
+No Actions polling after publishing: user reports build/device outcome.
+
+Next: after Actions succeeds install ARMSX3_iOS16_INSTALL_THIS_IPA through
+TrollStore, reopen, run all92 diagnostics and send startup.txt. Continue
+meaningful4–6-stage batches, prioritizing new boot-critical subsystems such as
+native event queues/ports or lightweight synchronization rather than repeated
+minor variants. Multiwaiter ordering, writer preference, blocked reader wake
+when last queued writer times out, shared IPC, serialized savestate, firmware,
+renderer and actual game boot remain untested. Target iPhone13ProMax/iOS16.0/
+Dopamine/TrollStore; eventual game Midnight Club Los Angeles. Keep replies
+short and proceed autonomously within the established publish workflow.

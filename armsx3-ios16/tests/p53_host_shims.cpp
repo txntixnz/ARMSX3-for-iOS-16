@@ -22,7 +22,8 @@ using u8=uint8_t;using u16=uint16_t;using u32=uint32_t;using u64=uint64_t;
 using s32=int32_t;using s64=int64_t;
 template<class T> struct be_t {T bytes{};operator T() const {return __builtin_bswap32(bytes);}be_t& operator=(T x){bytes=__builtin_bswap32(x);return *this;}be_t()=default;be_t(T x){*this=x;}};
 std::vector<std::string> logs;
-void ARMSX3StartupLog(const char* s){logs.emplace_back(s);}
+std::mutex startup_log_mutex;
+void ARMSX3StartupLog(const char* s){std::lock_guard lock(startup_log_mutex);logs.emplace_back(s);}
 enum class ppu_decoder_type {_static,llvm};enum class thread_scheduler_mode {os,native};
 template<class T>struct setting {T value{};T get()const{return value;}void set(T v){value=v;}operator T()const{return value;}};
 struct {struct {setting<bool> ppu_prof{true},spu_prof{true},spu_debug{true};setting<thread_scheduler_mode> thread_scheduler{thread_scheduler_mode::native};setting<ppu_decoder_type> ppu_decoder{ppu_decoder_type::llvm};u32 ppu_threads=2;}core;}g_cfg;

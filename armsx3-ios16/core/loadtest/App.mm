@@ -95,6 +95,10 @@ static constexpr DiagnosticStage stages[] = {
     {87, "Condition variables: recursive wait and wake", "armsx3_core_test_cond_recursive"},
     {88, "Condition variables: broadcast wait and wake", "armsx3_core_test_cond_broadcast"},
     {89, "Condition variables: recursive broadcast wait and wake", "armsx3_core_test_cond_recursive_broadcast"},
+    {90, "FIFO readers waiting behind a writer", "armsx3_core_test_rwlock_reader_fifo"},
+    {91, "Priority readers waiting behind a writer", "armsx3_core_test_rwlock_reader_priority"},
+    {92, "FIFO writers waiting behind readers", "armsx3_core_test_rwlock_writer_fifo"},
+    {93, "Priority writers waiting behind readers", "armsx3_core_test_rwlock_writer_priority"},
 };
 static constexpr NSUInteger stageCount = sizeof(stages) / sizeof(stages[0]);
 static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
