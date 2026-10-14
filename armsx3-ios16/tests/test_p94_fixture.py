@@ -79,6 +79,7 @@ for token in ['static int armsx3_core_test_event_queue_batch(u32 protocol, bool 
  'value.pq == job.waiter && !value.sq && value.events.empty()', 'std::array<be_t<u64>, 2> trailing',
  'u64(process_getpid() + 0u) << 32', 'expectedEvents.pop_front()', 'expectedEvents.clear()',
  'value.events.size() == expectedEvents.size()', 'value.queue->exists == (linkedQueueID == queueID && liveQueue ? 1u : 0u)',
+ 'portValid = value.exists == 0', 'queueValid = value.exists == 1', 'EVENTQ metadata failure:',
  'expected[4 + field] = delivered[field]', 'abi[2] = job.arguments[3]', 'job.waiter, &context, job.waiterTimeout)',
  'armsx3_ios_ppu_probe_mutex_timeout_finished(waiter, signaller) != 1', 'program.slices != 180',
  'program.totals != std::array<u32, 2>{60, 60}', 'program.queueObserved.load() != 6',

@@ -56,8 +56,11 @@ struct spu_thread:cpu_thread{spu_thread*next_cpu=nullptr;Priority prio;struct Ma
 void resume_spu_thread_group_from_waiting(spu_thread&,std::array<shared_ptr<named_thread<spu_thread>>,8>&){throw std::runtime_error("SPU wake outside host workload");}
 s32 process_getpid(){return 1;}
 namespace id_manager{std::recursive_mutex g_mutex;}
+namespace id_manager{template<class T>struct id_traits{static constexpr u32 invalid=-+!T::id_base;};}
+template<class B,class T>constexpr bool IdmTypesCompatible=true;
+namespace stx{template<class T>using shared_ptr=std::shared_ptr<T>;using std::make_shared;}
 '''+source[b:]
-replace('struct lv2_obj{', 'struct lv2_obj{virtual~lv2_obj()=default;template<class T>static bool check(const shared_ptr<T>&obj){return obj && obj->exists.load()!=0;}')
+replace('struct lv2_obj{', 'struct lv2_obj{CellError on_id_create();virtual~lv2_obj()=default;template<class T>static bool check(const shared_ptr<T>&obj){return obj && obj->exists.load()!=0;}')
 a=source.index('struct lv2_rwlock:lv2_obj{');b=source.index('atomic_t<u64>g_sema_wait_us',a)
 source=source[:a]+r'''
 struct lv2_event_port;
@@ -73,14 +76,15 @@ struct lv2_event_port:lv2_obj{
 };
 class idm{public:
  static inline std::recursive_mutex guard;static inline std::map<u32,shared_ptr<lv2_obj>>objects;static inline u32 cookie=0;
+ static u32 last_id(){return id_manager::g_id;}
  template<class T>static u32 last_id(){return fault==214?0xdeadbeef:id_manager::g_id;}
  template<class B,class T>static shared_ptr<T>get_unlocked(u32 id){std::lock_guard lock(guard);auto it=objects.find(id);if(it==objects.end()||(id&0xff000000u)!=T::id_base)return {};return std::static_pointer_cast<T>(it->second);}
  template<class B,class T>static shared_ptr<T>check_unlocked(u32 id){return get_unlocked<B,T>(id);}
- template<class B,class T,class F>static u32 import(F make){
+ template<class B,class T,class F>static shared_ptr<T>create_id(F make,u32=0){
   std::lock_guard lock(guard);if(!fxo.mutexRegistryReady)return 0;const u32 id=T::id_base+0x800+(++cookie&255);id_manager::g_id=id;
-  auto object=make();if(!object)return 0;object->exists=fault==216?2:1;objects[id]=object;return id;
+  auto object=make();if(!object)return {};if(fault==354 && std::is_same_v<T,lv2_event_port>)object->on_id_create();if(fault==216)object->exists=2;objects[id]=object;return object;
  }
- template<class B,class T,class...A>static u32 make(A&&...a){return import<B,T>([&]{return std::make_shared<T>(std::forward<A>(a)...);});}
+"""+'template<class T,class Make=T,class...Args> requires (std::is_constructible_v<Make,Args&&...>)\n'+function((native.parent/'IdManager.h').read_text(),'static inline u32 make(Args&&... args)')+'\n'+'template<class T,class Made=T,class F> requires IdmTypesCompatible<T,Made> && std::is_convertible_v<std::invoke_result_t<F&&>,stx::shared_ptr<Made>>\n'+function((native.parent/'IdManager.h').read_text(),'static inline u32 import(F&& provider,')+r"""
  template<class T,class R>struct Pair{shared_ptr<T>ptr;R ret{};explicit operator bool()const{return bool(ptr);}T*operator->()const{return ptr.get();}};
  template<class B,class T,class F>static auto get(u32 id,F f){std::lock_guard lock(guard);auto ptr=get_unlocked<B,T>(id);using R=std::invoke_result_t<F,T&>;
   if constexpr(std::is_void_v<R>){if(!ptr)return shared_ptr<T>{};f(*ptr);return ptr;}else{if(!ptr)return Pair<T,R>{};return Pair<T,R>{ptr,f(*ptr)};}}
@@ -88,12 +92,15 @@ class idm{public:
  template<class B,class T,class F>static Pair<T,CellError>withdraw(u32 id,F f){std::lock_guard lock(guard);auto ptr=get_unlocked<B,T>(id);if(!ptr)return {};const CellError error=f(*ptr);if(!error && !(fault==212 && ptr->exists==0 && get_current_cpu_thread()!=nullptr))objects.erase(id);return {ptr,error};}
  template<class B,class T,class F>static u32 select(F f){std::lock_guard lock(guard);u32 n=0;for(auto&e:objects)if((e.first&0xff000000u)==T::id_base){f(e.first,*e.second);++n;}return n;}
 };
-template<class T,class F>error_code lv2_obj::create(u32 shared,u64 key,s32,F make){assert(shared==SYS_SYNC_NOT_PROCESS_SHARED && !key);return idm::import<lv2_obj,T>(make)?CELL_OK:u32(CELL_EAGAIN);}
+template<class T,class F>error_code lv2_obj::create(u32 shared,u64 key,s32,F make){assert(shared==SYS_SYNC_NOT_PROCESS_SHARED && !key);return idm::import<lv2_obj,T>([&]()->shared_ptr<T>{auto object=make();if(object && object->on_id_create())object.reset();return object;})?CELL_OK:u32(CELL_EAGAIN);}
 ''' +source[b:]
 # Replace services and mutations, retaining native scheduler scope and observers.
 a=source.index("services='\\n'.join");b=source.index('table=r"""',a)
 source=source[:a]+extra+r'''
 constructor=event_source[event_source.index('lv2_event_queue::lv2_event_queue(u32 protocol,'):event_source.index('lv2_event_queue::lv2_event_queue(utils::serial')].strip()
+assert 'atomic_t<u32> exists = 0;' in sync
+extras+=function(sync,'CellError on_id_create()').replace('CellError on_id_create()', 'CellError lv2_obj::on_id_create()',1)+'\n'
+extras=extras.replace('exists++;', 'if(fault!=355){exists++;}')
 extras+=constructor+'\n'+function(event_source,'CellError lv2_event_queue::send(lv2_event event,')+'\n'
 services='\n'.join(function(event_source,'error_code '+name+'(') for _,name in entries)
 services=services.replace('ppu.gpr[3] = CELL_ETIMEDOUT;', 'ppu.gpr[3] = fault==263?u64(CELL_OK):u64(CELL_ETIMEDOUT);')
@@ -122,12 +129,12 @@ first=[128,131,136,135,138,130,130,131,128 if cancel else 131,136 if cancel else
 second=[134,134,136,137,136,129,129 if cancel else 138,138,138,138,131,133,138,133 if cancel else 131,129,135,133,131,136,129]
 counts=Counter(first+second)
 source=source[:a]+'assert('+ ' && '.join(f'syscall_usage.stat[{c}]=={n*3}' for c,n in sorted(counts.items()))+');'+source[b:]
-faults=[2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,26,27,36,37,38,39,40,41,60,173,174,175,176,177,179,180,22,212,213,214,216,224,260,261,263,265,266,341,343,344,345,346,347,348,349,351,352,353]
+faults=[2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,26,27,36,37,38,39,40,41,60,173,174,175,176,177,179,180,22,212,213,214,216,224,260,261,263,265,266,341,343,344,345,346,347,348,349,351,352,353,354,355]
 faults+= [350] if cancel else [342]
 source=re.sub(r'const std::vector<int> faults\{[0-9,]+\};','const std::vector<int> faults{'+','.join(map(str,faults))+'};',source)
 replace('const u32 priorID=0x8800ff01;','const u32 priorID=0x8d00ff01;')
 replace('std::make_shared<lv2_rwlock>(1,0,0)', 'std::make_shared<lv2_event_queue>(1,SYS_PPU_QUEUE,2,0,0)')
 a=source.index(' std::puts("PASS: reader_fifo');b=source.index("''' +checks[b:]",a)
-source=source[:a]+' std::puts("PASS: '+profile+' P94-P97 native10event APIs/queue-send/constructors/binder/SC/TLS/bounded/scheduler scope;8runs/16workers/120SC each/three timeout then delivery-or-cancellation linked lifecycles/full64 payload-source-GPR output/tryreceive-array-count-capacity-drain/dead-port-recovery/cleanup;applicable setup/ABI/registry/payload/connection/capacity/cancellation mutations detected;CPU/VM/ID/atomic/clock/scheduler/notification are host models;SPU/IPC/serialized paths outside workload;native iOS pending.");'+source[b:]
+source=source[:a]+' std::puts("PASS: '+profile+' P94-P97 native10event APIs/queue-send/constructors/idm-make-import/on-id-create/binder/SC/TLS/bounded/scheduler scope;8runs/16workers/120SC each/three timeout then delivery-or-cancellation linked lifecycles/port-exists0-queue-exists1/full64 payload-source-GPR output/tryreceive-array-count-capacity-drain/dead-port-recovery/cleanup;setup/ABI/registry/payload/connection/capacity/cancellation/incorrect-port-hook354/missing-queue-hook355 mutations detected;CPU/VM/ID allocator/atomic/clock/scheduler/notification are host models;SPU/IPC/serialized paths outside workload;native iOS pending.");'+source[b:]
 replace("b=extras.index('\\n};\\nstruct lv2_event_queue',a)", "b=extras.index('\\n};\\n\\nstruct lv2_event_port;',a)")
 exec(compile(source,str(Path(__file__).resolve()),'exec'))

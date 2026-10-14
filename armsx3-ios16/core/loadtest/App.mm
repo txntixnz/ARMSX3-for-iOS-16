@@ -103,6 +103,14 @@ static constexpr DiagnosticStage stages[] = {
     {95, "Priority event receive and 64-bit port messages", "armsx3_core_test_event_queue_priority"},
     {96, "FIFO event receive cancellation and port recovery", "armsx3_core_test_event_queue_cancel_fifo"},
     {97, "Priority event receive cancellation and port recovery", "armsx3_core_test_event_queue_cancel_priority"},
+    {98, "FIFO PPU queue minimum capacity", "armsx3_core_test_event_object_queue_fifo_min"},
+    {99, "Priority PPU queue maximum capacity", "armsx3_core_test_event_object_queue_priority_max"},
+    {100, "FIFO SPU queue minimum capacity", "armsx3_core_test_event_object_queue_spu_fifo_min"},
+    {101, "Priority SPU queue maximum capacity", "armsx3_core_test_event_object_queue_spu_priority_max"},
+    {102, "Named local port creation and lifetime", "armsx3_core_test_event_object_port_local_named"},
+    {103, "Unnamed local port creation and lifetime", "armsx3_core_test_event_object_port_local_auto"},
+    {104, "Named IPC port creation and lifetime", "armsx3_core_test_event_object_port_ipc_named"},
+    {105, "Unnamed IPC port creation and lifetime", "armsx3_core_test_event_object_port_ipc_auto"},
 };
 static constexpr NSUInteger stageCount = sizeof(stages) / sizeof(stages[0]);
 static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";

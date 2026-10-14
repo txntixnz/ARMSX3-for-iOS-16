@@ -2624,3 +2624,114 @@ is_busy handoff, shared IPC, serialized savestate, firmware/renderer/game boot
 remain untested. Target remains iPhone13ProMax/iOS16.0/Dopamine/TrollStore;
 Midnight Club Los Angeles eventual game target. Keep replies short. Standing
 batch request is now eight meaningful diagnostics per next IPA where logical.
+
+
+## 2026-10-14 — Build106 device P2–P93 PASS; P94 creation assertion fixed; Build107 adds eight diagnostics
+
+Processed the user-supplied local copy
+ARMSX3-startup-20261014-171721-382-26254(1).txt (Build106).
+The log confirms92 diagnostic stages P2–P93 PASS, including all four new
+reader/writer profiles P90–P93. P94 failed immediately after successful queue
+and port creation at the metadata assertion. P94–P97 did not complete; no game
+boot result. This is a diagnostic expectation/model bug introduced in Build106.
+
+Pinned native source explains the failure: lv2_obj::exists defaults0 and its
+private on_id_create increments it. lv2_obj::create<lv2_event_queue> runs that
+hook through its provider, so a queue has exists1. sys_event_port_create uses
+idm::make<lv2_obj,lv2_event_port>, which publishes the constructor result directly
+and runs no hook; a live event port legitimately has exists0. idm lookup uses
+registry presence/type, not this port counter. The diagnostic required port
+exists1 and the old host import model synthesized1 for every kind, hiding the
+wrong assertion. Corrected port expectation to0; preserve queue expectation1.
+No upstream emulator behavior or production patch was changed.
+
+The revised P94 host harness now extracts actual native idm::make and import
+bodies, and the native lv2_obj::on_id_create body; its modeled create_id/storage
+publishes objects without manufacturing normal counter values. The nonshared
+queue-create model explicitly executes the extracted hook. Real native
+constructor bodies/default-counter contract remain checked. Running the old
+bridge against this creation path reproduced the same metadata failure BEFORE
+the fix (p94-native-creation-before-fix.log); after the fix all four event
+profiles PASS. Added faults354 erroneous port hook and355 missing queue hook,
+which must fail. New device failure detail prints transaction/op/slice, both
+IDs/counters/presence/validity/expected-live flags and linked queue ID, instead
+of only a generic metadata error.
+
+Build107 retains the standing eight-new-diagnostics request, focused on this
+native creation/lifecycle gap. Adds P98–P105;104 total UI stages P2–P105,
+CFBundleVersion107, MinimumOSVersion16.0. New helper
+armsx3_core_test_event_object_batch(u32 protocol,s32 queueType,s32 capacity,
+                                  s32 portType,u64 portName).
+Exports all start armsx3_core_test_event_object_. Profiles:
+P98 queue_fifo_min: FIFO PPU queue,capacity1;
+P99 queue_priority_max: priority PPU queue,capacity127;
+P100 queue_spu_fifo_min: FIFO SPU queue,capacity1;
+P101 queue_spu_priority_max: priority SPU queue,capacity127;
+P102 port_local_named: local port/full64 name;
+P103 port_local_auto: local port/name0;
+P104 port_ipc_named: IPC port/full64 name;
+P105 port_ipc_auto: IPC port/name0.
+Port profiles use FIFO PPU queue capacity2; queue profiles also create a named
+local port. These tests validate object creation/lifetime and type rejection,
+not actual SPU messages or IPC connections. IPC key0 fails before external
+lookup; no external messages or real shared IPC setup occurs.
+
+Every profile executes three20-operation transactions on the retained two-PPU
+pair/TLS slots, first roles0/1/0. Native11 APIs128/129/130/131/133/134/135/136/
+137/138/140 run through guest SC/table/binder. Two successful queue and two
+successful port creations per transaction (twelve BE32 handles total/profile).
+Native queue counter1 vs port0, queue type/protocol/capacity/name/key/id, port
+type/full64 name/busy0/link and registry membership checked at every boundary.
+Capacity0/128 and port type2 reject EINVAL without publishing handles or
+modifying canaries. Local connects then duplicates return EISCONN; IPC ports
+reject local connect EINVAL. Empty PPU tryreceive writes only count0 and leaves
+the array untouched; SPU queues reject it EINVAL without writing outputs.
+Disconnected/dead-linked send ENOTCONN, disconnect/destruction, stale port
+APIs, port recreation, queue destruction while a port retains its reference,
+new queue creation with a retired link then replacement, final detach/remove
+and stale queue receive/drain/try/destroy paths checked. All valid requests
+are nonblocking; no queue, timer or wake observation should occur here.
+
+Per profile120SC/360dispatches/240pauses/1440instructions/TLS60 perworker.
+Full64 name, error-path payload and stale receive timeout preserve ABI. All
+GPR/FPR/VR/status/reservation/history/signed results/DATA/output canaries/TLS/
+stacks/VM aliases/cache/settings/ID/CPU lifetime/scheduler restoration checks
+retained. Worker joins precede port/reference then queue cleanup. Corrected
+Build106 bridge prefix frozen at git blob
+c1c54e0426a256204dea4bd77e3fddfdbad8d089 before new helper append. Prior P2–P93
+bridge bytes remain unchanged; test_p94_fixture retains Build105 blob freeze.
+All49 production patches and pinned upstream92b931b9fb5eef7f1317cb482917dfc19aceebd9
+unchanged.
+
+Validation PASS: four corrected test_p94_pair profiles and eight new
+ test_p98_pair profiles under C++20 Wall/Wextra/Werror ASAN+UBSAN,
+ASAN_OPTIONS=detect_leaks=0. Eight normal runs/16workers per profile, plus
+applicable setup/context/ABI/registry/lifecycle negatives:96normal runs and
+192workers across the12 changed/new profiles. New faults356 wrong queue type,
+357 wrong capacity,358 wrong port type,359 wrong port name,360 busy counter,
+361 incorrectly accepting capacity128,362 false SPU tryreceive success (SPU
+profiles),363 false IPC local-connect success (IPC profiles); applicable
+354/355 hook, connection/count/error/canary/setup mutations all detected.
+Blocking/timer/payload delivery mutations remain in the separate P94 profiles.
+CPU/VM/allocator/storage/clock/scheduler/notification are host interfaces; no
+new native ARM/device result claimed. test_p98_fixture independently models
+all eight creation/link/counter/handle/error/output lifecycles, freezes corrected
+prefix, validates code/error tables and104 UI/Build107/iOS16 metadata. Python,
+YAML/plist/whitespace and device stage parsing pass. Native allocator tests for
+queue0x8d/port0x0e remain in CI; their native source/tests unchanged.
+
+Workflow now has26 independent synchronization-host profiles (previous18 plus
+new8) gating one installable IPA. Common fixture is test_p98_fixture.py.
+Superseded builds still auto-cancel. Host-only original lv2.cpp restoration
+for modeled statistics remains isolated from the production49-patch checkout.
+No Actions polling after push; user reports outcome. Both handoffs updated.
+
+Next: install the latest Build107 ARMSX3_iOS16_INSTALL_THIS_IPA via TrollStore
+after Actions succeeds, reopen, run all104 diagnostics, send the startup log.
+First verify corrected P94–P97 and all new P98–P105 before advancing. Last
+verified native stage remainsP93 until new device evidence. Actual IPC
+connections/SPU event delivery/multiwaiter ordering/priority-dependent port
+busy handoff/serialized savestate/firmware/renderer/game boot remain untested.
+Target iPhone13ProMax/iOS16.0/Dopamine/TrollStore, eventual Midnight Club Los
+Angeles. Keep replies short; eight meaningful new diagnostics per batch where
+logical, while repairing failed gates first.
