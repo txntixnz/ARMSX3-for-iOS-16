@@ -6704,3 +6704,80 @@ busy handoff/serialized savestate/firmware/renderer/game boot remain untested.
 Target iPhone13ProMax/iOS16.0/Dopamine/TrollStore, eventual Midnight Club Los
 Angeles. Keep replies short; eight meaningful new diagnostics per batch where
 logical, while repairing failed gates first.
+
+
+## Build108 — native IPC event connections and buffered delivery (2026-10-14)
+
+Build107 device evidence: ARMSX3-startup-20261014-203102-732-27601(1).txt,
+PID27601. Exactly104 unique AUTO PASS stages P2-P105, followed by
+AUTO PASS: all diagnostic stages completed; game boot remains untested.
+P94-P97 now pass after the native port counter correction. P98-P105 creation,
+queue capacity/type and named/unnamed local/IPC port lifecycle profiles pass.
+No new crash or failed diagnostic in this log. Last verified native stageP105.
+
+Build108 adds eight P106-P113 profiles for actual shared IPC queue connection,
+publication and buffered event delivery. Profiles, in UI order:
+P106 ppu_fifo_named; P107 ppu_fifo_auto; P108 ppu_priority_named;
+P109 ppu_priority_auto; P110 spu_fifo_named; P111 spu_fifo_auto;
+P112 spu_priority_named; P113 spu_priority_auto.
+All use an IPC port, queue capacity2, and three private full64 keys
+0xfedcba9810500000/1/2. Named source is0xfedcba9876543210; unnamed source uses
+native process_getpid in high32 and the port ID in low32.
+
+Each stage reuses the proven retained two-PPU/TLS/guest SC/table/binder design:
+three20-operation transactions,120SC/360dispatches/240pauses/1440instructions,
+TLS60perworker. Shared creation publishes the key; duplicate creation must
+return EEXIST without changing the handle canary. IPC connections exercise
+unknown key ESRCH, valid success, duplicate EISCONN, local-connect EINVAL and
+key0 EINVAL. Two full64 messages fill the queue; overflow EBUSY preserves both.
+PPU queues exercise partial BE64 array output, size0/count0 preservation,
+nonempty drain/refill and subsequent receive. SPU queues exercise real buffered
+sends and PPU receive rejection without changing outputs; no SPU waiter/mailbox
+consumption is claimed. Native payload/order/source/queue/port/IPC registry
+metadata is checked at all three paused instruction boundaries.
+
+Destroying the shared queue must unpublish its key while a port retains the
+retired pointer; send/disconnect return ENOTCONN and lookup ESRCH. Recreating
+the same key produces a fresh queue and IPC reconnect replaces that dead link.
+Final detach/port destruction/queue destruction and stale requests verify both
+ID namespaces and the IPC keys are empty. Failure details include the full64
+key, published ID and IPC validity. Existing private diagnostic keys and their
+missing-key counterparts are rejected before activating cleanup; cleanup
+removes only the three keys proved absent at entry. Workers join before object
+and key cleanup; configuration/scheduler/ID/VM/TLS/cache/context/canary checks
+remain intact. No external messages or other emulator sessions are involved.
+
+The entire Build107 CoreBridge prefix is frozen at git blob
+528d449d05cccb4a05c74a231e910f038817782a. All49 production patches and pinned
+upstream92b931b9fb5eef7f1317cb482917dfc19aceebd9 remain unchanged.
+CFBundleVersion108, MinimumOSVersion16.0,112 ordered UI stages P2-P113.
+
+Host validation uses the actual pinned IPC manager class, generic lv2_obj
+shared create/on_id_destroy hooks, event queue find/send/constructor, native
+APIs, binder/SC/dispatcher and diagnostic bodies. Locking/shared-pointer/FXO,
+CPU/VM/ID storage/clock/scheduler are host interfaces. Applicable negative
+mutations include key truncation, publication leaks, duplicate-key acceptance,
+missing connect assignment, payload/source/count/array/drain/overflow errors,
+wrong metadata, ownership/hook/context/ABI failures. A preexisting IPC key
+must survive a rejected diagnostic. test_p106_fixture.py independently models
+all eight key/link/message/output lifecycles and freezes previous source.
+
+Workflow matrix expands26to34 host profiles gating one installable IPA.
+Common fixture becomes test_p106_fixture.py; superseded builds auto-cancel.
+Local sanitizer/fixture/metadata verification and publication recorded below.
+Do not poll Actions after push; user reports workflow completion.
+Next: after Actions succeeds, install Build108 ARMSX3_iOS16_INSTALL_THIS_IPA
+via TrollStore, reopen, run all112 diagnostics, send the startup log. Verify
+P106-P113 before advancing. Firmware installation, renderer and game boot,
+actual SPU waiter mailbox delivery, multiple-emulator IPC, multiwaiter ordering
+and serialized savestates remain untested. Target iPhone13ProMax/iOS16.0,
+Dopamine/TrollStore; eventual Midnight Club Los Angeles. Keep replies short.
+
+Build108 local validation completed: all eight test_p106_pair profiles PASS
+under g++ C++20 Wall/Wextra/Werror ASAN+UBSAN, with ASAN_OPTIONS=detect_leaks=0
+for this runtime (same setting as existing CI). Eight normal runs and16workers
+per profile,64normal runs/128workers total, plus all applicable negative
+mutations and occupied-key preservation. Independent test_p106_fixture,
+Build107 device stage parser, Python AST/YAML/plist/34-profile dependency
+validation, three core shell syntax checks and git diff --check PASS. All
+production patches are unchanged. New native ARM/iOS execution awaits Build108.

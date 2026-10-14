@@ -111,6 +111,14 @@ static constexpr DiagnosticStage stages[] = {
     {103, "Unnamed local port creation and lifetime", "armsx3_core_test_event_object_port_local_auto"},
     {104, "Named IPC port creation and lifetime", "armsx3_core_test_event_object_port_ipc_named"},
     {105, "Unnamed IPC port creation and lifetime", "armsx3_core_test_event_object_port_ipc_auto"},
+    {106, "IPC ppu fifo named delivery and key reuse", "armsx3_core_test_event_ipc_ppu_fifo_named"},
+    {107, "IPC ppu fifo auto delivery and key reuse", "armsx3_core_test_event_ipc_ppu_fifo_auto"},
+    {108, "IPC ppu priority named delivery and key reuse", "armsx3_core_test_event_ipc_ppu_priority_named"},
+    {109, "IPC ppu priority auto delivery and key reuse", "armsx3_core_test_event_ipc_ppu_priority_auto"},
+    {110, "IPC spu fifo named delivery and key reuse", "armsx3_core_test_event_ipc_spu_fifo_named"},
+    {111, "IPC spu fifo auto delivery and key reuse", "armsx3_core_test_event_ipc_spu_fifo_auto"},
+    {112, "IPC spu priority named delivery and key reuse", "armsx3_core_test_event_ipc_spu_priority_named"},
+    {113, "IPC spu priority auto delivery and key reuse", "armsx3_core_test_event_ipc_spu_priority_auto"},
 };
 static constexpr NSUInteger stageCount = sizeof(stages) / sizeof(stages[0]);
 static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
