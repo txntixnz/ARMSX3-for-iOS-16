@@ -6202,3 +6202,87 @@ cases when supported. Target iPhone13ProMax/iOS16.0/Dopamine/TrollStore.
 Multiwaiter/priority ordering/shared IPC/savestate, timeout-post boundary races,
 renderer/firmware/game boot remain untested. Midnight Club Los Angeles remains
 eventual target. Keep responses concise.
+
+
+## 2026-10-14 — Build102 device PASS; Build103 four event-flag diagnostics
+
+User explicitly wants faster porting and more than two new diagnostics per
+workflow. Target4–6 meaningful stages per IPA when logical, centered on new
+boot-critical coverage. Current batch adds four native event-flag modes. Keep
+separate stage results, do local checks, and DO NOT poll Actions after push.
+
+Device evidence: ARMSX3-startup-20261014-025336-575-21797.txt, build102,
+all80 diagnostics P2–P81 PASS and final AUTO PASS. Both FIFO and priority
+single-waiter surplus profiles pass on iPhone, including post2/spare1, signed
+count boundaries and cleanup. No game/firmware/renderer boot claim.
+
+Build103 appends armsx3_core_test_event_flag_batch plus four exported stages:
+P82 event_flag_and; P83 event_flag_or; P84 event_flag_clear (AND|CLEAR);
+P85 event_flag_clear_all (OR|CLEAR_ALL). All symbols prefixed
+armsx3_core_test_. Entire Build102 bridge frozen at blob
+b488610de4861929718396e04c4b2c00f9d5d744; all49 production patches unchanged.
+Each mode has three14-operation lifecycles on two retained PPU workers with
+roles0/1/0, native single-waiter/FIFO attributes and64-bit patterns using bits
+63/48/32/7. Eight production APIs82/83/85/86/87/118/132/139 execute via actual
+guest SC/table/binder: create/get/trywait/set/clear/wait/cancel/destroy. Checks
+include partial AND rejection vs OR success, invalid mode3, full mask AND
+and partial-bit OR wakes, selected/all/no clearing, zero-mask AND success vs
+OR busy,100000us timeout preserving pattern, fresh same-worker/object1000000us
+wait woken by set, zero cancel counts, NULL output, stale handle zero-output
+contracts and valid lifecycle recovery. Native cancel with blocked waiters,
+multiple waiters/priority ordering/shared IPC/savestate remain untested.
+
+New13-word/52-byte guest program loads all five native argument registers via
+full64 LDs;40-byte input descriptors, pre-SC budget6, SC budget1, continuation6;
+PC boundaries24/28/52. ABI/history verifies original argument snapshots, while
+native wait scratch GPR6 receives delivered flags and GPR7 is marked1 by set.
+Full64 init and timeout—including stale0xfedcba9876543210—are checked. Native
+wait/trywait always write BE64 results even on errors; stale get writes zero;
+cancel initializes BE32 counts even on ESRCH. Per mode84SC
+(create9,destroy3,wait9,trywait21,set12,clear6,cancel6,get18),45 BE64 outputs,
+six BE32 cancel counts plus three BE32 handle writes,252dispatches/168pauses/
+1092instructions/TLS42/42. Six queue observations, three expiries/three wakes.
+Whole code/DATA/TLS/stacks/aliases/cache/context/history/ID/worker/scheduler
+cleanup retained. A release/acquire nativeFinished publication ensures the
+expiry observer reads native BE64 output only after the waiter has completed
+its SC callback; observer polling does not race guest-memory result writes.
+
+Validation PASS: test_p82_fixture.py runs previous fixture chain, freezes
+entire Build102 prefix, independently models all four modes/partial wakes/
+pattern/output/queue counts and verifies84 unique UI stages/build103/iOS16.
+test_p82_pair.py extracts complete native eight API bodies, check_mode and
+check_pattern, sys_event_store_result, queue methods, scheduler probes,
+SC/binder/dispatcher/TLS/bounded helpers, and shared bridge plus selected
+public wrapper. CPU/VM/ID/storage atomics/clock/scheduler are host models;
+eflag_record watch logging is a stub, not a modeled game behavior. C++20
+Wall/Wextra/Werror ASAN+UBSAN detect_leaks0: eight normal runs/16workers per
+profile (32runs/64workers total) plus retained applicable context/ABI/registry/
+queue/setup/cleanup negatives pass. New mutations280 invalid mode accepted,
+281 truncated init,282 skipped CLEAR (clear profile),283 skipped CLEAR_ALL
+(clear_all profile),284 false AND success,285 missing get output,286 skipped
+clear mask,287 stale output not zeroed,288 false trywait success,289 bad cancel
+count and290 OR incorrectly requires all bits are rejected.263 false timeout,
+265 missing unqueue,260/261 scope/observation and266 stale timer retained;
+262 is the host canceled-timer consistency guard. Initial host fault265 was
+inactive due to inherited service-section replacement; injection was restored
+and verified rejected before final runs. Native event flag namespace0x98000000
+allocator harness test_p82_registry.py passes constructed-map publication,
+type/cookie/reuse/destruction/capacity and unconstructed-map rejection tests.
+Python/YAML/plist/whitespace checks pass. Xcode/ARM/native execution pending.
+
+Workflow synchronization-host matrix now runs six independent profiles in
+parallel: previous FIFO/priority semaphore workloads and and/or/clear/clear_all
+event flag workloads. Each isolated host checkout applies all49 patches and
+restores original pinned lv2.cpp dispatcher for modeled statistics, as before.
+Fixture and new registry test run before patches. Core job needs the complete
+matrix; it repeats fixture/registry checks then applies full production patches
+in its own checkout. Only one iOS IPA build follows the six-profile gate.
+No production patch or old-stage implementation changed. No Actions polling.
+
+After successful Actions install ARMSX3_iOS16_INSTALL_THIS_IPA with TrollStore,
+reopen and run all84 diagnostics P2–P85, then send startup.txt. Check all four
+new mode results before extending the next synchronization family; continue
+4–6 stage batches that advance distinct native coverage. Target iPhone13ProMax,
+iOS16.0, Dopamine/TrollStore. Timeout-set boundary races/multiple waiters/
+blocked cancellation/priority/shared IPC/firmware/renderer/game boot remain
+untested. Midnight Club Los Angeles remains eventual game target. Replies short.

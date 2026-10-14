@@ -87,6 +87,10 @@ static constexpr DiagnosticStage stages[] = {
     {79, "Semaphore timeout then requeue and wake", "armsx3_core_test_semaphore_timeout_then_wake"},
     {80, "FIFO semaphore wake and spare permit", "armsx3_core_test_semaphore_fifo_surplus"},
     {81, "Priority semaphore wake and spare permit", "armsx3_core_test_semaphore_priority_surplus"},
+    {82, "Event flags: and mode and timed wake", "armsx3_core_test_event_flag_and"},
+    {83, "Event flags: or mode and timed wake", "armsx3_core_test_event_flag_or"},
+    {84, "Event flags: clear mode and timed wake", "armsx3_core_test_event_flag_clear"},
+    {85, "Event flags: clear all mode and timed wake", "armsx3_core_test_event_flag_clear_all"},
 };
 static constexpr NSUInteger stageCount = sizeof(stages) / sizeof(stages[0]);
 static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";

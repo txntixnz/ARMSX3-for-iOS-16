@@ -33978,3 +33978,691 @@ extern "C" __attribute__((visibility("default"))) int armsx3_core_test_semaphore
     if (!result) ARMSX3StartupLog("P81 PASS: native priority protocol single-waiter post2 wake/spare permit/count boundaries/cleanup PASS; multiwaiter ordering untested");
     return result;
 }
+
+// Build103 batches native event-flag AND, OR, CLEAR and CLEAR_ALL diagnostics.
+#include "Emu/Cell/lv2/sys_event_flag.h"
+static int armsx3_core_test_event_flag_batch(u32 waitMode)
+{
+    ARMSX3StartupLog("EFLAG batch BEFORE production event flag modes, timeout then requeue and set wake");
+    bool initialized = false;
+    try
+    {
+        if (!lv2_event_flag::check_mode(waitMode))
+            throw std::runtime_error("EFLAG batch unsupported diagnostic protocol");
+        if (!Emu.IsStopped() || armsx3_ios_live_cpu_threads())
+            throw std::runtime_error("EFLAG batch requires stopped emulator and no live CPU workers");
+        struct Configuration
+        {
+            bool ppu = g_cfg.core.ppu_prof.get(), spu = g_cfg.core.spu_prof.get(), debug = g_cfg.core.spu_debug.get();
+            thread_scheduler_mode scheduler = g_cfg.core.thread_scheduler.get();
+            ppu_decoder_type decoder = g_cfg.core.ppu_decoder.get();
+            s32 reservations = g_cfg.core.ppu_128_reservations_loop_max_length;
+            bool rsxReservations = g_cfg.core.rsx_accurate_res_access.get();
+            Configuration() { g_cfg.core.ppu_prof.set(false); g_cfg.core.spu_prof.set(false);
+                g_cfg.core.spu_debug.set(false); g_cfg.core.thread_scheduler.set(thread_scheduler_mode::os);
+                g_cfg.core.ppu_decoder.set(ppu_decoder_type::_static);
+                g_cfg.core.ppu_128_reservations_loop_max_length.set(0);
+                g_cfg.core.rsx_accurate_res_access.set(false); }
+            ~Configuration() { g_cfg.core.ppu_prof.set(ppu); g_cfg.core.spu_prof.set(spu);
+                g_cfg.core.spu_debug.set(debug); g_cfg.core.thread_scheduler.set(scheduler);
+                g_cfg.core.ppu_decoder.set(decoder);
+                g_cfg.core.ppu_128_reservations_loop_max_length.set(reservations);
+                g_cfg.core.rsx_accurate_res_access.set(rsxReservations); }
+        } configuration;
+        if (g_cfg.core.ppu_threads + 0u != 2u || !g_fxo->is_init() ||
+            (!g_fxo->is_init<ppu_interpreter_rt>() && !g_fxo->init<ppu_interpreter_rt>()))
+            throw std::runtime_error("EFLAG batch requires two PPU slots and initialized core interpreter");
+        vm::init(); initialized = true;
+        if (!vm::reserve_map(vm::main, 0x10000, 0x80000))
+            throw std::runtime_error("EFLAG batch main memory block unavailable");
+        const std::array<u32, 4> addresses{0x10000, 0x20000, 0x30000, 0x40000};
+        for (u32 address : addresses)
+            if (vm::alloc(0x10000, vm::main, 0x10000) != address)
+                throw std::runtime_error("EFLAG batch isolated code/data/stack allocation failed");
+        const u32 codeAddress = addresses[0], dataAddress = addresses[1];
+        using namespace ppu_instructions;
+        using namespace ppu_instructions::implicts;
+        const std::array<u32, 8> codes{82, 83, 85, 86, 87, 118, 132, 139};
+        const std::array<const char*, 8> names{"sys_event_flag_create", "sys_event_flag_destroy", "sys_event_flag_wait", "sys_event_flag_trywait", "sys_event_flag_set", "sys_event_flag_clear", "sys_event_flag_cancel", "sys_event_flag_get"};
+        for (u32 i = 0; i < codes.size(); ++i)
+            if (!ppu_get_syscall(codes[i]) || ppu_get_syscall_name(codes[i]) != names[i])
+                throw std::runtime_error("EFLAG batch production event flag syscall table entry/name absent");
+        const std::array<u32, 13> opcodes{LWZ(11, 5, 4), LWZ(3, 5, 0), LD(4, 5, 8), LD(6, 5, 24), LD(7, 5, 32), LD(5, 5, 16),
+            SC(0), STW(3, 9, 0), LWZ(12, 13, -0x6ff4), ADDI(12, 12, 1), STW(12, 13, -0x6ff4), STW(12, 9, 4), NOP()};
+        std::memcpy(vm::base(dataAddress + 0x80), "iOSProbe", 9);
+        auto* code = reinterpret_cast<be_t<u32>*>(vm::base(codeAddress));
+        for (u32 i = 0; i < opcodes.size(); ++i) code[i] = opcodes[i];
+        const auto* bytes = static_cast<const u8*>(vm::base(codeAddress));
+        const std::vector<u8> expectedCode(bytes, bytes + 0x10000);
+        struct SegmentCacheCleanup {
+            u8* pointer; bool active = false;
+            void release() { if (active) { utils::memory_decommit(pointer, 0x8000); active = false; } }
+            ~SegmentCacheCleanup() { release(); }
+        } segmentCleanup{vm::g_exec_addr + vm::g_exec_addr_seg_offset + (codeAddress >> 1)};
+        segmentCleanup.active = true;
+        ppu_register_range(codeAddress, sizeof(opcodes));
+        ppu_register_function_at(codeAddress, sizeof(opcodes), nullptr);
+        auto& interpreter = g_fxo->get<ppu_interpreter_rt>();
+        std::array<ppu_intrp_func_t, 13> expectedCache{};
+        for (u32 i = 0; i < opcodes.size(); ++i) expectedCache[i] = interpreter.decode(opcodes[i]);
+        const auto* cache = reinterpret_cast<const ppu_intrp_func*>(vm::g_exec_addr + u64(codeAddress) * 2);
+        if (!vm::check_addr(codeAddress, vm::page_executable, 0x10000))
+            throw std::runtime_error("EFLAG batch executable registration failed");
+        for (u32 i = 0; i < opcodes.size(); ++i)
+            if (!cache[i].fn || cache[i].fn != expectedCache[i])
+                throw std::runtime_error("EFLAG batch shared guest code was not eagerly decoded");
+        std::array<std::vector<u8>, 2> expectedStacks;
+        for (u32 i = 0; i < 2; ++i) {
+            std::memset(vm::base(addresses[2 + i]), 0xa5, 0x10000);
+            const auto* stack = static_cast<const u8*>(vm::base(addresses[2 + i]));
+            expectedStacks[i].assign(stack, stack + 0x10000);
+        }
+        struct Gate { std::atomic<u32> released{0}; std::atomic<bool> cancel{false}; };
+        struct Job {
+            u32 begin = 0, end = 0, budget = 0, count = 0, output = 0, input = 0, round = 0, slice = 0;
+            std::array<u64, 6> arguments{}; bool writes64 = false, writes32 = false; u64 nativeOutput = 0; u32 expectedError = 0;
+            bool observeQueue = false, expectExpiry = false; u64 waiterTimeout = 0; u32 event = 0; u64 queuedPattern = 0; u32 waiterOutput = 0; ppu_thread* waiter = nullptr;
+            std::atomic<u32>* observations = nullptr;
+            std::atomic<u32>* expiries = nullptr;
+            const std::vector<u8>* dataSnapshot = nullptr;
+            const std::vector<u8>* tlsSnapshot = nullptr;
+            int result = -99; bool tls = false, clean = false, resumed = false, reservationClean = false;
+            std::array<u64, 15> registers{};
+            std::array<u64, 35> continuation{};
+            std::array<u32, 4> status{};
+            std::array<u64, 32> floating{};
+            std::array<u8, 512> vectors{};
+            std::array<u8, 48> selectedVectors{};
+            u32 reservationAddress = 0, reservationCached = 0;
+            u64 reservationTime = 0; bool fullReservation = false;
+            std::array<u8, 128> reservationData{};
+            u64 historyIndex = 0, historyCIA = 0, historyError = 0;
+            const char* historyName = nullptr; const char* lastName = nullptr;
+            std::array<u64, 4> historyArgs{};
+            std::array<u64, 8> syscallArgs{};
+            std::atomic<bool> nativeFinished{false}; std::atomic<bool>* waiterFinished = nullptr;
+            std::atomic<u32> ready{0}, completed{0}, exitAck{0};
+        };
+        struct Program {
+            u32 waitMode = 0; u64 basePattern = 0x8000000100000000ull, requestPattern = 0x0001000000000080ull; Gate gate; std::array<Job, 2> jobs; std::vector<u8>* expectedData = nullptr;
+            std::array<std::vector<u8>, 2>* expectedStacks = nullptr;
+            u64 created = 0, deleted = 0;
+            int result = -99; u32 batches = 0, slices = 0; bool tlsMemory = false, restored = false;
+            std::array<u32, 2> totals{};
+            std::atomic<bool> completed{false}; std::atomic<u32> queueObserved{0}, expiryObserved{0}, wakeObserved{0};
+        };
+        const auto runGuest = +[](ppu_thread& context, Job& job) {
+            job.tls = get_current_cpu_thread() == &context && thread_ctrl::get_current() != nullptr;
+            const auto status = [&context] {
+                return std::array<u32, 4>{context.cr.pack(),
+                    (u32(context.xer.so) << 31) | (u32(context.xer.ov) << 30) |
+                    (u32(context.xer.ca) << 29) | context.xer.cnt,
+                    context.fpscr.bits.pack(), context.vrsave};
+            };
+            const auto snapshot = [&context] {
+                std::array<u64, 35> values{};
+                for (u32 i = 0; i < 32; ++i) values[i] = context.gpr[i];
+                values[32] = context.ctr; values[33] = context.lr; values[34] = context.cia;
+                return values;
+            };
+            // A new transaction initializes its inputs once. Every later queue
+            // callback continues the exact paused context without register writes.
+            job.resumed = !job.slice || (snapshot() == job.continuation && status() == job.status &&
+                context.raddr == job.reservationAddress && context.rtime == job.reservationTime &&
+                context.res_cached == job.reservationCached && context.use_full_rdata == job.fullReservation &&
+                !std::memcmp(context.rdata, job.reservationData.data(), sizeof(context.rdata)) &&
+                !std::memcmp(context.fpr, job.floating.data(), sizeof(context.fpr)) &&
+                !std::memcmp(context.vr, job.vectors.data(), sizeof(context.vr)) &&
+                !context.current_function && context.last_function == job.lastName &&
+                context.syscall_history.index == job.historyIndex &&
+                !std::memcmp(context.syscall_args, job.syscallArgs.data(), sizeof(context.syscall_args)));
+            if (job.slice && job.historyIndex && job.resumed) {
+                const auto& history = context.syscall_history.data[(job.historyIndex - 1) % context.syscall_history.data.size()];
+                job.resumed = history.cia == job.historyCIA && history.func_name == job.historyName &&
+                    history.error == job.historyError && history.args == job.historyArgs;
+            }
+            if (!job.resumed) { job.result = -8; return; }
+            if (!job.slice) {
+                const u32 transaction = job.round / 3, worker = (job.output >> 4) & 1u;
+                if (context.raddr) { job.result = -9; return; }
+                for (u32 i = 0; i < 32; ++i)
+                    if (i != 1 && i != 13 && i != 30) context.gpr[i] = 0xa5a5000000000000ull + i;
+                context.gpr[5] = job.input; context.gpr[9] = job.output;
+                context.cr.unpack(0x8a6c5e79u ^ (transaction << 8) ^ (worker << 12));
+                context.fpscr.bits.unpack(0x13579bdfu ^ (transaction << 20) ^ (worker << 24));
+                context.xer.so = !worker; context.xer.ov = (transaction & 1u) != 0;
+                context.xer.ca = worker != 0; context.xer.cnt = u8(0x15 + transaction + worker);
+                context.vrsave = 0x5aa50000u | (transaction << 8) | worker;
+                for (auto& value : context.fpr) value = 7.0;
+                std::memset(context.vr, 0x3c, sizeof(context.vr));
+                context.lr = 0x12340000; context.ctr = 0x76540000;
+                context.cia = job.begin;
+                if (context.current_function || context.syscall_history.data.empty()) { job.result = -10; return; }
+                context.last_function = nullptr;
+                context.syscall_history.count_debug_arguments = 4;
+                std::memset(context.syscall_args, 0, sizeof(context.syscall_args));
+            }
+            {
+                struct RestoreID { u32 previous = id_manager::g_id; ~RestoreID() { id_manager::g_id = previous; } } restoreID;
+                try {
+                    if (job.observeQueue) {
+                        // Observe the first wait before expiry, and its replacement before posting.
+                        // Both waits use the same native object and worker.
+                        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+                        bool observed = false;
+                        while (std::chrono::steady_clock::now() < deadline) {
+                            bool queued = false;
+                            const auto sem = idm::get<lv2_obj, lv2_event_flag>(job.event, [&](lv2_event_flag& value) {
+                                std::lock_guard lock(value.mutex);
+                                queued = value.pattern == job.queuedPattern && value.sq == job.waiter && value.exists == 1;
+                            });
+                            if (sem && queued && armsx3_ios_ppu_probe_mutex_timeout_state(job.waiter, &context, job.waiterTimeout) == 1) { observed = true; break; }
+                            std::this_thread::yield();
+                        }
+                        if (!observed) throw std::runtime_error("EFLAG batch actual queued native event flag waiter was not observed");
+                        ARMSX3StartupLog("EFLAG batch observed native event flag waiter and registered scheduler deadline before expiry or posted wake");
+                        job.observations->fetch_add(1, std::memory_order_release);
+                        if (job.expectExpiry) {
+                        const auto expiryDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+                        bool expired = false;
+                        while (std::chrono::steady_clock::now() < expiryDeadline) {
+                            bool empty = false;
+                            const auto sem = idm::get<lv2_obj, lv2_event_flag>(job.event, [&](lv2_event_flag& value) {
+                                std::lock_guard lock(value.mutex);
+                                empty = value.pattern == job.queuedPattern && !value.sq && value.exists == 1;
+                            });
+                            if (sem && empty && job.waiterFinished->load(std::memory_order_acquire) &&
+                                armsx3_ios_ppu_probe_mutex_timeout_finished(job.waiter, &context) == 1) {
+                                expired = true; break;
+                            }
+                            std::this_thread::yield();
+                        }
+                        if (!expired) throw std::runtime_error("EFLAG batch expired wait did not remove its queue entry and restore unchanged pattern");
+                        auto expiredData = *job.dataSnapshot;
+                        const be_t<u64> output = job.queuedPattern;
+                        std::memcpy(expiredData.data() + job.waiterOutput - 0x20000, &output, sizeof(output));
+                        if (std::memcmp(vm::base(0x20000), expiredData.data(), 0x10000) ||
+                            std::memcmp(vm::get_super_ptr(0x20000), expiredData.data(), 0x10000) ||
+                            std::memcmp(vm::base(0x50000), job.tlsSnapshot->data(), 0x40000) ||
+                            std::memcmp(vm::get_super_ptr(0x50000), job.tlsSnapshot->data(), 0x40000))
+                            throw std::runtime_error("EFLAG batch timeout result or deferred guest continuation differs");
+                        job.expiries->fetch_add(1, std::memory_order_release);
+                        ARMSX3StartupLog("EFLAG batch observed native timeout cleanup: unchanged pattern, empty FIFO/timer queues, both workers resumed");
+                        }
+                    }
+                    job.result = armsx3_ios_ppu_exec_bounded(&context, job.begin, job.end, job.budget);
+                }
+                catch (const std::exception& error) {
+                    ARMSX3StartupLog(error.what()); job.result = -7;
+                    if (job.observeQueue && job.waiter) {
+                        job.waiter->state += cpu_flag::exit; job.waiter->state.notify_one();
+                        job.waiter->cmd_notify.store(1); job.waiter->cmd_notify.notify_one();
+                    }
+                }
+            }
+            job.registers = {context.gpr[1], context.gpr[2], context.gpr[3], context.gpr[4], context.gpr[6],
+                context.gpr[7], context.gpr[8], context.gpr[9], context.gpr[10], context.gpr[13], context.ctr, context.cia,
+                context.lr, context.gpr[30], context.gpr[0]};
+            job.continuation = snapshot(); job.status = status();
+            job.reservationClean = !context.raddr && !context.use_full_rdata;
+            job.historyIndex = context.syscall_history.index; job.lastName = context.last_function;
+            std::memcpy(job.syscallArgs.data(), context.syscall_args, sizeof(context.syscall_args));
+            if (job.historyIndex) {
+                const auto& history = context.syscall_history.data[(job.historyIndex - 1) % context.syscall_history.data.size()];
+                job.historyCIA = history.cia; job.historyName = history.func_name;
+                job.historyError = history.error; job.historyArgs = history.args;
+            }
+            job.reservationAddress = context.raddr; job.reservationTime = context.rtime;
+            job.reservationCached = context.res_cached; job.fullReservation = context.use_full_rdata;
+            std::memcpy(job.reservationData.data(), context.rdata, sizeof(context.rdata));
+            std::memcpy(job.floating.data(), context.fpr, sizeof(context.fpr));
+            std::memcpy(job.vectors.data(), context.vr, sizeof(context.vr));
+            for (u32 i = 0; i < 3; ++i) {
+                const be_t<v128> value = context.vr[i + 1];
+                std::memcpy(job.selectedVectors.data() + i * 16, &value, sizeof(value));
+            }
+            job.clean = !context.current_function && !context.interrupt_thread_executing && !(context.state & cpu_flag::exit) && !(context.state & cpu_flag::again) && !(context.state & cpu_flag::suspend) && !(context.state & cpu_flag::signal);
+            job.nativeFinished.store(true, std::memory_order_release);
+        };
+        auto* data = static_cast<u8*>(vm::base(dataAddress));
+        std::memset(data, 0xa5, 0x10000); std::memcpy(data + 0x80, "iOSProbe", 9);
+        sys_event_flag_attribute_t attribute{};
+        static_assert(sizeof(attribute) == 32);
+        attribute.protocol = SYS_SYNC_FIFO; attribute.pshared = SYS_SYNC_NOT_PROCESS_SHARED;
+        attribute.type = SYS_SYNC_WAITER_SINGLE;
+        std::memcpy(attribute.name, "iOSEFlg!", 8);
+        std::memcpy(data + 0x3040, &attribute, sizeof(attribute));
+        std::vector<u8> expectedData(data, data + 0x10000);
+        // The stopped diagnostic core constructs FXO types on demand. get()
+        // accesses storage directly; construct the real map before select/import.
+        using SyncMap = id_manager::id_map<lv2_obj>;
+        if (!g_fxo->is_init<SyncMap>() && !g_fxo->init<SyncMap>())
+            throw std::runtime_error("EFLAG batch native LV2 object registry initialization failed");
+        struct EventFlagCleanup {
+            static std::vector<u32> ids() {
+                std::vector<u32> values;
+                idm::select<lv2_obj, lv2_event_flag>([&](u32 id, lv2_obj&) { values.push_back(id); });
+                return values;
+            }
+            bool active = false;
+            ~EventFlagCleanup() {
+                if (!active) return;
+                // Worker guards are declared later: both workers have joined.
+                for (u32 id : ids()) idm::withdraw<lv2_obj, lv2_event_flag>(id, [](lv2_event_flag& mutex) -> CellError {
+                    lv2_obj::on_id_destroy(mutex, mutex.key); return {};
+                });
+            }
+        } eventFlagCleanup;
+        if (!EventFlagCleanup::ids().empty()) throw std::runtime_error("EFLAG batch requires isolated empty native event flag namespace");
+        eventFlagCleanup.active = true;
+        const u64 live = armsx3_ios_live_cpu_threads();
+        const auto created = cpu_thread::g_threads_created.load(), deleted = cpu_thread::g_threads_deleted.load();
+        Program program; program.waitMode = waitMode; program.expectedData = &expectedData; program.expectedStacks = &expectedStacks; program.created = created; program.deleted = deleted;
+        for (auto& job : program.jobs) { job.begin = codeAddress; job.end = codeAddress + sizeof(opcodes); }
+        {
+            // Callback storage remains alive until every stop/join guard has run.
+            struct Callback { Program* program; decltype(runGuest) runner; } callback{&program, runGuest};
+            std::unique_ptr<named_thread<ppu_thread>> owner;
+            bool launched = false, joined = false;
+            struct StopOwner {
+                Program& program; decltype(owner)& slot; bool& started; bool& finished;
+                ~StopOwner() {
+                    program.gate.cancel.store(true, std::memory_order_release);
+                    if (!slot) return;
+                    slot->state += cpu_flag::exit; slot->state.notify_one();
+                    slot->cmd_notify.store(1); slot->cmd_notify.notify_one();
+                    if (!started) { *slot = thread_state::created; started = true; }
+                    if (!finished) { (*slot)(); finished = true; }
+                }
+            } stopOwner{program, owner, launched, joined};
+            {
+                struct ConstructionID { u32 previous = id_manager::g_id;
+                    explicit ConstructionID(u32 id) { id_manager::g_id = id; }
+                    ~ConstructionID() { id_manager::g_id = previous; } } constructionID{ppu_thread::id_base};
+                const ppu_thread_params params{static_cast<vm::addr_t>(addresses[2]), 0x8000, 0, {}, 0, 0};
+                owner = std::make_unique<named_thread<ppu_thread>>(stx::launch_retainer{}, params, "iOS resumed TLS owner", 1000);
+            }
+            const ppu_intrp_func_t executeOwner = +[](ppu_thread& context, ppu_opcode_t, be_t<u32>*, ppu_intrp_func*) {
+                auto& callback = *reinterpret_cast<Callback*>(context.gpr[30]); auto& program = *callback.program;
+                const auto callWithTLS = +[](ppu_thread* owner, u32 pool, void* user) -> int {
+                    auto& callback = *static_cast<Callback*>(user); auto& program = *callback.program;
+                    if (pool != 0x50000 || owner->gpr[13] != pool + 0x7060)
+                        throw std::runtime_error("EFLAG batch production main TLS slot mismatch");
+                    try {
+                        std::unique_ptr<named_thread<ppu_thread>> peer;
+                        bool launched = false, joined = false; u32 peerTLS = 0;
+                        struct PeerCleanup {
+                            ppu_thread& owner; Program& program; decltype(peer)& slot;
+                            bool& started; bool& finished; u32 pool; u32& tls;
+                            void join() {
+                                vm::temporary_unlock(owner);
+                                if (slot && !finished) {
+                                    slot->state += cpu_flag::exit; slot->state.notify_one();
+                                    slot->cmd_notify.store(1); slot->cmd_notify.notify_one();
+                                    if (!started) { *slot = thread_state::created; started = true; }
+                                    (*slot)(); finished = true;
+                                }
+                            }
+                            ~PeerCleanup() {
+                                program.gate.cancel.store(true, std::memory_order_release);
+                                join();
+                                if (tls) armsx3_ios_ppu_probe_free_peer_tls(&owner, pool, tls);
+                            }
+                        } cleanup{*owner, program, peer, launched, joined, pool, peerTLS};
+                        peerTLS = armsx3_ios_ppu_probe_alloc_peer_tls(owner, pool);
+                        if (peerTLS != pool + 0x70d0 || armsx3_ios_ppu_probe_alloc_peer_tls(owner, pool))
+                            throw std::runtime_error("EFLAG batch real peer TLS allocation or duplicate guard failed");
+                        {
+                            struct ConstructionID { u32 previous = id_manager::g_id;
+                                explicit ConstructionID(u32 id) { id_manager::g_id = id; }
+                                ~ConstructionID() { id_manager::g_id = previous; } } constructionID{ppu_thread::id_base + 1};
+                            const ppu_thread_params params{static_cast<vm::addr_t>(0x40000), 0x8000, peerTLS, {}, 0, 0};
+                            peer = std::make_unique<named_thread<ppu_thread>>(stx::launch_retainer{}, params, "iOS resumed TLS peer", 1000);
+                        }
+                        if (peer->id == owner->id || peer->gpr[13] != peerTLS)
+                            throw std::runtime_error("EFLAG batch persistent peer constructor TLS register/ID mismatch");
+                        const ppu_intrp_func_t executePeer = +[](ppu_thread& context, ppu_opcode_t, be_t<u32>*, ppu_intrp_func*) {
+                            auto& callback = *reinterpret_cast<Callback*>(context.gpr[30]);
+                            auto& program = *callback.program; auto& job = program.jobs[1]; const u32 round = job.round;
+                            job.ready.store(round + 1, std::memory_order_release);
+                            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+                            while (program.gate.released.load(std::memory_order_acquire) < round + 1 &&
+                                !program.gate.cancel.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline)
+                                std::this_thread::yield();
+                            if (program.gate.released.load(std::memory_order_acquire) < round + 1 || program.gate.cancel.load(std::memory_order_acquire)) job.result = -6;
+                            else callback.runner(context, job);
+                            vm::temporary_unlock(context);
+                            // The callback performs no Program/guest-memory access after
+                            // this publication, and returns to the real command queue.
+                            job.completed.store(round + 1, std::memory_order_release);
+                        };
+                        const ppu_intrp_func_t exitPeer = +[](ppu_thread& context, ppu_opcode_t, be_t<u32>*, ppu_intrp_func*) {
+                            auto& callback = *reinterpret_cast<Callback*>(context.gpr[30]);
+                            context.state += cpu_flag::exit;
+                            callback.program->jobs[1].exitAck.fetch_add(1, std::memory_order_release);
+                        };
+                        peer->gpr[30] = u64(reinterpret_cast<uintptr_t>(&callback)); peer->cia = program.jobs[1].begin;
+                        peer->state -= cpu_flag::stop + cpu_flag::exit + cpu_flag::suspend + cpu_flag::memory + cpu_flag::wait;
+                        u64 waits = armsx3_ios_ppu_command_waits();
+                        *peer = thread_state::created; launched = true;
+                        const auto waitForQueue = [&] {
+                            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+                            while (armsx3_ios_ppu_command_waits() == waits && std::chrono::steady_clock::now() < deadline)
+                                std::this_thread::yield();
+                            if (armsx3_ios_ppu_command_waits() == waits || armsx3_ios_live_cpu_threads() != 2 ||
+                                cpu_thread::g_threads_created.load() != program.created + 2 || cpu_thread::g_threads_deleted.load() != program.deleted)
+                                throw std::runtime_error("EFLAG batch peer queue wait or unchanged owner/peer lifecycle mismatch");
+                            waits = armsx3_ios_ppu_command_waits();
+                        };
+                        waitForQueue();
+                        if (armsx3_ios_ppu_probe_free_peer_tls(owner, pool, peerTLS) != -1 ||
+                            armsx3_ios_ppu_probe_alloc_peer_tls(owner, pool))
+                            throw std::runtime_error("EFLAG batch active peer TLS allocation/free guards failed");
+                        // Use the same stopped-core scheduler scope proven by P72-P75.
+                        // The peer must join before scope restoration touches either worker.
+                        auto scopeWork = [&]() -> int {
+                            try {
+                                const auto namesForHistory = [](u32 code) -> const char* {
+                                    switch (code) { case 82: return "sys_event_flag_create"; case 83: return "sys_event_flag_destroy";
+                                        case 85: return "sys_event_flag_wait"; case 86: return "sys_event_flag_trywait";
+                                        case 87: return "sys_event_flag_set"; case 118: return "sys_event_flag_clear";
+                                        case 132: return "sys_event_flag_cancel"; case 139: return "sys_event_flag_get"; }
+                                    return "invalid";
+                                };
+                                std::vector<u8> expectedPool(0x40000, 0);
+                                for (u32 i = 0; i < 3; ++i) std::memcpy(expectedPool.data() + 0x60 + i * 0x70, "iOSProbe", 9);
+                                for (u32 transaction = 0; transaction < 3; ++transaction)
+                                {
+                                    const u32 firstWorker = transaction % 2;
+                                    u32 eventID = 0;
+                                    for (u32 operation = 0; operation < 14; ++operation)
+                                    for (u32 slice = 0; slice < 3; ++slice)
+                                    {
+                                        const u32 call = transaction * 14 + operation, round = call * 3 + slice;
+                                        for (u32 i = 0; i < 2; ++i) {
+                                            auto& job = program.jobs[i]; job.round = round; job.slice = slice;
+                                            job.input = 0x21000 + call * 0x60 + i * 0x30;
+                                            job.output = 0x20200 + call * 0x20 + i * 0x10;
+                                            const bool first = i == firstWorker;
+                                            job.nativeFinished.store(false, std::memory_order_release);
+                                            job.waiterFinished = &program.jobs[firstWorker].nativeFinished;
+                                            job.observeQueue = (operation == 5 || operation == 6) && slice == 1 && !first;
+                                            job.expectExpiry = operation == 5;
+                                            job.waiterTimeout = operation == 5 ? 100000ull : 1000000ull;
+                                            job.event = eventID;
+                                            job.queuedPattern = program.basePattern;
+                                            job.waiterOutput = 0x24000 + call * 0x20 + firstWorker * 8;
+                                            job.waiter = firstWorker ? static_cast<ppu_thread*>(peer.get()) : owner;
+                                            job.observations = &program.queueObserved;
+                                            job.expiries = &program.expiryObserved;
+                                            job.dataSnapshot = program.expectedData;
+                                            job.tlsSnapshot = &expectedPool;
+                                            const std::array<u32, 14> firstCodes{82, 139, 86, 86, 118, 85, 85, 139, 87, 118, 132, 83, 85, 82};
+                                            const std::array<u32, 14> secondCodes{82, 86, 87, 86, 139, 139, 87, 86, 86, 86, 139, 139, 132, 87};
+                                            const std::array<u32, 14> firstErrors{0, 0, CELL_EINVAL, CELL_EBUSY, 0, CELL_ETIMEDOUT, 0, 0, 0, 0, 0, 0, CELL_ESRCH, CELL_EFAULT};
+                                            const std::array<u32, 14> secondErrors{CELL_EFAULT, CELL_EBUSY, 0, 0, 0, 0, 0, 0, 0, CELL_EBUSY, CELL_EFAULT, CELL_ESRCH, CELL_ESRCH, CELL_ESRCH};
+                                            const u32 syscall = first ? firstCodes[operation] : secondCodes[operation];
+                                            const u64 combined = program.basePattern | program.requestPattern;
+                                            const u64 wakeBits = (program.waitMode & 0xf) == SYS_EVENT_FLAG_WAIT_OR ? 0x0001000000000000ull : program.requestPattern;
+                                            const u64 partial = program.basePattern | 0x0001000000000000ull;
+                                            const u64 afterWait = (program.waitMode & SYS_EVENT_FLAG_WAIT_CLEAR_ALL) ? 0ull :
+                                                (program.waitMode & SYS_EVENT_FLAG_WAIT_CLEAR) ? program.basePattern : (program.basePattern | wakeBits);
+                                            const u32 resultOutput = 0x24000 + call * 0x20 + i * 8;
+                                            const u64 requested = operation == 7 || operation == 9 ? 0ull : program.requestPattern;
+                                            const u32 mode = first && operation == 2 ? 3u : first && operation == 3 ? SYS_EVENT_FLAG_WAIT_AND :
+                                                !first && operation == 3 ? SYS_EVENT_FLAG_WAIT_OR : operation == 7 ? SYS_EVENT_FLAG_WAIT_AND :
+                                                operation == 9 ? SYS_EVENT_FLAG_WAIT_OR : program.waitMode;
+                                            const u64 argument1 = syscall == 82 ? (operation == 13 ? 0ull : 0x23040ull) :
+                                                syscall == 85 || syscall == 86 ? requested :
+                                                syscall == 139 ? (!first && operation == 10 ? 0ull : resultOutput) :
+                                                syscall == 132 ? resultOutput : syscall == 87 ? (operation == 2 ? 0x0001000000000000ull :
+                                                    operation == 6 ? wakeBits : combined) :
+                                                syscall == 118 ? (operation == 4 ? ~0x0001000000000000ull : 0ull) : 0ull;
+                                            const u64 timeout = syscall == 85 ? operation == 5 ? 100000ull : operation == 6 ? 1000000ull : 0xfedcba9876543210ull : 0ull;
+                                            job.arguments = {syscall == 82 ? (!first && operation == 0 ? 0u : 0x23000u) :
+                                                    !first && operation == 13 ? 0u : eventID, argument1, syscall,
+                                                syscall == 82 ? program.basePattern : syscall == 85 || syscall == 86 ? mode : 0ull,
+                                                syscall == 85 || syscall == 86 ? resultOutput : 0ull, timeout};
+                                            job.expectedError = first ? firstErrors[operation] : secondErrors[operation];
+                                            job.writes64 = syscall == 85 || syscall == 86 || (syscall == 139 && argument1);
+                                            job.writes32 = syscall == 132;
+                                            job.nativeOutput = syscall == 139 ? operation == 1 || operation == 4 || operation == 5 ? program.basePattern :
+                                                operation == 7 ? afterWait : 0ull :
+                                                syscall == 85 ? operation == 5 ? program.basePattern : operation == 6 ? (program.basePattern | wakeBits) : 0ull :
+                                                syscall == 86 && !job.expectedError ? operation == 3 ? partial : operation == 7 ? afterWait :
+                                                    operation == 8 ? combined : 0ull : 0ull;
+                                            if (!slice) {
+                                                const std::array<be_t<u32>, 2> header{u32(job.arguments[0]), u32(job.arguments[2])};
+                                                const std::array<be_t<u64>, 4> fields{job.arguments[1], job.arguments[3], job.arguments[4], job.arguments[5]};
+                                                std::memcpy(vm::base(job.input), header.data(), sizeof(header));
+                                                std::memcpy(vm::base(job.input + 8), fields.data(), sizeof(fields));
+                                                std::memcpy(program.expectedData->data() + job.input - 0x20000, header.data(), sizeof(header));
+                                                std::memcpy(program.expectedData->data() + job.input - 0x20000 + 8, fields.data(), sizeof(fields));
+                                            }
+                                            const std::array<u32, 3> budgets{6, 1, 6}; job.budget = budgets[slice];
+                                        }
+                                        peer->cmd_list({{ppu_cmd::ptr_call, 0}, std::bit_cast<u64>(executePeer)});
+                                        peer->cmd_notify.store(1); peer->cmd_notify.notify_one();
+                                        const auto readyDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+                                        while (program.jobs[1].ready.load(std::memory_order_acquire) < round + 1 && std::chrono::steady_clock::now() < readyDeadline)
+                                            std::this_thread::yield();
+                                        if (program.jobs[1].ready.load(std::memory_order_acquire) != round + 1 || armsx3_ios_live_cpu_threads() != 2)
+                                            throw std::runtime_error("EFLAG batch peer did not reach next event flag slice gate");
+                                        // Order permit mutations/count output/destruction explicitly in both worker roles.
+                                        const bool ordered = slice == 1;
+                                        const bool handoff = ordered && (operation == 5 || operation == 6);
+                                        const bool ownerFirst = ordered && firstWorker == 0;
+                                        const bool peerFirst = ordered && firstWorker == 1;
+                                        if (ownerFirst && !handoff) { callback.runner(*owner, program.jobs[0]); vm::temporary_unlock(*owner); }
+                                        program.gate.released.store(round + 1, std::memory_order_release);
+                                        if (!ordered || handoff) { callback.runner(*owner, program.jobs[0]); vm::temporary_unlock(*owner); }
+                                        const auto finishDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+                                        while (program.jobs[1].completed.load(std::memory_order_acquire) < round + 1 && std::chrono::steady_clock::now() < finishDeadline)
+                                            std::this_thread::yield();
+                                        if (program.jobs[1].completed.load(std::memory_order_acquire) != round + 1)
+                                            throw std::runtime_error("EFLAG batch peer event flag slice deadline/count mismatch");
+                                        waitForQueue();
+                                        if (peerFirst && !handoff) { callback.runner(*owner, program.jobs[0]); vm::temporary_unlock(*owner); }
+                                        if (handoff && (program.queueObserved.load(std::memory_order_acquire) != transaction * 2 + operation - 4 ||
+                                            program.expiryObserved.load(std::memory_order_acquire) != transaction + 1))
+                                            throw std::runtime_error("EFLAG batch native queue and timeout recovery observations differ");
+                                        if (handoff && operation == 6) {
+                                            auto* waiter = firstWorker ? static_cast<ppu_thread*>(peer.get()) : owner;
+                                            auto* poster = firstWorker ? owner : static_cast<ppu_thread*>(peer.get());
+                                            if (armsx3_ios_ppu_probe_mutex_timeout_finished(waiter, poster) != 1)
+                                                throw std::runtime_error("EFLAG batch posted replacement wait left scheduler state behind");
+                                            program.wakeObserved.fetch_add(1, std::memory_order_release);
+                                        }
+                                        const auto expectedWord = [&](u32 offset, u32 value) {
+                                            const be_t<u32> word = value;
+                                            std::memcpy(program.expectedData->data() + offset, &word, sizeof(word));
+                                        };
+                                        if (operation == 0 && slice == 1) {
+                                            eventID = *static_cast<be_t<u32>*>(vm::base(0x23000));
+                                            if (!eventID || (eventID & 0xff000000u) != lv2_event_flag::id_base)
+                                                throw std::runtime_error("EFLAG batch native create did not publish a event flag handle");
+                                            expectedWord(0x3000, eventID);
+                                        }
+                                        const bool liveEvent = operation == 0 ? slice >= 1 : operation < 11 || (operation == 11 && slice == 0);
+                                        const u64 combined = program.basePattern | program.requestPattern;
+                                            const u64 wakeBits = (program.waitMode & 0xf) == SYS_EVENT_FLAG_WAIT_OR ? 0x0001000000000000ull : program.requestPattern;
+                                        const u64 afterWait = (program.waitMode & SYS_EVENT_FLAG_WAIT_CLEAR_ALL) ? 0ull :
+                                            (program.waitMode & SYS_EVENT_FLAG_WAIT_CLEAR) ? program.basePattern : (program.basePattern | wakeBits);
+                                        const u64 afterImmediate = (program.waitMode & SYS_EVENT_FLAG_WAIT_CLEAR_ALL) ? 0ull :
+                                            (program.waitMode & SYS_EVENT_FLAG_WAIT_CLEAR) ? program.basePattern : combined;
+                                        const std::array<u64, 14> afterValues{program.basePattern, program.basePattern,
+                                            program.basePattern | 0x0001000000000000ull, program.basePattern | 0x0001000000000000ull,
+                                            program.basePattern, program.basePattern, afterWait, afterWait, afterImmediate, 0, 0, 0, 0, 0};
+                                        const u64 expectedValue = slice ? afterValues[operation] : operation ? afterValues[operation - 1] : 0;
+                                        bool objectValid = false;
+                                        const auto object = idm::get<lv2_obj, lv2_event_flag>(eventID, [&](lv2_event_flag& flag) {
+                                            objectValid = flag.pattern == expectedValue && !flag.sq && flag.exists == 1 &&
+                                                flag.protocol == SYS_SYNC_FIFO && flag.type == SYS_SYNC_WAITER_SINGLE && !flag.key &&
+                                                !std::memcmp(&flag.name, "iOSEFlg!", 8);
+                                        });
+                                        if (bool(object) != liveEvent || (liveEvent && !objectValid) ||
+                                            EventFlagCleanup::ids().size() != (liveEvent ? 1u : 0u))
+                                            throw std::runtime_error("EFLAG batch native event pattern/type/protocol/queue/lifecycle differs");
+                                        if (slice == 1) for (u32 i = 0; i < 2; ++i) {
+                                            const auto& job = program.jobs[i];
+                                            if (job.writes64) {
+                                                const be_t<u64> value = job.nativeOutput;
+                                                const u32 output = job.arguments[2] == 139 ? u32(job.arguments[1]) : u32(job.arguments[4]);
+                                                std::memcpy(program.expectedData->data() + output - 0x20000, &value, sizeof(value));
+                                            }
+                                            if (job.writes32) expectedWord(u32(job.arguments[1]) - 0x20000, u32(job.nativeOutput));
+                                        }
+                                        for (u32 i = 0; i < 2; ++i) {
+                                            const auto& job = program.jobs[i]; const u64 error = u64(s64(s32(job.expectedError)));
+                                            std::array<u64, 35> expected{};
+                                            for (u32 reg = 0; reg < 32; ++reg) expected[reg] = 0xa5a5000000000000ull + reg;
+                                            expected[1] = 0x38000u + i * 0x10000u - ppu_stack_start_offset;
+                                            expected[3] = slice ? error : job.arguments[0]; expected[4] = job.arguments[1];
+                                            expected[5] = job.arguments[3]; expected[6] = slice && job.arguments[2] == 85 ? job.nativeOutput : job.arguments[4];
+                                            expected[7] = slice && job.arguments[2] == 85 && operation == 6 ? 1ull : job.arguments[5]; expected[9] = job.output; expected[11] = job.arguments[2];
+                                            if (slice == 2) expected[12] = call + 1;
+                                            expected[13] = 0x57060u + i * 0x70;
+                                            expected[30] = u64(reinterpret_cast<uintptr_t>(&callback));
+                                            expected[32] = 0x76540000; expected[33] = 0x12340000;
+                                            const std::array<u32, 3> pcs{24, 28, 52}; expected[34] = job.begin + pcs[slice];
+                                            const u32 xer = (i ? 0u : 0x80000000u) | ((call & 1u) << 30) | (i ? 0x20000000u : 0u) | (0x15 + call + i);
+                                            const std::array<u32, 4> expectedStatus{0x8a6c5e79u ^ (call << 8) ^ (i << 12), xer,
+                                                0x13579bdfu ^ (call << 20) ^ (i << 24), 0x5aa50000u | (call << 8) | i};
+                                            if (job.historyIndex != call + (slice ? 1u : 0u))
+                                                throw std::runtime_error("EFLAG batch production syscall count differs");
+                                            if (slice) {
+                                                const std::array<u64, 4> args{job.arguments[0], job.arguments[1], job.arguments[3], job.arguments[4]};
+                                                std::array<u64, 8> abi{}; abi[0] = job.arguments[0];
+                                                for (u32 arg = 1; arg < 8; ++arg) abi[arg] = expected[arg + 3];
+                                                abi[3] = job.arguments[4]; abi[4] = job.arguments[5];
+                                                if (!job.historyName || std::strcmp(job.historyName, namesForHistory(job.arguments[2])) ||
+                                                    job.historyCIA != job.begin + 24 || job.historyError != error || job.historyArgs != args ||
+                                                    !job.lastName || std::strcmp(job.lastName, namesForHistory(job.arguments[2])) || job.syscallArgs != abi)
+                                                    throw std::runtime_error("EFLAG batch native SC ABI/history/signed result differs");
+                                            } else if (job.lastName || job.syscallArgs != std::array<u64, 8>{})
+                                                throw std::runtime_error("EFLAG batch syscall executed before its paused SC boundary");
+                                            if (!job.tls || !job.clean || !job.resumed || !job.reservationClean ||
+                                                job.continuation != expected || job.status != expectedStatus || job.exitAck.load() ||
+                                                job.result != (slice < 2 ? -2 : 6))
+                                                throw std::runtime_error("EFLAG batch exact paused syscall context/result differs");
+                                            for (u64 value : job.floating)
+                                                if (value != std::bit_cast<u64>(7.0)) throw std::runtime_error("EFLAG batch untouched FPR differs");
+                                            for (u8 value : job.vectors)
+                                                if (value != 0x3c) throw std::runtime_error("EFLAG batch untouched VR differs");
+                                            if (slice == 2) {
+                                                expectedWord(job.output - 0x20000, job.expectedError);
+                                                expectedWord(job.output - 0x20000 + 4, call + 1);
+                                                const be_t<u32> word = call + 1;
+                                                std::memcpy(expectedPool.data() + 0x6c + i * 0x70, &word, sizeof(word));
+                                                program.totals[i] = call + 1;
+                                            }
+                                        }
+                                        if (std::memcmp(vm::base(pool), expectedPool.data(), expectedPool.size()) ||
+                                            std::memcmp(vm::get_super_ptr(pool), expectedPool.data(), expectedPool.size()) ||
+                                            std::memcmp(vm::base(0x20000), program.expectedData->data(), 0x10000) ||
+                                            std::memcmp(vm::get_super_ptr(0x20000), program.expectedData->data(), 0x10000))
+                                            throw std::runtime_error("EFLAG batch event flag/deferred outputs/TLS/aliases differ");
+                                        for (u32 i = 0; i < 2; ++i)
+                                            if (std::memcmp(vm::base(0x30000u + i * 0x10000u), (*program.expectedStacks)[i].data(), 0x10000) ||
+                                                std::memcmp(vm::get_super_ptr(0x30000u + i * 0x10000u), (*program.expectedStacks)[i].data(), 0x10000))
+                                                throw std::runtime_error("EFLAG batch untouched stack canary/alias differs");
+                                        ++program.slices;
+                                    }
+                                    ++program.batches;
+                                    char message[256];
+                                    std::snprintf(message, sizeof(message), "EFLAG batch PASS: transaction=%u first worker=%u mode=0x%x, full64 AND-OR/invalid modes/timeout/requeue/set-wake/clear/cancel/stale outputs/queue cleanup/full ABI-context, TLS=%u/%u results=%d/%d",
+                                        transaction + 1, firstWorker, program.waitMode, program.totals[0], program.totals[1],
+                                        program.jobs[0].result, program.jobs[1].result);
+                                    ARMSX3StartupLog(message);
+                                }
+                                peer->cmd_list({{ppu_cmd::ptr_call, 0}, std::bit_cast<u64>(exitPeer)});
+                                peer->cmd_notify.store(1); peer->cmd_notify.notify_one();
+                                vm::temporary_unlock(*owner);
+                                (*peer)(); joined = true;
+                                if (program.jobs[1].exitAck.load(std::memory_order_acquire) != 1 || peer->gpr[13] != peerTLS ||
+                                    armsx3_ios_ppu_probe_free_peer_tls(owner, pool, peerTLS) != 0 ||
+                                    armsx3_ios_ppu_probe_free_peer_tls(owner, pool, peerTLS) != -1)
+                                    throw std::runtime_error("EFLAG batch queued peer exit/retained TLS/join/release mismatch");
+                                peerTLS = 0; program.tlsMemory = true;
+                                return program.jobs[0].result;
+                            } catch (...) { program.gate.cancel.store(true, std::memory_order_release); cleanup.join(); throw; }
+                        };
+                        const auto invokeScope = +[](void* user) -> int { return (*static_cast<decltype(scopeWork)*>(user))(); };
+                        return armsx3_ios_ppu_probe_mutex_scheduler_and_call(owner, peer.get(), invokeScope, &scopeWork);
+                    } catch (const std::exception& error) { ARMSX3StartupLog(error.what()); throw; }
+                };
+                program.result = armsx3_ios_ppu_probe_tls_and_call(&context, 0x20080, 9, 64, callWithTLS, &callback);
+                program.restored = !context.gpr[13] && !vm::check_addr(0x50000);
+                context.state += cpu_flag::exit;
+                program.completed.store(true, std::memory_order_release);
+            };
+            owner->gpr[30] = u64(reinterpret_cast<uintptr_t>(&callback)); owner->cia = codeAddress;
+            owner->cmd_list({{ppu_cmd::ptr_call, 0}, std::bit_cast<u64>(executeOwner)});
+            owner->state -= cpu_flag::stop + cpu_flag::exit + cpu_flag::suspend + cpu_flag::memory + cpu_flag::wait;
+            *owner = thread_state::created; launched = true;
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(8);
+            while (!program.completed.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline)
+                std::this_thread::yield();
+            if (!program.completed.load(std::memory_order_acquire)) throw std::runtime_error("EFLAG batch persistent owned TLS deadline exceeded");
+            (*owner)(); joined = true;
+            if (!program.tlsMemory || !program.restored || program.result != 6 || program.batches != 3 || program.slices != 126 ||
+                program.totals != std::array<u32, 2>{42, 42} || program.queueObserved.load() != 6 ||
+                program.expiryObserved.load() != 3 || program.wakeObserved.load() != 3)
+                throw std::runtime_error("EFLAG batch resumed TLS callback/final totals/pool release mismatch");
+        }
+        if (!EventFlagCleanup::ids().empty()) throw std::runtime_error("EFLAG batch native event flag IDs leaked after joined workers");
+        for (u32 address = 0x50000; address < 0x90000; address += 0x1000)
+            if (vm::check_addr(address)) throw std::runtime_error("EFLAG batch TLS pool remains mapped after persistent pair cleanup");
+        for (const auto& region : std::array<std::pair<u32, const std::vector<u8>*>, 4>{
+            std::pair{codeAddress, &expectedCode}, std::pair{dataAddress, &expectedData},
+            std::pair{addresses[2], &expectedStacks[0]}, std::pair{addresses[3], &expectedStacks[1]}})
+            if (std::memcmp(vm::base(region.first), region.second->data(), 0x10000) ||
+                std::memcmp(vm::get_super_ptr(region.first), region.second->data(), 0x10000))
+                throw std::runtime_error("EFLAG batch full persistent guest code/data/stack guard or alias mismatch");
+        for (u32 i = 0; i < opcodes.size(); ++i)
+            if (cache[i].fn != expectedCache[i]) throw std::runtime_error("EFLAG batch shared code cache changed");
+        if (armsx3_ios_live_cpu_threads() != live || cpu_thread::g_threads_created.load() != created + 2 ||
+            cpu_thread::g_threads_deleted.load() != deleted + 2)
+            throw std::runtime_error("EFLAG batch persistent owner/peer CPU lifecycle counters did not balance");
+        segmentCleanup.release();
+        for (u32 address : addresses)
+            if (vm::dealloc(address, vm::main) != 0x10000 || vm::check_addr(address))
+                throw std::runtime_error("EFLAG batch persistent guest deallocation failed");
+        vm::close(); initialized = false;
+        ARMSX3StartupLog("EFLAG batch PASS:84 event-flag guest SCs via native table/binder,252dispatches/168pauses/1092instructions; three64-bit pattern lifecycles, AND/OR distinction including partial-bit OR wake, invalid modes,100000us timeout then same-worker/object1000000us wait and set wake; selected/no/all clear semantics, zero mask AND success/OR busy, six queue/three expiry/three wake observations,45 BE64 results and six BE32 zero cancel counts, null/error/stale outputs; TLS42/42/full five-argument ABI/history/native scratch registers/contexts/DATA/stacks/aliases/cache/joins/ID/scheduler restoration; multiwaiter/cancel wake/priority ordering/shared IPC/firmware/renderer/game boot untested");
+        return 0;
+    }
+    catch (const std::exception& error) { ARMSX3StartupLog(error.what()); if (initialized) vm::close(); return -1; }
+}
+
+extern "C" __attribute__((visibility("default"))) int armsx3_core_test_event_flag_and()
+{
+    ARMSX3StartupLog("P82 BEFORE native event-flag and mode, full64 patterns and timed queue lifecycle");
+    const int result = armsx3_core_test_event_flag_batch(SYS_EVENT_FLAG_WAIT_AND);
+    if (!result) ARMSX3StartupLog("P82 PASS: native event-flag and pattern/output/mode/timeout/set-wake/cleanup checks");
+    return result;
+}
+
+extern "C" __attribute__((visibility("default"))) int armsx3_core_test_event_flag_or()
+{
+    ARMSX3StartupLog("P83 BEFORE native event-flag or mode, full64 patterns and timed queue lifecycle");
+    const int result = armsx3_core_test_event_flag_batch(SYS_EVENT_FLAG_WAIT_OR);
+    if (!result) ARMSX3StartupLog("P83 PASS: native event-flag or pattern/output/mode/timeout/set-wake/cleanup checks");
+    return result;
+}
+
+extern "C" __attribute__((visibility("default"))) int armsx3_core_test_event_flag_clear()
+{
+    ARMSX3StartupLog("P84 BEFORE native event-flag clear mode, full64 patterns and timed queue lifecycle");
+    const int result = armsx3_core_test_event_flag_batch(SYS_EVENT_FLAG_WAIT_AND | SYS_EVENT_FLAG_WAIT_CLEAR);
+    if (!result) ARMSX3StartupLog("P84 PASS: native event-flag clear pattern/output/mode/timeout/set-wake/cleanup checks");
+    return result;
+}
+
+extern "C" __attribute__((visibility("default"))) int armsx3_core_test_event_flag_clear_all()
+{
+    ARMSX3StartupLog("P85 BEFORE native event-flag clear_all mode, full64 patterns and timed queue lifecycle");
+    const int result = armsx3_core_test_event_flag_batch(SYS_EVENT_FLAG_WAIT_OR | SYS_EVENT_FLAG_WAIT_CLEAR_ALL);
+    if (!result) ARMSX3StartupLog("P85 PASS: native event-flag clear_all pattern/output/mode/timeout/set-wake/cleanup checks");
+    return result;
+}
