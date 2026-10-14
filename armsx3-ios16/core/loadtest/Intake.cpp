@@ -208,8 +208,24 @@ std::string inspect(const char* selected, bool persist)
 {
     idle(); require(selected && *selected, "No executable selected");
     fs::file input(selected, fs::read); require(bool(input) && input.size() > 0 && input.size() <= 0x40000000ull, "Executable is empty, unavailable or too large");
-    log("INTAKE executable BEFORE native SELF/ELF decryption and PPU ELF parsing");
-    fs::file executable = decrypt_self(input); require(bool(executable), "Could not decrypt this executable; inspect the startup log");
+    u32 magic = 0;
+    require(input.read_at(0, &magic, sizeof(magic)) == sizeof(magic), "Executable header is truncated");
+    fs::file executable;
+    if (magic == "SCE\0"_u32)
+    {
+        log("INTAKE executable BEFORE native SELF decryption");
+        executable = decrypt_self(input);
+        require(bool(executable), "Could not decrypt this SELF executable; inspect the startup log");
+    }
+    else
+    {
+        require(magic == "\177ELF"_u32, "Selected file has no PS3 SELF or ELF header");
+        // Like Emulator::Load, decrypt SELF only. Raw ELF must not depend on Emu.GetBoot().
+        log("INTAKE executable raw ELF accepted; passing selected file to native parser");
+        executable = std::move(input);
+    }
+    executable.seek(0);
+    log("INTAKE executable BEFORE native PPU ELF parsing");
     ppu_exec_object elf(executable); require(elf.get_error() == elf_error::ok, "This file is not a supported PS3 PPU executable");
     unsigned loadable = 0;
     for (const auto& segment : elf.progs) if (segment.p_type == 1)
@@ -282,11 +298,25 @@ int probe(unsigned index)
         }
         else if (index == 6)
         {
-            const auto path = root / "probe.elf"; write_file(path, elf_fixture());
+            const auto bytes = elf_fixture();
+            const auto path = root / "probe.elf"; write_file(path, bytes);
             const auto result = inspect(path.c_str(), false); require(result.starts_with("PS3 executable accepted"), "Shared executable intake failed");
-            write_file(path,{0,1,2,3}); bool rejected = false;
-            try { inspect(path.c_str(), false); } catch (const std::exception&) { rejected = true; }
-            require(rejected, "Invalid executable accepted");
+            const auto renamed = root / "EBOOT.BIN"; write_file(renamed, bytes);
+            require(inspect(renamed.c_str(), false).starts_with("PS3 executable accepted"), "Raw ELF intake depends on filename");
+            for (const u16 key_version : {u16{0x80}, u16{0xc0}})
+            {
+                std::vector<u8> debug(0x20 + bytes.size());
+                std::memcpy(debug.data(), "SCE\0", 4); debug[8] = static_cast<u8>(key_version);
+                if (key_version == 0x80) debug[0x17] = 0x20; else debug[0x10] = 0x20;
+                std::memcpy(debug.data() + 0x20, bytes.data(), bytes.size()); write_file(renamed, debug);
+                require(inspect(renamed.c_str(), false).starts_with("PS3 executable accepted"), "Native debug SELF intake failed");
+            }
+            for (const auto& invalid : std::vector<std::vector<u8>>{{0,1,2,3}, {0x7f,'E','L'}, {0x7f,'E','L','F'}})
+            {
+                write_file(path, invalid); bool rejected = false;
+                try { inspect(path.c_str(), false); } catch (const std::exception&) { rejected = true; }
+                require(rejected, "Invalid or truncated executable accepted");
+            }
         }
         else
         {

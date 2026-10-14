@@ -1,7 +1,7 @@
-"""Compile production intake with native PUP/SHA1 and explicit host interfaces.
-Filesystem rename/rollback uses real host disk operations. TAR, SCE, ELF, FXO
-and fs::file backend are interface models; native device probes exercise them
-against the real core. Usage: test_p114_intake.py PINNED_UPSTREAM
+"""Compile production intake with native PUP/SHA1 and SELF routing/debug removal.
+Filesystem rename/rollback uses real host disk operations. TAR, retail SCE/SELF,
+ELF, FXO and fs::file backend are interface models; device probes use the real
+core. Usage: test_p114_intake.py PINNED_UPSTREAM
 """
 from pathlib import Path
 import hashlib,hmac,re,struct,subprocess,tempfile,sys
@@ -13,6 +13,9 @@ pup_cpp=(native/'rpcs3/Loader/PUP.cpp').read_text()
 sha_h=(native/'rpcs3/Crypto/sha1.h').read_text()
 sha_cpp=(native/'rpcs3/Crypto/sha1.cpp').read_text()
 key_h=(native/'rpcs3/Crypto/key_vault.h').read_text()
+unself_cpp=(native/'rpcs3/Crypto/unself.cpp').read_text()
+native_routing=unself_cpp[unself_cpp.index('static fs::file CheckDebugSelf('):unself_cpp.index('\nbool verify_npdrm_self_headers(')]
+assert 'Emu.GetBoot().ends_with(".elf")' in native_routing
 key=re.search(r'constexpr u8 PUP_KEY\[0x40\] = \{([^}]+)\}',key_h).group(0)+';'
 key_bytes=bytes(int(x,16) for x in re.findall(r'0x([0-9A-Fa-f]{2})',key.split('=')[1]))
 assert len(key_bytes)==64
@@ -69,7 +72,7 @@ void mbedtls_zeroize(void*p,usz n){volatile u8*bytes=static_cast<volatile u8*>(p
 std::string host_root;bool host_idle=true;u64 host_workers=0;int decoder_fault=0;
 void ARMSX3StartupLog(const char*){}
 extern "C" u64 armsx3_ios_live_cpu_threads(){return host_workers;}
-struct {bool IsStopped()const{return host_idle;}}Emu;
+struct {std::string boot;bool IsStopped()const{return host_idle;}const std::string&GetBoot()const{return boot;}}Emu;
 struct {std::string get_dev_flash()const{return host_root+"/installed/";}}g_cfg_vfs;
 namespace fs{
 constexpr int read=1,rewrite=2;
@@ -79,9 +82,12 @@ struct file{
   if(mode==rewrite){bytes=std::make_shared<std::vector<u8>>();sync();}
   else{std::ifstream stream(disk,std::ios::binary);if(stream)bytes=std::make_shared<std::vector<u8>>(std::istreambuf_iterator<char>(stream),std::istreambuf_iterator<char>());}
  }
+ file(file&&)=default;file&operator=(file&&)=default;file(const file&)=delete;file&operator=(const file&)=delete;
  explicit operator bool()const{return bool(bytes);}u64 size()const{return bytes?bytes->size():0;}void seek(u64 p)const{cursor=p;}
  usz read(void*out,usz n)const{if(!bytes||cursor>bytes->size())return 0;n=std::min(n,bytes->size()-cursor);std::memcpy(out,bytes->data()+cursor,n);cursor+=n;return n;}
  template<class T>bool read(T&v)const{return read(&v,sizeof(v))==sizeof(v);}
+ template<class T>T read()const{T value{};if(!read(value))throw std::runtime_error("host read truncated");return value;}
+ usz read_at(u64 at,void*out,usz n)const{if(!bytes||at>bytes->size())return 0;n=std::min(n,bytes->size()-usz(at));std::memcpy(out,bytes->data()+at,n);return n;}
  template<class T>bool read(std::vector<T>&v,u64 n)const{if(n>size()/sizeof(T))return false;v.resize(n);return read(v.data(),n*sizeof(T))==n*sizeof(T);}
  usz write(const void*input,usz n){if(!bytes)return 0;bytes->resize(cursor+n);std::memcpy(bytes->data()+cursor,input,n);cursor+=n;sync();return n;}
  void sync()const{if(!disk.empty()&&bytes){std::ofstream out(disk,std::ios::binary|std::ios::trunc);out.write(reinterpret_cast<const char*>(bytes->data()),bytes->size());if(!out)throw std::runtime_error("host write failed");}}
@@ -89,6 +95,7 @@ struct file{
  template<class T>std::vector<T>to_vector()const{std::vector<T>v(size()/sizeof(T));if(!v.empty())std::memcpy(v.data(),bytes->data(),v.size()*sizeof(T));return v;}
 };
 file make_stream(std::vector<u8>v){file f;f.bytes=std::make_shared<std::vector<u8>>(std::move(v));return f;}
+template<class T>file make_stream(){return make_stream(T{});}
 std::string get_cache_dir(){return host_root+"/cache/";}bool is_file(std::string p){return std::filesystem::is_regular_file(p);}
 }
 namespace utils{struct serial{std::vector<u8>data;struct Handler{void handle_file_op(serial&,u64,u64,void*){}};std::unique_ptr<Handler>m_file_handler;u64 get_size(u64)const{return data.size();}};}
@@ -108,14 +115,22 @@ class SCEDecrypter{const fs::file&input;public:SCEDecrypter(const fs::file&f):in
  std::vector<fs::file>MakeFile(){if(decoder_fault==4)return {};auto bytes=input.to_vector<u8>();std::vector<fs::file>out(3);out[2]=fs::make_stream({bytes.begin()+8,bytes.end()});return out;}};
 enum class elf_os:u8{lv2=102};enum class elf_type:u16{exec=2};enum class elf_machine:u16{ppc64=21};enum class elf_error{ok,bad};
 struct ppu_exec_object{
- struct ehdr_t{be_t<u32>e_magic;u8 e_class{},e_data{},e_curver{},e_os_abi{},pad[8]{};be_t<u16>e_type,e_machine;be_t<u32>e_version;be_t<u64>e_entry,e_phoff,e_shoff;be_t<u32>e_flags;be_t<u16>e_ehsize,e_phentsize,e_phnum,e_shentsize,e_shnum,e_shstrndx;};
+ struct ehdr_t{le_t<u32>e_magic;u8 e_class{},e_data{},e_curver{},e_os_abi{},pad[8]{};be_t<u16>e_type,e_machine;be_t<u32>e_version;be_t<u64>e_entry,e_phoff,e_shoff;be_t<u32>e_flags;be_t<u16>e_ehsize,e_phentsize,e_phnum,e_shentsize,e_shnum,e_shstrndx;};
  struct phdr_t{be_t<u32>p_type,p_flags;be_t<u64>p_offset,p_vaddr,p_paddr,p_filesz,p_memsz,p_align;};
  ehdr_t header{};std::vector<phdr_t>progs;elf_error error=elf_error::bad;
  ppu_exec_object(const fs::file&f){f.seek(0);if(!f.read(header)||header.e_magic!="\177ELF"_u32)return;
  f.seek(header.e_phoff);if(f.read(progs,+header.e_phnum))error=elf_error::ok;}
  elf_error get_error()const{return error;}
 };
-fs::file decrypt_self(const fs::file&f){return f;}
+constexpr u32 umax=0xffffffffu;
+struct SelfAdditionalInfo{bool valid=false;};
+struct HostLog{template<class...T>void operator()(const char*,T...)const{}};
+struct {HostLog warning,notice,error;}self_log;
+unsigned retail_self_calls=0;
+bool IsSelfElf32(const fs::file&){return false;}
+class SELFDecrypter{public:SELFDecrypter(const fs::file&){}bool LoadHeaders(bool,SelfAdditionalInfo*){++retail_self_calls;return false;}
+ bool LoadMetadata(const u8*){return false;}bool DecryptData(){return false;}fs::file MakeElf(bool){return {};}};
+fs::file decrypt_self(const fs::file&,const u8* = nullptr,SelfAdditionalInfo* = nullptr);
 '''
 tests=r'''
 int main(int argc,char**argv){
@@ -133,16 +148,30 @@ int main(int argc,char**argv){
  assert(ios_intake::archive_name("dev_flash/vsh/",true));assert(!ios_intake::archive_name("dev_flash/../escape",true));assert(!ios_intake::archive_name("dev_flash//file",true));
  assert(!ios_intake::archive_name("dev_flash\\file",true));assert(!ios_intake::firmware_version("4.93.."));
  const auto executable=std::filesystem::path(host_root)/"real.elf";ios_intake::write_file(executable,ios_intake::elf_fixture());
+ // Reproduce Build109 with the actual native function and its empty boot state.
+ fs::file raw(executable.string(),fs::read);assert(Emu.GetBoot().empty());assert(!decrypt_self(raw));
+ assert(raw.size()>=4&&std::memcmp(raw.bytes->data(),"\177ELF",4)==0);
  assert(armsx3_core_inspect_executable(executable.c_str(),detail,sizeof(detail))==0);
  assert(std::filesystem::is_regular_file(host_root+"/cache/ARMSX3-prepared-executable.elf"));
+ fs::file prepared(host_root+"/cache/ARMSX3-prepared-executable.elf",fs::read);const auto accepted=prepared.to_vector<u8>();
+ assert(accepted==raw.to_vector<u8>());assert(retail_self_calls==0);assert(Emu.GetBoot().empty());
+ // Both debug SELF encodings were exercised by production probe6. Unknown,
+ // truncated and retail-failed files must preserve the last prepared ELF.
+ for(const auto&bad:std::vector<std::vector<u8>>{{0x7f,'E','L'},{0,1,2,3},{0x7f,'E','L','F'},{'S','C','E',0}}){
+  ios_intake::write_file(executable,bad);assert(armsx3_core_inspect_executable(executable.c_str(),detail,sizeof(detail))==-1);
+  fs::file current(host_root+"/cache/ARMSX3-prepared-executable.elf",fs::read);assert(current.to_vector<u8>()==accepted);
+ }
+ assert(retail_self_calls==1);
+ ios_intake::write_file(executable,accepted);Emu.boot="unrelated.BIN";
+ assert(armsx3_core_inspect_executable(executable.c_str(),detail,sizeof(detail))==0);assert(Emu.GetBoot()=="unrelated.BIN");
  host_idle=false;assert(armsx3_core_import_firmware(argv[2],detail,sizeof(detail))==-1);host_idle=true;
  host_workers=1;assert(armsx3_core_inspect_executable(executable.c_str(),detail,sizeof(detail))==-1);host_workers=0;
  assert(armsx3_core_import_firmware(nullptr,detail,sizeof(detail))==-1);assert(armsx3_core_import_firmware(argv[2],nullptr,0)==-1);
  for(auto&e:std::filesystem::directory_iterator(host_root))assert(!e.path().filename().string().starts_with(".ios-firmware-stage-"));
- std::puts("PASS:8 intake probes; native PUP/SHA1/RFC-HMAC and independently authenticated fixture; actual disk staging/rename/rollback; decryption failure preserves installed tree; complete installer/executable intake/C ABI idle guards. TAR/SCE/ELF/backend interfaces modeled; actual iOS firmware pending.");
+ std::puts("PASS:8 intake probes; native PUP/SHA1/RFC-HMAC plus SELF routing/debug removal; Build109 failure reproduced; raw ELF filename/boot independence; malformed/decryption failure preserves prepared ELF; actual disk staging/rename/rollback and firmware preservation; C ABI idle guards. TAR/retail crypto/ELF/backend modeled; actual iOS firmware pending.");
 }
 '''
-source=prelude+'\n#include "IntakePolicy.h"\n'+key+'\n'+strip_includes(sha_h)+'\n'+strip_includes(sha_cpp)+'\n'+strip_includes(pup_h)+'\n'+strip_includes(pup_cpp)+'\n'+strip_includes(intake)+'\n'+tests
+source=prelude+'\n'+native_routing+'\n#include "IntakePolicy.h"\n'+key+'\n'+strip_includes(sha_h)+'\n'+strip_includes(sha_cpp)+'\n'+strip_includes(pup_h)+'\n'+strip_includes(pup_cpp)+'\n'+strip_includes(intake)+'\n'+tests
 # e_os_abi is enum-typed in production; the narrow host header stores its byte.
 source=source.replace('header.e_os_abi = elf_os::lv2','header.e_os_abi = static_cast<u8>(elf_os::lv2)')
 with tempfile.TemporaryDirectory(prefix='armsx3-intake-') as temp:

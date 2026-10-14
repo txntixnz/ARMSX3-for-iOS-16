@@ -1,9 +1,11 @@
-# ARMSX3 iOS 16 core — Build 109
+# ARMSX3 iOS 16 core — Build 110
 
 Target: iPhone 13 Pro Max/A15, iOS 16.0, Dopamine and TrollStore.
 The installable app links the actual pinned rpcs3_emu core. Build 108 passed
-all 112 device diagnostics. Build 109 adds firmware installation and selected
-executable inspection, plus eight focused readiness checks (120 total).
+all 112 device diagnostics. Build 109 passed P2–P119, including native PUP
+authentication and staged TAR extraction, then failed P120 executable intake.
+Build 110 fixes plain ELF routing and keeps 120 readiness checks. Firmware
+installation and executable inspection become available after they all pass.
 
 After the workflow succeeds, download **ARMSX3_iOS16_INSTALL_THIS_IPA** and
 install its IPA through TrollStore. Reopen the app and tap **Run all tests**.
@@ -21,9 +23,12 @@ extraction. Files are extracted into a fresh staging directory. Required firmwar
 files are verified before the existing dev_flash directory is replaced; a failed
 publication restores the prior directory. Failure detail is included in the log.
 
-Executable inspection uses native SELF decryption and PPU ELF parsing. It checks
-loadable segment bounds and stores the prepared ELF in the core cache. Only the
-selected executable is imported; a complete game's assets are not imported here.
+Executable inspection reads the header and sends SELF to native decryption or
+plain ELF directly to native PPU parsing, independent of filename or boot state.
+It checks loadable segment bounds and stores the prepared ELF in the core cache.
+Only the selected executable is imported; a complete game's assets are not
+imported here. P120 also checks both native debug SELF header encodings and
+rejects unknown or truncated ELF headers.
 
 The production core still uses the validated interpreter/immutable JIT path.
 LLVM and Vulkan/MoltenVK are disabled. Real game execution, renderer presentation,
@@ -35,7 +40,9 @@ The workflow keeps pinned dependencies and all 49 existing production patches.
 compile, full link, signed bundle validation and one installable IPA. Matching
 core symbols and build logs remain available as separate artifacts.
 
-Local intake validation uses the actual native PUP/SHA1 code and real filesystem
-rename/rollback. TAR/SCE/ELF/backend interfaces are modeled in that host harness;
-the app and its device probes link the original native implementations. Native
-firmware installation must be verified using the user's PUP on the phone.
+Local intake validation uses actual native PUP/SHA1 code, SELF routing/debug
+header removal and real filesystem rename/rollback. It reproduces the Build 109
+failure and verifies that rejected inputs preserve the last prepared ELF.
+TAR/retail crypto/ELF/backend interfaces are modeled in the host harness; device
+probes use the original native implementations. Native firmware installation
+must be verified using the user's PUP on the phone.

@@ -1,4 +1,4 @@
-"""Build109 intake, native header contracts, UI gating and prior-core freeze."""
+"""Build110 intake routing, native header contracts, UI gating and prior-core freeze."""
 from pathlib import Path
 import hashlib,plistlib,re
 here=Path(__file__).resolve().parent
@@ -16,7 +16,8 @@ assert [f for _,f in stages[-8:]]==['armsx3_core_test_intake_'+x for x in profil
 intake=(here.parent/'core/loadtest/Intake.cpp').read_text()
 for token in ['preflight_pup(file)', 'pup_object pup(std::move(file))', 'decoder.LoadHeaders() && decoder.LoadMetadata(SCEPKG_ERK, SCEPKG_RIV) && decoder.DecryptData()',
  'validate_tar(parts[2], true)', 'contents.extract(stage.string(), false)', 'publish(staged_flash, destination, backup)',
- 'sys/external/liblv2.sprx', 'vsh/etc/version.txt', 'decrypt_self(input)', 'ppu_exec_object elf(executable)',
+ 'sys/external/liblv2.sprx', 'vsh/etc/version.txt', 'if (magic == "SCE\\0"_u32)', 'executable = decrypt_self(input)',
+ 'executable = std::move(input)', 'executable.seek(0)', 'ppu_exec_object elf(executable)',
  'ARMSX3-prepared-executable.elf', 'Game execution is the next milestone.']:
  assert token in intake,token
 for token in ['UIDocumentPickerDelegate', 'initForOpeningContentTypes:@[UTTypeData] asCopy:YES', 'startAccessingSecurityScopedResource',
@@ -27,9 +28,9 @@ cmake=(here.parent/'core/loadtest/CMakeLists.txt').read_text()
 assert 'FrontendHooks.cpp Intake.cpp' in cmake and '-framework UniformTypeIdentifiers' in cmake
 assert 'Emu.BootGame(' not in intake and 'Emu.Run(' not in intake # inspection does not launch uncontrolled guest workers
 info=plistlib.loads((here.parent/'core/loadtest/Info.plist.in').read_bytes())
-assert info['CFBundleVersion']=='109' and info['MinimumOSVersion']=='16.0'
+assert info['CFBundleVersion']=='110' and info['MinimumOSVersion']=='16.0'
 workflow=(here.parent.parent/'.github/workflows/build-armsx3-ios16-core.yml').read_text()
 assert 'needs: [synchronization-host, intake-host]' in workflow
 assert len(re.findall(r'^\s+- script: test_p\d+_pair.py$',workflow,re.M))==34
 assert re.search(r'^  intake-host:$',workflow,re.M) and 'python3 armsx3-ios16/tests/test_p114_intake.py upstream-armsx3' in workflow
-print('PASS: full Build108 bridge freeze;120 ordered device stages/8 intake probes; native firmware/SELF/ELF paths, UIKit scoped file intake/gating, staged publication, Build109/iOS16/host dependencies; real PUP/iOS install pending')
+print('PASS: full Build108 bridge freeze;120 ordered device stages/8 intake probes; header-routed SELF/raw ELF, native firmware paths, UIKit scoped file intake/gating, staged publication, Build110/iOS16/host dependencies; real PUP/iOS install pending')

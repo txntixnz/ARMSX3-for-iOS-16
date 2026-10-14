@@ -6869,3 +6869,55 @@ Build108 device stage parser, Python/YAML/plist/host dependency checks, pinned
 SCE/ELF/serialization API contract review, core shell syntax and diff whitespace
 PASS. UIKit/Apple compilation and native real PUP installation await Actions
 and device testing respectively. No game boot result claimed.
+
+
+## Build110 — repair selected raw ELF intake from Build109 device evidence
+
+Device log ARMSX3-startup-20261014-220603-549-27999(1).txt has118 unique
+AUTO PASS stages P2-P119, then FAIL P120; P121 never started. Native P114-P119
+storage/PUP bounds/authentication/hash rejection/TAR staging all passed.
+The firmware action remained gated, so no real PUP installation was attempted.
+
+Root cause is confirmed in pinned Crypto/unself.cpp: decrypt_self handles raw
+ELF only when Emu.GetBoot() ends in .elf/.ELF. Intake has no boot file configured,
+and called that function unconditionally. Native Emulator::Load decrypts only
+SCE-magic SELF; Build110 intake now follows that routing. Inspect magic with
+read_at; SELF uses decrypt_self, raw ELF moves the existing file directly to
+native ppu_exec_object, unknown/truncated headers are rejected. Do not set or
+mutate emulator boot state to work around this dependency. Log decryption and
+PPU parsing separately. Failed intake preserves the previously prepared ELF.
+
+P120 now exercises raw ELF as probe.elf and EBOOT.BIN, both native debug SELF
+key versions0x80 (big-endian offset) and0xc0 (little-endian offset), and unknown/
+truncated ELF rejection. Keep120 total readiness stages; all CoreBridge bytes,
+production patches, workflow dependencies and prior diagnostic sequence remain
+unchanged. CFBundleVersion110; no renderer/game boot/firmware success claim.
+
+The host intake harness now compiles the actual pinned CheckDebugSelf and
+decrypt_self bodies, with a deliberately failing retail SELF decoder interface.
+Removed the fake identity decrypt_self that hid Build109's native dependency.
+The host ELF magic field now matches the native little-endian storage. Host
+fs::file is move-only; native routing sees real read_at/stream copy behavior.
+Explicitly reproduce empty-boot decrypt_self(raw ELF) failure, then verify the
+production intake succeeds without changing boot state, both debug headers
+extract native bytes, malformed/decryption-failed inputs preserve the prepared
+ELF, and unrelated boot names do not affect raw intake. Retail crypto/TAR/ELF/
+FXO/fs backend remain host models; native PUP/SHA1/HMAC and SELF routing/debug
+removal are extracted production implementations. Real SCE firmware packages
+still await the user's PUP on device.
+
+Build110 local validation: production intake/native-routing host suite under
+g++ C++23 Wall/Wextra/Werror ASAN+UBSAN with detect_leaks=0; all8 readiness
+probe bodies, independently authenticated PUP/RFC HMAC, real filesystem staging/
+publication/rollback, failure preservation and C ABI idle guards PASS. Common
+fixture preserves the complete Build108 bridge prefix and verifies120 ordered
+stages, Build110/iOS16 metadata, file-picker gates and34+1 host dependencies.
+Python/plist/workflow metadata and git diff --check PASS. Apple compile and
+Build110 native P120/P121 are still pending user-reported workflow/device tests.
+
+Next: install Build110 from ARMSX3_iOS16_INSTALL_THIS_IPA through TrollStore,
+reopen, Run all tests. If all120 pass, tap Install firmware, select the user's
+PS3UPDAT.PUP, keep the app open, share startup log after completion/failure.
+Inspect EBOOT/ELF prepares their selected executable after firmware installation;
+it does not launch the game. Advance actual firmware/runtime boot evidence next.
+Do not poll Actions after publication. User reports completion. Keep replies short.
