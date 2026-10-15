@@ -1,4 +1,4 @@
-"""Build123 intake/runtime contracts, UI gating and prior-core freeze."""
+"""Build124 intake/runtime contracts, UI gating and prior-core freeze."""
 from pathlib import Path
 import hashlib,plistlib,re
 here=Path(__file__).resolve().parent
@@ -28,7 +28,7 @@ cmake=(here.parent/'core/loadtest/CMakeLists.txt').read_text()
 assert 'FrontendHooks.cpp Intake.cpp' in cmake and '-framework UniformTypeIdentifiers' in cmake
 assert 'Emu.BootGame(' not in intake and 'Emu.Run(' not in intake # inspection does not launch uncontrolled guest workers
 info=plistlib.loads((here.parent/'core/loadtest/Info.plist.in').read_bytes())
-assert info['CFBundleVersion']=='123' and info['MinimumOSVersion']=='16.0'
+assert info['CFBundleVersion']=='124' and info['MinimumOSVersion']=='16.0'
 workflow=(here.parent.parent/'.github/workflows/build-armsx3-ios16-core.yml').read_text()
 assert 'needs: [synchronization-host, intake-host, graphics-host]' in workflow
 assert len(re.findall(r'^\s+- script: test_p\d+_pair.py$',workflow,re.M))==34
@@ -57,4 +57,14 @@ assert 'GameImport.cpp' in cmake
 assert 'graphics-host:' in workflow and 'test_graphics_device.py' in workflow
 assert 'GraphicsDevice.cpp GraphicsCheck.cpp' in cmake and 'armsx3_ios_moltenvk' in cmake
 assert 'self.graphicsButton.enabled = intakeReady' in app and 'armsx3_core_check_graphics' in app
-print('PASS: prior bridge freeze;120 ordered stages; native intake, load-only BootGame gates and explicit bounded guest start; scoped UIKit actions; Build123/iOS16;34+2 host dependencies')
+print('PASS: prior bridge freeze;120 ordered stages; native intake, load-only BootGame gates and explicit bounded guest start; scoped UIKit actions; Build124/iOS16;34+2 host dependencies')
+
+# Quick start retains the real stage cursor and unlocks intake only after all
+# four foundation stages pass. Full diagnostics still resume at that cursor.
+assert [f for _,f in stages[:4]]==['armsx3_core_state','armsx3_core_test_immutable_jit','armsx3_core_initialize','armsx3_core_test_guest_memory']
+assert 'if (self.quickMode && self.nextStage == 4)' in app
+assert 'self.foundationReady = YES;' in app and 'remaining diagnostics were not run' in app
+assert '(self.foundationReady || self.nextStage == stageCount)' in app
+assert app.count('(!self.foundationReady && self.nextStage != stageCount)')==4
+assert 'self.nextStage = stageCount' not in app
+print('PASS: Quick start uses four real foundation stages; separate readiness; full120 diagnostic cursor retained')

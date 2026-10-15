@@ -18,6 +18,7 @@
 #include "Utilities/File.h"
 #include "Utilities/Thread.h"
 #include <algorithm>
+#include <set>
 #include <atomic>
 #include <chrono>
 #include <cstring>
@@ -158,6 +159,9 @@ int check(std::string& detail, bool game = false, bool execute = false, bool ren
 
     install_frontend();
     Emu.SetForceBoot(false);
+    const bool previous_headless = Emu.IsHeadless();
+    const auto previous_renderers = Emu.GetSupportedRenderers();
+    const auto previous_default_renderer = Emu.GetDefaultRenderer();
     std::string error;
     unsigned loaded_segments = 0, firmware_modules = 0;
     bool attempted = false;
@@ -168,6 +172,12 @@ int check(std::string& detail, bool game = false, bool execute = false, bool ren
             "RUNTIME BEFORE native BootGame: prepared ELF, static decoders, null video/audio, autostart OFF");
         if (game) log("GAME runtime BEFORE BootGame title=" + disc.title + " id=" + disc.id + " original EBOOT and full disc folder");
         attempted = true;
+        // A prepared UIKit Metal surface is a display, even without desktop GUI.
+        // Native fixup_settings otherwise silently replaces Vulkan with Null.
+        Emu.SetHeadless(!render);
+        Emu.SetSupportedRenderers(render ? std::set<video_renderer>{video_renderer::null, video_renderer::vulkan} :
+            std::set<video_renderer>{video_renderer::null});
+        Emu.SetDefaultRenderer(video_renderer::null);
         const auto result = Emu.BootGame(prepared.string(), "", true, cfg_mode::config_override, temporary.path.string());
         log("RUNTIME AFTER BootGame: result=" + std::to_string(static_cast<unsigned>(result)) +
             " state=" + std::to_string(static_cast<unsigned>(Emu.GetStatus(false))));
@@ -234,6 +244,9 @@ int check(std::string& detail, bool game = false, bool execute = false, bool ren
         {
             if (!teardown()) { detail = "Runtime cleanup is incomplete. Reopen the app and share the log."; return -2; }
             if (render) finish_renderer_frame();
+            Emu.SetHeadless(previous_headless);
+            Emu.SetSupportedRenderers(previous_renderers);
+            Emu.SetDefaultRenderer(previous_default_renderer);
             require(g_cfg.from_string(previous) && g_backup_cfg.from_string(previous_backup), "Could not restore runtime configuration");
             if (execute) rpcs3::utils::configure_logs();
             require(!frontend_failed(), "Runtime frontend reported an error during cleanup");

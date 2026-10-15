@@ -180,6 +180,9 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
 @property(nonatomic,strong) UILabel* progressLabel;
 @property(nonatomic,strong) UIProgressView* progress;
 @property(nonatomic,strong) UIButton* runButton;
+@property(nonatomic,strong) UIButton* quickButton;
+@property(nonatomic,assign) BOOL quickMode;
+@property(nonatomic,assign) BOOL foundationReady;
 @property(nonatomic,strong) UIButton* nextButton;
 @property(nonatomic,strong) UIButton* stopButton;
 @property(nonatomic,strong) UIButton* shareButton;
@@ -224,10 +227,16 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
         [stack.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor constant:-20],
         [stack.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:20],
         [stack.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor constant:-20]]];
+    self.quickButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    [self.quickButton setTitle:@"Quick start" forState:UIControlStateNormal];
+    [self.quickButton addTarget:self action:@selector(startQuick) forControlEvents:UIControlEventTouchUpInside];
     self.runButton = [UIButton buttonWithType:UIButtonTypeSystem];
     [self.runButton setTitle:@"Run all tests" forState:UIControlStateNormal];
     [self.runButton addTarget:self action:@selector(startAll) forControlEvents:UIControlEventTouchUpInside];
-    [stack addArrangedSubview:self.runButton];
+    UIStackView* startControls = [[UIStackView alloc] initWithArrangedSubviews:@[self.quickButton,self.runButton]];
+    startControls.distribution = UIStackViewDistributionFillEqually;
+    startControls.spacing = 12;
+    [stack addArrangedSubview:startControls];
     self.progressLabel = [[UILabel alloc] init];
     self.progressLabel.numberOfLines = 0;
     self.progressLabel.text = [NSString stringWithFormat:@"Ready · %lu tests", (unsigned long)stageCount];
@@ -290,12 +299,12 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
     self.output = [[UITextView alloc] init];
     self.output.editable = NO;
     self.output.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
-    self.output.text = @"Tap Run all tests. The core loads and every test runs in order. The sequence stops on the first failure.\n\nWhen finished, share the .txt log or tap Copy results and paste into chat. Complete the tests to enable firmware, game and graphics actions.";
+    self.output.text = @"Tap Quick start for four foundation checks, then Render game. Run all tests remains available for full diagnostics.\n\nWhen finished, share the .txt log or tap Copy results and paste into chat. Quick start or the full tests enable firmware, game and graphics actions.";
     [stack addArrangedSubview:self.output];
     NSString* pending = [NSUserDefaults.standardUserDefaults stringForKey:pendingStageKey];
     if (pending.length) {
         self.previousRunPending = YES;
-        self.output.text = [NSString stringWithFormat:@"Previous run did not finish: %@.\n\nShare log or Copy results includes that previous run until you start testing again. Run all tests starts a fresh sequence in this process. Complete the tests to enable firmware, game and graphics actions.", pending];
+        self.output.text = [NSString stringWithFormat:@"Previous run did not finish: %@.\n\nShare log or Copy results includes that previous run until you start testing again. Run all tests starts a fresh sequence in this process. Quick start or the full tests enable firmware, game and graphics actions.", pending];
     }
     [self refreshControls];
     [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(enteredBackground:)
@@ -307,12 +316,13 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
 }
 - (void)refreshControls {
     const BOOL available = !self.running && !self.intakeBusy && !self.failed && self.nextStage < stageCount;
+    self.quickButton.enabled = available && !self.foundationReady && self.nextStage < 4;
     self.runButton.enabled = available;
     self.nextButton.enabled = available;
     self.stopButton.enabled = self.running && self.runAll && !self.stopRequested;
     self.shareButton.enabled = !self.running && !self.intakeBusy;
     self.resultsCopyButton.enabled = !self.running && !self.intakeBusy;
-    const BOOL intakeReady = self.coreHandle && !self.running && !self.intakeBusy && !self.failed && self.nextStage == stageCount;
+    const BOOL intakeReady = self.coreHandle && !self.running && !self.intakeBusy && !self.failed && (self.foundationReady || self.nextStage == stageCount);
     self.firmwareButton.enabled = intakeReady; self.executableButton.enabled = intakeReady;
     self.runtimeButton.enabled = intakeReady;
     self.gameButton.enabled = intakeReady; self.gameLoadButton.enabled = intakeReady;
@@ -322,11 +332,18 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
     [self.runButton setTitle:self.nextStage ? @"Run remaining tests" : @"Run all tests" forState:UIControlStateNormal];
     self.progress.progress = float(self.nextStage) / float(stageCount);
 }
+- (void)startQuick {
+    if (self.running || self.intakeBusy || self.failed || self.foundationReady || self.nextStage >= 4) return;
+    [self startSequence:YES];
+    self.quickMode = YES;
+    ARMSX3StartupLog("QUICK foundation checks requested; full diagnostics remain optional");
+}
 - (void)startAll { [self startSequence:YES]; }
 - (void)startNext { [self startSequence:NO]; }
 - (void)startSequence:(BOOL)all {
     if (self.running || self.intakeBusy || self.failed || self.nextStage >= stageCount) return;
     self.running = YES;
+    self.quickMode = NO;
     self.previousRunPending = NO;
     self.runAll = all;
     self.stopRequested = NO;
@@ -429,9 +446,17 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
     [self.transcript appendFormat:@"PASS %@\n", label];
     self.nextStage = index + 1;
     [self refreshControls];
-    if (self.nextStage == stageCount) {
+    if (self.quickMode && self.nextStage == 4) {
+        self.foundationReady = YES;
+        self.quickMode = NO;
+        ARMSX3StartupLog("QUICK PASS: four foundation checks completed; remaining diagnostics were not run");
+        [self.transcript appendString:@"\nQuick start passed. Tap Render game; full diagnostics are optional.\n"];
+        self.output.text = self.transcript;
+        self.progressLabel.text = @"Ready · Render game available";
+        [self finishSequence];
+    } else if (self.nextStage == stageCount) {
         ARMSX3StartupLog("AUTO PASS: all diagnostic stages completed; game boot remains untested");
-        [self.transcript appendFormat:@"\nAll %lu tests passed. Share the startup log.\nComplete the tests to enable firmware, game and graphics actions.\n", (unsigned long)stageCount];
+        [self.transcript appendFormat:@"\nAll %lu tests passed. Share the startup log.\nQuick start or the full tests enable firmware, game and graphics actions.\n", (unsigned long)stageCount];
         self.output.text = self.transcript;
         self.progressLabel.text = [NSString stringWithFormat:@"All %lu tests passed", (unsigned long)stageCount];
         [self finishSequence];
@@ -455,7 +480,7 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
 - (void)checkGame { [self checkRuntimeMode:YES execute:NO]; }
 - (void)runGame { [self checkRuntimeMode:YES execute:YES]; }
 - (void)renderGame {
-    if (self.running || self.intakeBusy || self.failed || self.nextStage != stageCount || !self.coreHandle) return;
+    if (self.running || self.intakeBusy || self.failed || (!self.foundationReady && self.nextStage != stageCount) || !self.coreHandle) return;
     auto action = reinterpret_cast<int (*)(void*,unsigned,unsigned,char*,size_t)>(dlsym(self.coreHandle,"armsx3_core_render_game"));
     if (!action) { [self showLogMessage:@"Rendering unavailable" detail:@"The native rendering function is missing."]; return; }
     self.intakeBusy = YES; self.previousRunPending = NO;
@@ -503,7 +528,7 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
     }];
 }
 - (void)checkGraphics {
-    if (self.running || self.intakeBusy || self.failed || self.nextStage != stageCount || !self.coreHandle) return;
+    if (self.running || self.intakeBusy || self.failed || (!self.foundationReady && self.nextStage != stageCount) || !self.coreHandle) return;
     auto action = reinterpret_cast<int (*)(char*,size_t)>(dlsym(self.coreHandle,"armsx3_core_check_graphics"));
     if (!action) { [self showLogMessage:@"Graphics check unavailable" detail:@"The graphics function is missing."]; return; }
     self.intakeBusy = YES; self.previousRunPending = NO;
@@ -538,7 +563,7 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
     });
 }
 - (void)checkRuntimeMode:(BOOL)game execute:(BOOL)execute {
-    if (self.running || self.intakeBusy || self.failed || self.nextStage != stageCount || !self.coreHandle) return;
+    if (self.running || self.intakeBusy || self.failed || (!self.foundationReady && self.nextStage != stageCount) || !self.coreHandle) return;
     const char* symbol = execute ? "armsx3_core_run_game" : game ? "armsx3_core_check_game" : "armsx3_core_check_runtime";
     auto action = reinterpret_cast<int (*)(char*,size_t)>(dlsym(self.coreHandle,symbol));
     if (!action) { [self showLogMessage:@"Runtime loading unavailable" detail:@"The core runtime function is missing."]; return; }
@@ -579,7 +604,7 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
     });
 }
 - (void)selectIntake:(NSInteger)mode {
-    if (self.running || self.intakeBusy || self.failed || self.nextStage != stageCount || !self.coreHandle) return;
+    if (self.running || self.intakeBusy || self.failed || (!self.foundationReady && self.nextStage != stageCount) || !self.coreHandle) return;
     self.intakeMode = mode;
     UIDocumentPickerViewController* picker = mode == 3 ?
         [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTTypeFolder] asCopy:NO] :

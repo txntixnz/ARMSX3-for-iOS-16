@@ -3975,3 +3975,42 @@ tests, tap Render game (10 seconds), keep foreground and share log/screen result
 Reuse retained firmware/disc. Audio/controls pending and game content/FPS unverified.
 Keep concise English; do not create images. Build122 proved full native core link;
 do not describe that as still wholly untested or claim app link/packaging passed.
+
+
+## Build124 — 2026-10-15: renderer selection and optional diagnostics
+
+Build123 Actions38735031485 succeeded. Latest phone log
+ARMSX3-startup-20261015-124837-170-31316.txt confirms120 diagnostic passes,
+Midnight Club LA imported-game execution with51114 completed HLE/LV2 calls and
+clean stop, plus two exact A15 offscreen GPU readbacks. Render game failed its
+configuration check: native System.cpp fixup_settings changes Vulkan to Null
+in headless mode. CoreBridge initialization deliberately sets headless=true and
+only supports Null. That initialization baseline and all56 patches remain frozen.
+
+Runtime.cpp now selects headless=false and supports Null+Vulkan for the explicitly
+owned render surface before BootGame. Load-only and nonrender execution remain
+headless/Null. Default stays Null. Original headless flag, supported renderer set
+and default renderer are restored only after successful teardown/frame release.
+Incomplete cleanup retains ownership/policy and requires app restart as before.
+Native renderer/config validation and accepted-present/error checks are retained.
+
+Quick start runs the actual first4 stages: core load, immutable JIT, Emu.Init,
+guest memory. A separate foundationReady flag enables firmware/game/graphics/
+render actions. The120-stage cursor is never fabricated or marked complete;
+Run remaining tests resumes the116 remaining stages. Failure and serial work
+gates remain. No diagnostic starts automatically. Firmware/disc retained.
+
+Validation: Build124 fixture/prior bridge freeze passes; runtime/frontend/JIT/
+BootGame host regression passes ASAN+UBSAN including exact native System.h policy
+accessors and System.cpp video fixup, render success/no-present/error/suboptimal,
+partial loading, stopped restoration and incomplete cleanup. Renderer regression
+compiled/executed native present/extension contract but its unchanged CMake
+importer check could not run locally because cmake is absent. Native renderer/
+all56 patches unchanged; Build123 full native compile/link/package succeeded.
+No local iOS SDK; new UIKit compilation and actual phone pixels pending CI/device.
+
+Parent6140317d925c13e26cbd8315c77b7a658a03a88a. Publish main, let Actions build;
+DO NOT monitor after publication (user reports finish/failure). Next: install
+ARMSX3_iOS16_INSTALL_THIS_IPA in TrollStore, Quick start -> Render game (10 seconds),
+keep foreground, share startup log and what appeared. Audio/controls pending.
+No generated images; concise English replies.

@@ -175,11 +175,13 @@ template<class T,class F>void select(F f){
 }}
 namespace vm{constexpr u8 page_readable=1;bool check_addr(u64,u8,u32){return mode!=4;}}
 template<class T>T ensure(T v){if(!v)throw std::runtime_error("host ensure");return v;}
-struct{template<class...T>void notice(const char*,T...)const{}}sys_log;
+struct{template<class...T>void notice(const char*,T...)const{} template<class...T>void warning(const char*,T...)const{}}sys_log;
 void unload_iso(){}
 std::vector<std::function<void()>>main_queue;
 class Emulator{
 public:
+ bool m_headless=true;std::set<video_renderer>m_supported_renderers{video_renderer::null};video_renderer m_default_renderer=video_renderer::null;
+ /* NATIVE_RENDERER_POLICY_API */
  bool m_restrict_emu_state_change=false,m_force_boot=false;mutable State m_state;mutable unsigned ticks=0;
  std::string m_path,m_path_original,m_path_old,disc,hdd1,m_config_path;std::vector<std::string>argv,envp;std::vector<u8>data,klic;
  cfg_mode m_config_mode=cfg_mode::custom;std::optional<std::string>m_db_config;std::function<void()>after_kill_callback;
@@ -223,6 +225,7 @@ game_boot_result Emulator::Load(const std::string&){
  host_ppu={};host_spu={};host_guest_active=false;host_threads_joined=false;
  guest_notified=[] {++ppu_starts;spu_cache::initialize();host_guest_active=true;Emu.FinalizeRunRequest();if(g_cfg.video.renderer.get()==video_renderer::vulkan&&mode!=26)armsx3_ios_runtime_note_present(mode==27?-4:mode==28?1000001003:0);if(mode!=21){host_ppu.exec_bytes=2400;host_ppu.syscall_history.index=3;host_spu.block_counter=7;}};
  ++loads;assert(m_config_mode==cfg_mode::config_override);assert(!m_force_boot);fs::file c(m_config_path,fs::read);assert(g_cfg.from_string(c.to_string()));
+ /* NATIVE_RENDERER_FIXUP */
  assert(!g_cfg.misc.autostart.get()&&!g_cfg.misc.autoexit.get());assert(g_cfg.core.libraries_control.value==std::set<std::string>{"liblv2.sprx:lle"});
  assert(g_cfg.core.ppu_decoder.get()==ppu_decoder_type::_static&&g_cfg.core.spu_decoder.get()==spu_decoder_type::_static);
  assert(g_cfg.audio.renderer.get()==audio_renderer::null);
@@ -285,6 +288,7 @@ int main(int argc,char**argv){
   assert(armsx3_core_check_game(detail,sizeof(detail))==(scenario==0?0:-1));
   assert(loads==before+1&&Emu.IsStopped(true)&&workers==0&&main_queue.empty());
   assert(g_cfg.to_string()==prior&&g_backup_cfg.to_string()==backup);
+  assert(Emu.IsHeadless()&&Emu.GetSupportedRenderers()==std::set<video_renderer>{video_renderer::null}&&Emu.GetDefaultRenderer()==video_renderer::null);
  }
  assert(std::string(detail).starts_with("Game load passed: Host disc [TEST00001]"));
  assert(armsx3_core_check_game(nullptr,0)==-1);mode=0;
@@ -299,6 +303,7 @@ int main(int argc,char**argv){
   assert(result==(scenario==0?0:(scenario==22?-2:-1)));assert(starts==before+1);
   assert(Emu.IsStopped(true)&&workers==0&&main_queue.empty());
   assert(g_cfg.to_string()==prior&&g_backup_cfg.to_string()==backup);
+  assert(Emu.IsHeadless()&&Emu.GetSupportedRenderers()==std::set<video_renderer>{video_renderer::null}&&Emu.GetDefaultRenderer()==video_renderer::null);
   const auto captured=ios_runtime::execution_progress();
   assert(captured.captured==(scenario!=24&&scenario!=25));assert(captured.failed==(scenario==25));
   if(scenario==0)assert(captured.instructions==600&&captured.calls==3&&captured.spu_blocks==7&&captured.ppu_contexts==1&&captured.spu_contexts==1);
@@ -318,6 +323,7 @@ int main(int argc,char**argv){
   assert(result==((scenario==0||scenario==28)?0:-1));
   assert(Emu.IsStopped(true)&&workers==0&&g_fxo->objects.empty()&&!ios_runtime::renderer_frame_ready());
   assert(g_cfg.to_string()==prior&&g_backup_cfg.to_string()==backup);
+  assert(Emu.IsHeadless()&&Emu.GetSupportedRenderers()==std::set<video_renderer>{video_renderer::null}&&Emu.GetDefaultRenderer()==video_renderer::null);
  }
  // Incomplete native teardown must retain the live frame and refuse release.
  mode=7;g_fxo->main={};assert(armsx3_core_render_game(&layer,1280,720,detail,sizeof(detail))==-2);
@@ -355,12 +361,20 @@ int main(int argc,char**argv){
  std::ofstream(host_root+"/cache/ARMSX3-prepared-executable.elf",std::ios::trunc)<<"BAD";
  const auto count=loads;assert(armsx3_core_check_runtime(detail,sizeof(detail))==-1);assert(loads==count);
  assert(jit_metrics.reserves==0&&jit_metrics.allocations==0&&jit_metrics.decommits==0&&jit_metrics.resets==0&&jit_metrics.write_protection.empty());
- std::puts("PASS: production runtime/frontend plus native JIT finalizer,49 callback signatures and native BootGame; load-only override, mapped segments/firmware identity, missing inputs/idle/main-thread/C ABI guards, partial failures, delayed cleanup, timeout, queue/wake protocol and config restoration. Native Load/VM/FXO/devices/config and UIKit are host models/source contracts; game identity/category/executable/disc/asset mapping checks; complete cached-ELF cleanup verified on Build113 phone; Build114 game identity/disc/assets/cleanup verified on phone; native Run/RunPPU and authorized start, startup timeout, zero-progress/paused outcomes and joined execution capture covered with modeled guest work; actual native SPU-cache startup prefix/guard included in modeled PPU initialization; Build115 guard abort is separately reproduced; native GSRender frame ownership with production adapter covered for 64 cycles; render success/no-present/present-error/suboptimal and cleanup/config restore covered with injected queue outcomes. Native Vulkan compile/device presentation pending.");
+ std::puts("PASS: production runtime/frontend plus native JIT finalizer,49 callback signatures and native BootGame; load-only override, mapped segments/firmware identity, missing inputs/idle/main-thread/C ABI guards, partial failures, delayed cleanup, timeout, queue/wake protocol and config restoration. Native Load/VM/FXO/devices/config and UIKit are host models/source contracts; game identity/category/executable/disc/asset mapping checks; complete cached-ELF cleanup verified on Build113 phone; Build114 game identity/disc/assets/cleanup verified on phone; native Run/RunPPU and authorized start, startup timeout, zero-progress/paused outcomes and joined execution capture covered with modeled guest work; actual native SPU-cache startup prefix/guard included in modeled PPU initialization; Build115 guard abort is separately reproduced; native GSRender frame ownership with production adapter covered for 64 cycles; render success/no-present/present-error/suboptimal and cleanup/config restore covered with injected queue outcomes. Native renderer policy uses exact System.cpp video fixup and System.h accessors; headless and unsupported Vulkan now reproduce native fallback. Native Vulkan compiled/linked in Build123; phone presentation of this change remains pending.");
 }
 '''
 # Accelerate the timeout scenario only. The native app retains its 30-second
 # budget; all other production logic and the native BootGame body are unchanged.
 runtime=runtime.replace('std::chrono::seconds(30)','std::chrono::milliseconds(30)').replace('std::chrono::seconds(15)','std::chrono::milliseconds(40)').replace('std::chrono::seconds(3)','std::chrono::milliseconds(30)').replace('std::chrono::seconds(10)','std::chrono::milliseconds(40)')
+
+native_system=read('rpcs3/Emu/System.cpp')
+headless=native_system[native_system.index('\tif (Emu.IsHeadless())',native_system.index('static void fixup_settings')):]
+headless=headless[:headless.index('\n\t\tif (g_cfg.io.camera')]+ '\n\t}\n\telse\n\t{\n' + headless[headless.index('\t\t// Make sure we have a valid renderer'):headless.index('\n\n\t// Some settings')]
+backend=backend.replace('/* NATIVE_RENDERER_FIXUP */',headless)
+header=read('rpcs3/Emu/System.h')
+policy_api=header[header.index('\tbool IsHeadless() const'):header.index('\n\tvoid SetDefaultGraphicsAdapter')]
+prelude=prelude.replace('/* NATIVE_RENDERER_POLICY_API */',policy_api)
 prelude=prelude.replace('enum class cfg_mode{custom,config_override};',strip(read('rpcs3/Emu/config_mode.h')))
 backend=backend.replace('// NATIVE_JOINED_CAPTURE_HOOK',HOOK).replace('/* NATIVE_RSX_START_CALLBACK */','\n'+rsx_callback+'\n')
 tests=tests.replace('/* LATE_NATIVE_RSX_START_CALLBACK */','\n'+rsx_callback+'\n')
