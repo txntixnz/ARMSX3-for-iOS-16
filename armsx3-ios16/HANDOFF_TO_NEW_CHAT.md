@@ -4512,3 +4512,95 @@ Start game, wait for Press START, tap the visible START (hold briefly if needed)
 then arrows/cross/circle or connected controller. Stop game and share log/result.
 No reimport/full diagnostics required. No sub-agents. Concise English, no images.
 native132-validation has all66; native131-validation also now has66 despite name.
+
+
+## Build133 — early texture-cache eviction; remove play-session diagnostic cost (2026-10-15)
+
+User supplied ARMSX3-startup-20261015-205439-635-36051.txt and reports:
+“Hung up somewhere in the menu, very bad frames per second. Buttons work”.
+Read local attachment directly (no Library tool):
+/workspace/scratch/8dcd4680dd95/upload/ARMSX3-startup-20261015-205439-635-36051.txt
+Library ID libfile_b82030430cec8191afd9e06aa4500a2a. Export PID36051 recovers prior
+Build132/PID36027 session. Input/UI touches repeatedly log PS3 START and the user
+confirms actual button effects. Do not regress/rework the confirmed input path.
+
+Evidence: run starts1792097520.209142. Initial presents advance~150/5s, then95,
+148,40,14,12 and stay~12/5s (~2.4fps), reaching1851 at7620.632288. The game writes
+~1.9GiB carchive_cache.rpf into31 cached files; this completes7617.868971 and may
+make later tests warmer/faster independently of code changes. Reused upload
+batches at7623.8515..7624.3411 all finish withpending0K. No upload-ring growth.
+At7624.461864 texture cache usage462127232bytes (~440MiB), native quota321912832
+bytes (~307MiB). Two eviction attempts refuse the already-held cache mutex.
+341KiB pool3 allocation fails7624.464421; RSX fatal VK_ERROR_OUT_OF_DEVICE_MEMORY
+7624.471051. The fatal observer begins shutdown; all28PPU+6SPU contexts join,
+11,852,331,123 instruction estimate /2,067,159 completed HLE calls captured.
+CPU/FXO teardown begins7624.492310, but no AFTER FXO/VM marker; two shader workers
+finish within~0.12s. Cleanup times out30s later7654.489308 and UIKit reports FAIL.
+Do not claim a clean stop or identify a particular Vulkan destructor wait yet.
+
+Patch0067-ios-preempt-texture-cache-pressure.patch:
+- iOS texture-cache quota=min(native quota,192MiB). Other platforms retain native
+  quotas. Fix the common warning's incorrect units (bytes were printed with M).
+  Explicit TargetConditionals include in VKTextureCache.cpp for reliable guard.
+- New private renderer reclaim_texture_cache() runs after the proven upload-ring
+  batch helper, before load_texture_env sampler/cache locks and before blit's
+  GPU scope/cache entry. Skip when uninterruptible/flushing/deadlock.
+- Check current texture-pool bytes at a192MiB watermark. If native quota exceeded,
+  invoke existing on_vram_exhausted(fatal) OUTSIDE cache locks. Native path syncs
+  GPU before evict_unused, excludes current guest fragment/vertex textures,
+  purges invalidated/unlocked entries and performs a second sync. New helper
+  drains driver GC afterward, ensuring queued deletion completes before the next
+  allocation, and marks samplers dirty so old descriptors are rebuilt.
+- Next check=max(192MiB,remaining+16MiB). If no eligible textures can be released,
+  avoid repeating hard syncs on every draw; retry after another16MiB growth.
+  Marker “iOS: texture-cache budget pass beforeM -> afterM (released=N)”. No
+  arbitrary unlocking, manual ring pointer reset, ignored allocation error or
+  discarded active GPU resource. Cached-vs-live working-set limitations remain.
+- Add low-frequency native VKGSRender destructor markers BEFORE DMA sync,
+  BEFORE/AFTER device idle, BEFORE async scheduler join, BEFORE shader compiler
+  join, AFTER device/instance destruction. These diagnose residual cleanup hangs;
+  they do not bypass or cancel native ownership/synchronization.
+
+Performance changes:
+- Runtime renders set ppu_call_history=false (non-render3s diagnostics keep true).
+  Native interpreter selects set_call_history only when true, so this removes
+  branch recording from interpreter work. Native syscall-history index still
+  increments with a single last-call record, preserving capture totals/evidence.
+  Update runtime host test to assert this policy at native Run and model1 entry.
+- StartupLog.mm still write()s every line immediately. LogSyncPolicy.h only
+  fsyncs P4 core chatter at most once/second; all explicit startup/input/result
+  markers retain immediate fsync. No queued/background log worker. Avoids the
+  earlier per-message disk flush while preserving logs on app termination.
+  Note logs::warning includes native success levels; there was NO regex bug:
+  logs.cpp explicitly supports patterns such as “.*”. sys_fs and network use
+  warning for routine operations, so warning-only still produces many lines.
+- Success UI detail no longer says controls are pending. Renderer/decoders/JIT,
+  resolution720p and audio policy unchanged. Static interpreters remain a likely
+  performance limit; no speedup claim before device measurement.
+
+Validation:
+- All67 patches apply to exact92b931b9fb5eef7f1317cb482917dfc19aceebd9.
+- New test_ios_menu_memory.py reconstructs changed native files then compiles
+  exact cache quota, common evict_unused/handle_memory_pressure, new renderer
+  method and production log-sync policy with ASAN+UBSAN and warnings-as-errors.
+  Modeled8GiB stream stays<=212MiB texture-pool peak, preserves excluded active
+  textures and framebuffer storage, waits/drains before free, checks lock refusal,
+  all skip gates, pinned-set16MiB hysteresis and failed-GPU-wait ownership.
+  Desktop retains307MiB quota/no iOS reclaim. Old no-preflight path must reproduce
+  modeled440MiB allocation refusal. GPU/FXO/storage/GC are host interfaces, not
+  real driver execution.100000 routine logs /8 concurrent writers prove paced
+  syncing; explicit boundary messages still sync immediately.
+- Production runtime/frontend lifecycle test passes with render history disabled,
+  one-entry capture and existing failure/timeout/config restoration cases.
+- Input regression and frozen bridge/120 stages/four Quick start foundation/
+  Build133 fixture pass. Python scripts parse, non-patch whitespace passes.
+- Workflow adds menu-memory test to intake (still34+2 prerequisites), adds header
+  to push paths. Whole ios directory copied, so new sync header reaches both app
+  and dylib compile. Actual iOS SDK/build and phone behavior remain pending.
+
+Parent main f5508cb6653bcdfb0905f000c2cbedb9d973c8fe. Publication/build authorized.
+Publish expected-parent lease, check one queued run, do NOT monitor. Next install
+ARMSX3_iOS16_INSTALL_THIS_IPA, Quick start -> Start game, START, navigate the same
+menus, Stop game, send log/result/responsiveness. No reimport/full diagnostic run.
+Latest working tree native133-validation has all67; native132-validation also67
+now despite its historical name. Concise English, no generated images/agents.

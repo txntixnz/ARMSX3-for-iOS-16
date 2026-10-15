@@ -225,7 +225,7 @@ void dispatch_main(std::function<void()>f,atomic_t<u32>*wake){main_queue.push_ba
 void drain_main_queue(){++drains;on_main=true;while(!main_queue.empty()){auto f=std::move(main_queue.front());main_queue.erase(main_queue.begin());f();}on_main=false;}
 }
 void State::notify_all(){
- if(value==system_state::starting){assert(on_main);++starts;if(mode==22)g_emu_callbacks.on_run(false);main_queue.push_back([]{assert(on_main);/* NATIVE_RSX_START_CALLBACK */});}
+ if(value==system_state::starting){assert(g_cfg.core.ppu_call_history.get()==(g_cfg.video.renderer.get()!=video_renderer::vulkan));assert(on_main);++starts;if(mode==22)g_emu_callbacks.on_run(false);main_queue.push_back([]{assert(on_main);/* NATIVE_RSX_START_CALLBACK */});}
 }
 bool Emulator::IsRunning(){
  if(m_state==system_state::starting&&mode!=20){on_main=true;auto pending=std::move(main_queue);main_queue.clear();for(auto&f:pending)f();on_main=false;}
@@ -243,6 +243,7 @@ game_boot_result Emulator::Load(const std::string&){
  assert(!g_cfg.misc.autostart.get()&&!g_cfg.misc.autoexit.get());assert(g_cfg.core.libraries_control.value==std::set<std::string>{"liblv2.sprx:lle"});
  assert(g_cfg.core.ppu_decoder.get()==ppu_decoder_type::_static&&g_cfg.core.spu_decoder.get()==spu_decoder_type::_static);
  assert(g_cfg.audio.renderer.get()==audio_renderer::null);
+ host_ppu.syscall_history.data.resize(g_cfg.core.ppu_call_history.get()?8:1);
  if(g_cfg.video.renderer.get()==video_renderer::vulkan){assert(g_cfg.video.antialiasing_level.get()==msaa_level::none&&g_cfg.video.shadermode.get()==shader_mode::async_recompiler&&g_cfg.video.shader_compiler_threads_count.get()==2&&g_cfg.video.frame_generation.get()==frame_generation_mode::off&&g_cfg.video.vk.vram_allocation_limit.get()==1024);}
  if(mode==1){m_state=system_state::stopped;return game_boot_result::invalid_file_or_folder;}
  m_state=system_state::ready;workers=2;g_emu_callbacks.on_ready();

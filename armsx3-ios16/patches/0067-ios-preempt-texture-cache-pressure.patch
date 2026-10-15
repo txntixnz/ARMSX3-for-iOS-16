@@ -1,0 +1,167 @@
+diff --git a/rpcs3/Emu/RSX/VK/VKTextureCache.cpp b/rpcs3/Emu/RSX/VK/VKTextureCache.cpp
+--- a/rpcs3/Emu/RSX/VK/VKTextureCache.cpp
++++ b/rpcs3/Emu/RSX/VK/VKTextureCache.cpp
+@@ -9,6 +9,9 @@
+ #include "vkutils/data_heap.h"
+ 
+ #include "util/asm.hpp"
++#ifdef __APPLE__
++#include <TargetConditionals.h>
++#endif
+ 
+ namespace vk
+ {
+@@ -1881,13 +1884,18 @@
+ 			quota = std::min<u64>(128, total_device_memory / 2);
+ 		}
+ 
++#if defined(__APPLE__) && TARGET_OS_IOS
++		// A15 shares graphics memory with guest RAM, rings and the driver. Keep
++		// cached textures below the late 440 MiB refusal observed on the phone.
++		quota = std::min<u64>(quota, 192);
++#endif
+ 		quota *= 0x100000;
+ 
+ 		if (const u64 texture_cache_pool_usage = vmm_get_application_pool_usage(VMM_ALLOCATION_POOL_TEXTURE_CACHE);
+ 			texture_cache_pool_usage > quota)
+ 		{
+ 			rsx_log.warning("Texture cache is using %lluM of memory which exceeds the allocation quota of %lluM",
+-				texture_cache_pool_usage, quota);
++				texture_cache_pool_usage / 0x100000, quota / 0x100000);
+ 			return true;
+ 		}
+ 
+diff --git a/rpcs3/Emu/RSX/VK/VKGSRender.h b/rpcs3/Emu/RSX/VK/VKGSRender.h
+--- a/rpcs3/Emu/RSX/VK/VKGSRender.h
++++ b/rpcs3/Emu/RSX/VK/VKGSRender.h
+@@ -313,6 +313,8 @@
+ 	void upload_transform_constants(const rsx::io_buffer& buffer);
+ 
+ 	void reclaim_texture_uploads();
++	u64 m_ios_texture_cache_next_check = 192ull * 0x100000;
++	void reclaim_texture_cache();
+ 	void load_texture_env();
+ 	bool bind_texture_env();
+ 	bool bind_interpreter_texture_env();
+diff --git a/rpcs3/Emu/RSX/VK/VKGSRender.cpp b/rpcs3/Emu/RSX/VK/VKGSRender.cpp
+--- a/rpcs3/Emu/RSX/VK/VKGSRender.cpp
++++ b/rpcs3/Emu/RSX/VK/VKGSRender.cpp
+@@ -915,13 +915,22 @@
+ 	}
+ 
+ 	// Flush DMA queue
++#if defined(__APPLE__) && TARGET_OS_IOS
++	rsx_log.warning("iOS Vulkan teardown BEFORE DMA sync.");
++#endif
+ 	while (!g_fxo->get<rsx::dma_manager>().sync())
+ 	{
+ 		do_local_task(rsx::FIFO::state::lock_wait);
+ 	}
+ 
+ 	//Wait for device to finish up with resources
++#if defined(__APPLE__) && TARGET_OS_IOS
++	rsx_log.warning("iOS Vulkan teardown BEFORE device idle.");
++#endif
+ 	vkDeviceWaitIdle(*m_device);
++#if defined(__APPLE__) && TARGET_OS_IOS
++	rsx_log.warning("iOS Vulkan teardown AFTER device idle.");
++#endif
+ 
+ 	// Frame generation owns fences, a command pool, an allocator and images, all children of this
+ 	// device. Released here, while it is still alive: without this they outlived it, and the next
+@@ -931,6 +940,9 @@
+ 	// Globals. TODO: Refactor lifetime management
+ 	if (auto async_scheduler = g_fxo->try_get<vk::AsyncTaskScheduler>())
+ 	{
++#if defined(__APPLE__) && TARGET_OS_IOS
++		rsx_log.warning("iOS Vulkan teardown BEFORE async scheduler join.");
++#endif
+ 		async_scheduler->destroy();
+ 	}
+ 
+@@ -948,6 +960,9 @@
+ 	m_flush_requests.clear_pending_flag();
+ 
+ 	// Shaders
++#if defined(__APPLE__) && TARGET_OS_IOS
++	rsx_log.warning("iOS Vulkan teardown BEFORE shader compiler join.");
++#endif
+ 	vk::destroy_pipe_compiler();        // Ensure no pending shaders being compiled
+ 	spirv::finalize_compiler_context(); // Shut down the glslang compiler
+ 	m_prog_buffer->clear();             // Delete shader objects
+@@ -1026,6 +1041,9 @@
+ 	// Device handles/contexts
+ 	m_swapchain->destroy();
+ 	m_instance.destroy();
++#if defined(__APPLE__) && TARGET_OS_IOS
++	rsx_log.warning("iOS Vulkan teardown AFTER device/instance destruction.");
++#endif
+ 
+ #if defined(HAVE_X11) && defined(HAVE_VULKAN)
+ 	if (m_display_handle)
+@@ -1765,6 +1783,46 @@
+ #endif
+ }
+ 
++void VKGSRender::reclaim_texture_cache()
++{
++#if defined(__APPLE__) && TARGET_OS_IOS
++	// Budget/reclaim BEFORE sampler/cache locks. Allocation-time recovery cannot
++	// evict clean sections when it re-enters a cache already held by this thread.
++	if (vk::is_uninterruptible() ||
++		(m_queue_status & flush_queue_state::flushing) ||
++		(m_queue_status & flush_queue_state::deadlock))
++	{
++		return;
++	}
++
++	ensure(is_current_thread());
++	constexpr u64 mb = 0x100000;
++	const auto before = vk::vmm_get_application_pool_usage(VMM_ALLOCATION_POOL_TEXTURE_CACHE);
++	if (before < m_ios_texture_cache_next_check) return;
++
++	if (!m_texture_cache.is_overallocated())
++	{
++		m_ios_texture_cache_next_check = before + 16 * mb;
++		return;
++	}
++
++	// Native fatal-pressure reclamation submits/waits all prior work, preserves
++	// textures referenced by current guest registers and purges discarded entries.
++	// Drain again afterward: deletion queued during eviction must actually finish
++	// before the next allocation, even in a long load without a present.
++	const bool relieved = on_vram_exhausted(rsx::problem_severity::fatal);
++	g_fxo->get<vk::driver_manager_thread>().drain();
++	m_samplers_dirty.store(true);
++	const auto after = vk::vmm_get_application_pool_usage(VMM_ALLOCATION_POOL_TEXTURE_CACHE);
++
++	// If the live set cannot shrink, do not hard-sync on every draw. Recheck after
++	// another 16 MiB of growth, or at the normal 192 MiB watermark after a purge.
++	m_ios_texture_cache_next_check = std::max<u64>(192 * mb, after + 16 * mb);
++	rsx_log.warning("iOS: texture-cache budget pass %lluM -> %lluM (released=%d).",
++		before / mb, after / mb, static_cast<int>(relieved));
++#endif
++}
++
+ void VKGSRender::retire_completed_work()
+ {
+ 	// Hard sync: the point is that frames actually RETIRE. check_present_status() inside
+@@ -3003,6 +3061,7 @@
+ 		return false;
+ 
+ 	reclaim_texture_uploads();
++	reclaim_texture_cache();
+ 
+ 	vk::gpu_scope blit_gpu_scope(*m_current_command_buffer, vk::gpu_timer::region::blit);
+ 
+diff --git a/rpcs3/Emu/RSX/VK/VKDraw.cpp b/rpcs3/Emu/RSX/VK/VKDraw.cpp
+--- a/rpcs3/Emu/RSX/VK/VKDraw.cpp
++++ b/rpcs3/Emu/RSX/VK/VKDraw.cpp
+@@ -313,6 +313,7 @@
+ void VKGSRender::load_texture_env()
+ {
+ 	reclaim_texture_uploads();
++	reclaim_texture_cache();
+ 
+ 	// Per-draw texture cache search, surface-cache expiry tests and sampler lookup.
+ 	// texcache_lookup's only other site is on_access_violation, which runs on guest

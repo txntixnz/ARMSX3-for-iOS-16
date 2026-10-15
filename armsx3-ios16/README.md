@@ -1,22 +1,29 @@
-# Current checkpoint — Build132
+# Current checkpoint — Build133
 
-Build131 reaches Midnight Club LA's Press START screen on A15/iOS16. The user
-reports no crash or hang; the log confirms 2151 accepted presents and complete
-GPU/CPU shutdown after Stop game. Upload batches reuse completed ring space.
+Build132 confirms working buttons on the iPhone. The log shows menu presentation
+falling to about 2.4 frames/second, then a 341 KiB texture allocation failing with
+440 MiB in the texture cache. Allocation-time eviction cannot acquire the cache
+lock; the RSX thread ends and final renderer cleanup times out. This is a new
+failure after the successful Build131 Press START/clean Stop test.
 
-Build132 adds an iOS player-one controller, an on-screen START button, D-pad,
-SELECT and four face buttons. A connected iOS extended gamepad also supplies
-sticks, face/shoulder/trigger/stick buttons, Menu/Options -> PS3 START and
-Share/secondary menu -> SELECT. The touch controls remain available. Input and
-native focus clear before stopping, on focus loss, and after session completion.
-Rendering/JIT/memory settings retain the verified Build131 behavior; audio is
-still null. Host tests exercise the native standard cellPad packet path; real
-phone controls and progression beyond Press START await this build's test.
+Build133 checks texture-cache pressure before draw/blit cache locks, uses native
+GPU synchronization and eviction while preserving current textures, and waits
+for deferred deletion before allocating again. The iOS cache quota is capped at
+192 MiB, with growth hysteresis to avoid a hard wait on every draw. Native upload
+ring reuse remains enabled. Additional teardown markers locate any remaining
+cleanup stall.
 
-Install `ARMSX3_iOS16_INSTALL_THIS_IPA`, **Quick start -> Start game**, then tap
-**START** once the game asks. Use arrows and **× / ○** to navigate. Finish with
-**Stop game** and share the result/log. Firmware and the imported disc persist;
-full120 diagnostics are optional. Historical checkpoints follow.
+Rendered sessions disable PPU branch-history recording. Logs still write every
+line immediately; routine core messages share a one-second disk-sync interval,
+while explicit startup/input/result markers sync immediately. These remove
+measurable sources of diagnostic work, but actual FPS gains and memory stability
+remain unverified on the phone. PPU/SPU decoders stay static; audio remains null.
+
+Install `ARMSX3_iOS16_INSTALL_THIS_IPA`, **Quick start -> Start game**, then use
+**START**, arrows and **× / ○**. A connected iOS extended controller also works.
+Finish with **Stop game** and share the result/log, including how far the menu
+progressed and whether responsiveness improved. Firmware, imported disc and game
+cache persist; full120 diagnostics are optional. Historical checkpoints follow.
 
 # ARMSX3 for iOS 16 — P0 port checkpoint
 

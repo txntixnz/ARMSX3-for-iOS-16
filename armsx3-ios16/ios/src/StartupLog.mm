@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 #include "StartupLog.h"
+#include "LogSyncPolicy.h"
 #import <Foundation/Foundation.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -9,6 +10,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cerrno>
+#include <chrono>
 
 void ARMSX3StartupLog(const char* message) {
     const char* home = getenv("HOME");
@@ -36,7 +38,10 @@ void ARMSX3StartupLog(const char* message) {
             if (written <= 0) break;
             offset += static_cast<size_t>(written);
         }
-        fsync(fd);
+        static ARMSX3LogSyncPolicy sync_policy;
+        const auto monotonic_us = std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        if (sync_policy.should_sync(message, static_cast<std::uint64_t>(monotonic_us))) fsync(fd);
     }
     close(fd);
 }

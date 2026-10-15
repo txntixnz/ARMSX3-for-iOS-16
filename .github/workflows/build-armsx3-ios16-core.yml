@@ -5,6 +5,7 @@ on:
     paths:
       - 'armsx3-ios16/core/**'
       - 'armsx3-ios16/ios/src/StartupLog.*'
+      - 'armsx3-ios16/ios/src/LogSyncPolicy.h'
       - 'armsx3-ios16/ios/Entitlements.plist'
       - 'armsx3-ios16/ios/scripts/verify-bundle.py'
       - 'armsx3-ios16/patches/**'
@@ -151,6 +152,7 @@ jobs:
           python3 armsx3-ios16/tests/test_p114_intake.py upstream-armsx3
           python3 armsx3-ios16/tests/test_runtime.py upstream-armsx3
           python3 armsx3-ios16/tests/test_ios_pad_input.py upstream-armsx3
+          python3 armsx3-ios16/tests/test_ios_menu_memory.py upstream-armsx3
           python3 armsx3-ios16/tests/test_native_renderer.py upstream-armsx3
           python3 armsx3-ios16/tests/test_ios_signal_recovery.py upstream-armsx3
           python3 armsx3-ios16/tests/test_ios_zcull_reports.py upstream-armsx3

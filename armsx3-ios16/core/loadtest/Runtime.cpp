@@ -136,7 +136,9 @@ int check(std::string& detail, bool game = false, bool execute = false, bool ren
     configuration.core.llvm_precompilation.set(false);
     if (execute)
     {
-        configuration.core.ppu_call_history.set(true);
+        // Continuous play does not need a branch-by-branch debug history.
+        // Native HLE totals and one last-call entry remain available on Stop.
+        configuration.core.ppu_call_history.set(!render);
         // Keep warnings/errors and explicit startup markers without tracing
         // every guest call through the synchronous diagnostic log writer.
         configuration.log.set_map({{".*", logs::level::warning}});
@@ -286,7 +288,7 @@ int check(std::string& detail, bool game = false, bool execute = false, bool ren
             detail = "Guest run completed: " + disc.title + " [" + disc.id + "]. Native PPU instruction estimate=" +
                 std::to_string(progress.instructions) + ", completed HLE/LV2 calls=" + std::to_string(progress.calls) +
                 ", SPU blocks=" + std::to_string(progress.spu_blocks) + (render ? ". Native Vulkan accepted presents=" + std::to_string(presentation_progress().accepted) +
-                    ". Clean GPU/CPU stop completed. Check the screen for game content; audio and controls are pending." :
+                    ". Clean GPU/CPU stop completed. Check the screen for game content; audio is pending." :
                     ". Clean stop completed. Display and audio are pending.");
             log((render ? "RENDER PASS: " : "EXECUTION PASS: ") + detail);
             return 0;
