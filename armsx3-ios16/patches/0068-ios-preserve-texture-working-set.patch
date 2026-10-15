@@ -1,0 +1,120 @@
+diff --git a/rpcs3/Emu/RSX/VK/VKGSRender.h b/rpcs3/Emu/RSX/VK/VKGSRender.h
+--- a/rpcs3/Emu/RSX/VK/VKGSRender.h
++++ b/rpcs3/Emu/RSX/VK/VKGSRender.h
+@@ -313,7 +313,7 @@
+ 	void upload_transform_constants(const rsx::io_buffer& buffer);
+ 
+ 	void reclaim_texture_uploads();
+-	u64 m_ios_texture_cache_next_check = 192ull * 0x100000;
++	u64 m_ios_texture_cache_next_check = 288ull * 0x100000;
+ 	void reclaim_texture_cache();
+ 	void load_texture_env();
+ 	bool bind_texture_env();
+diff --git a/rpcs3/Emu/RSX/VK/VKTextureCache.h b/rpcs3/Emu/RSX/VK/VKTextureCache.h
+--- a/rpcs3/Emu/RSX/VK/VKTextureCache.h
++++ b/rpcs3/Emu/RSX/VK/VKTextureCache.h
+@@ -666,5 +666,6 @@
+ 		u64 get_temporary_memory_in_use() const;
+ 
+ 		bool is_overallocated() const;
++		u64 trim_reusable_images(u64 keep_bytes);
+ 	};
+ }
+diff --git a/rpcs3/Emu/RSX/VK/VKTextureCache.cpp b/rpcs3/Emu/RSX/VK/VKTextureCache.cpp
+--- a/rpcs3/Emu/RSX/VK/VKTextureCache.cpp
++++ b/rpcs3/Emu/RSX/VK/VKTextureCache.cpp
+@@ -1862,6 +1862,23 @@
+ 		return m_cached_memory_size;
+ 	}
+ 
++	u64 texture_cache::trim_reusable_images(u64 keep_bytes)
++	{
++		// Only GPU-completed, content-free images enter this pool via
++		// cached_image_reference_t destruction. Retain the newest small reuse
++		// reserve and delete old idle allocations, as on_frame_end already does.
++		std::lock_guard lock(m_cached_pool_lock);
++		u64 released = 0;
++		while (!m_cached_images.empty() && m_cached_memory_size > keep_bytes)
++		{
++			const auto bytes = m_cached_images.back().data->memory->size();
++			m_cached_memory_size -= bytes;
++			released += bytes;
++			m_cached_images.pop_back();
++		}
++		return released;
++	}
++
+ 	bool texture_cache::is_overallocated() const
+ 	{
+ 		const auto total_device_memory = vk::get_budgetable_device_memory(m_device->get_memory_mapping().device_local_total_bytes) / 0x100000;
+@@ -1885,9 +1902,9 @@
+ 		}
+ 
+ #if defined(__APPLE__) && TARGET_OS_IOS
+-		// A15 shares graphics memory with guest RAM, rings and the driver. Keep
+-		// cached textures below the late 440 MiB refusal observed on the phone.
+-		quota = std::min<u64>(quota, 192);
++		// Leave room below the observed 440 MiB refusal while retaining the
++		// scene's working set. Reclaim completed idle images before live content.
++		quota = std::min<u64>(quota, 288);
+ #endif
+ 		quota *= 0x100000;
+ 
+diff --git a/rpcs3/Emu/RSX/VK/VKGSRender.cpp b/rpcs3/Emu/RSX/VK/VKGSRender.cpp
+--- a/rpcs3/Emu/RSX/VK/VKGSRender.cpp
++++ b/rpcs3/Emu/RSX/VK/VKGSRender.cpp
+@@ -1786,8 +1786,6 @@
+ void VKGSRender::reclaim_texture_cache()
+ {
+ #if defined(__APPLE__) && TARGET_OS_IOS
+-	// Budget/reclaim BEFORE sampler/cache locks. Allocation-time recovery cannot
+-	// evict clean sections when it re-enters a cache already held by this thread.
+ 	if (vk::is_uninterruptible() ||
+ 		(m_queue_status & flush_queue_state::flushing) ||
+ 		(m_queue_status & flush_queue_state::deadlock))
+@@ -1797,27 +1795,36 @@
+ 
+ 	ensure(is_current_thread());
+ 	constexpr u64 mb = 0x100000;
++	constexpr u64 watermark = 288 * mb;
++	constexpr u64 idle_reserve = 32 * mb;
+ 	const auto before = vk::vmm_get_application_pool_usage(VMM_ALLOCATION_POOL_TEXTURE_CACHE);
+ 	if (before < m_ios_texture_cache_next_check) return;
+ 
++	// Pool usage includes completed images awaiting reuse, not just cached
++	// content. Free those first: evicting clean textures to recover idle memory
++	// discards useful pixels and made the phone reupload ~60 GiB in six minutes.
++	const auto idle_freed = m_texture_cache.trim_reusable_images(idle_reserve);
++	const auto trimmed = vk::vmm_get_application_pool_usage(VMM_ALLOCATION_POOL_TEXTURE_CACHE);
+ 	if (!m_texture_cache.is_overallocated())
+ 	{
+-		m_ios_texture_cache_next_check = before + 16 * mb;
++		m_ios_texture_cache_next_check = std::max<u64>(watermark, trimmed + 16 * mb);
++		if (idle_freed)
++		{
++			rsx_log.warning("iOS: trimmed idle texture images %lluM -> %lluM; cached content preserved.",
++				before / mb, trimmed / mb);
++		}
+ 		return;
+ 	}
+ 
+-	// Native fatal-pressure reclamation submits/waits all prior work, preserves
+-	// textures referenced by current guest registers and purges discarded entries.
+-	// Drain again afterward: deletion queued during eviction must actually finish
+-	// before the next allocation, even in a long load without a present.
++	// Native hard-sync eviction remains the fallback for real content pressure.
+ 	const bool relieved = on_vram_exhausted(rsx::problem_severity::fatal);
+ 	g_fxo->get<vk::driver_manager_thread>().drain();
++	// Evicted sections return their images to the idle pool only after GC.
++	// Release the excess now so those allocations do not cause another eviction.
++	m_texture_cache.trim_reusable_images(idle_reserve);
+ 	m_samplers_dirty.store(true);
+ 	const auto after = vk::vmm_get_application_pool_usage(VMM_ALLOCATION_POOL_TEXTURE_CACHE);
+-
+-	// If the live set cannot shrink, do not hard-sync on every draw. Recheck after
+-	// another 16 MiB of growth, or at the normal 192 MiB watermark after a purge.
+-	m_ios_texture_cache_next_check = std::max<u64>(192 * mb, after + 16 * mb);
++	m_ios_texture_cache_next_check = std::max<u64>(watermark, after + 16 * mb);
+ 	rsx_log.warning("iOS: texture-cache budget pass %lluM -> %lluM (released=%d).",
+ 		before / mb, after / mb, static_cast<int>(relieved));
+ #endif

@@ -4604,3 +4604,89 @@ ARMSX3_iOS16_INSTALL_THIS_IPA, Quick start -> Start game, START, navigate the sa
 menus, Stop game, send log/result/responsiveness. No reimport/full diagnostic run.
 Latest working tree native133-validation has all67; native132-validation also67
 now despite its historical name. Concise English, no generated images/agents.
+
+
+## Build134 — preserve cached pixels; trim completed idle images first (2026-10-15)
+
+User supplies ARMSX3-startup-20261015-212729-223-36239.txt and says:
+“Graphic looks fantastic no glitches. It’s just very laggy fps wise. I bought the
+starter car and accidentally closed my phone and the game closed.”
+Read local copy directly, no Library attachment lookup:
+/workspace/scratch/8dcd4680dd95/upload/ARMSX3-startup-20261015-212729-223-36239.txt
+Library ID libfile_7b2b23d3a798819194e97ee90fba2a27. Build133/PID36239.
+
+Phone evidence: glitch-free visuals, input and car purchase confirmed by user;
+driving is NOT confirmed. Render runs~362s with2474 accepted presents. Initial
+startup~29fps; menu/car activity mostly1.4-3.9fps.1903 completed upload batches
+sum60.46GiB,481 texture-cache pressure passes; median drop22MiB, before-pass peak
+226MiB, after-pass max206MiB. Some30s windows upload~9GiB for only~45 presents.
+This is severe cache churn, not evidence that an interpreter switch is required.
+No OOM/fatal. At9626.408162 input disables;9626.411175 Stop begins after screen
+lock via sessionWillResignActive. CPU joins finish9633.74236:28PPU+6SPU,
+32,157,589,740 estimated instructions and4,729,405 completed HLE/LV2 calls.
+All Vulkan/FXO/VM teardown markers complete, device/instance destruction9636.96536,
+fully stopped9637.130547, RENDER/UI PASS9637.137635. Phone lock intentionally stops
+the current session; this was NOT a crash. Do not change lifecycle/background GPU
+behavior while optimizing texture reuse. App now logs the inactive-trigger cause.
+
+Identified two interacting allocation classes in Vulkan texture pool:
+- Content-backed cached sections retain useful guest pixels.
+- m_cached_images contains GPU-completed images whose content association has
+  been discarded. cached_image_reference_t moves them into the reuse pool only
+  when its native deferred GC callback runs after GPU completion.
+Build133 checked total pool usage and called native fatal eviction first. That
+invalidated clean sections unnecessarily. During eviction, section images were
+queued to GC, then returned to m_cached_images AFTER handle_memory_pressure had
+already cleared that pool. The helper drained GC but did not trim the newly
+returned images, so repeated passes could keep~185MiB allocated and throw away
+useful pixels again after only16MiB growth. Raising a quota alone is insufficient.
+
+Patch0068-ios-preserve-texture-working-set.patch:
+- Public vk::texture_cache::trim_reusable_images(keep_bytes) holds the existing
+  m_cached_pool_lock and pop_back()s oldest completed idle images until the pool
+  is within keep_bytes. Subtract actual image memory size from cached counter;
+  return freed bytes. Direct destruction matches existing on_frame_end resize
+  semantics. Never scan/invalidate content sections or touch in-flight objects.
+- iOS cache quota and renderer initial check watermark192->288MiB, still below
+  the observed440MiB refusal and native307MiB quota on this1024MiB config.
+- At safe draw/blit boundaries, trim idle pool to32MiB FIRST. If pool usage now
+  fits quota, keep useful cached content and sampler descriptors, avoid native
+  eviction/GPU hard waits. Log “trimmed idle texture images ... cached content
+  preserved”. Compute nextcheck=max(288MiB,remaining+16MiB).
+- If content pressure remains, retain the verified native synchronized fatal
+  eviction fallback. Drain GC, THEN trim newly returned idle images to32MiB,
+  mark samplers dirty and compute nextcheck as above. No texture quality,
+  resolution, shader, JIT/decoder, input, upload-ring, audio or lifecycle changes.
+- App resign-active path adds an explicit “app inactive (lock/app switch)” marker
+  before the existing clean Stop. Does not add background execution or resume.
+
+Validation:
+- All68 patches apply to exact92b931b9fb5eef7f1317cb482917dfc19aceebd9.
+- New test_ios_texture_reuse.py compiles exact native cached-image retirement
+  ctor/dtor/record definitions, trim method, quota and new renderer preflight
+  under ASAN+UBSAN and warnings-as-errors. GPU/content lookup/fatal eviction/FXO
+  remain host interfaces; the historical133 test separately compiles native
+  common eviction and pressure paths.
+- Deferred images stay outside reusable pool until modeled completion+GC; trim
+  cannot touch them. Newest reserve preserved; counters/actual allocation bytes
+  agree; current native retirement resets image layout/queue family. Real content
+  pressure keeps active textures/framebuffer storage, fallback drains before
+  post-GC trim, repeated checks do not thrash, skip gates and failed GPU wait
+  preserve live ownership.4096 concurrent completed-image callbacks race pool
+  trimming safely under the native pool lock.
+-120-frame200MiB modeled scene uploads200MiB once, zero content evictions/hard
+  syncs; historical133 path produces23960MiB uploads and234 evictions. These are
+  model results, not actual FPS or proof of all real scenes fitting288MiB.
+- test_ios_menu_memory.py now explicitly reconstructs first67 patches as the
+  historical133 regression, matching previous historical tests' bounded scope.
+  It still passes. Input and frozen bridge/120-stage/four-foundation/Build134
+  fixtures pass; modified scripts parse. Prior runtime behavior unchanged.
+- Workflow adds new reuse test, keeps34+2 prerequisites. Full iOS compilation and
+  phone performance/memory stability remain pending. No generated images/agents.
+
+Parent main0265cdb0b735cb2067a5e362889cc2699a830c0a. User already authorizes main
+publication and builds; publish expected-parent lease. Check one queued build,
+do NOT monitor. Next install ARMSX3_iOS16_INSTALL_THIS_IPA, Quick start -> Start
+game, same menu/car sequence, keep foreground, Stop game, share log/result/FPS
+impression. Firmware/disc/cache persist, no reimport/full diagnostics required.
+native134-validation has all68; native133-validation also68 despite directory name.

@@ -396,6 +396,8 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
 }
 - (void)sessionWillResignActive:(NSNotification*)notification {
     (void)notification;
+    if (self.renderController && self.intakeBusy)
+        ARMSX3StartupLog("SESSION UI: app inactive (lock/app switch); requesting clean Stop");
     if (self.renderController && self.intakeBusy) [self.renderController requestGameStop];
 }
 - (void)enteredBackground:(NSNotification*)notification {

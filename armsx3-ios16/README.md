@@ -1,29 +1,29 @@
-# Current checkpoint — Build133
+# Current checkpoint — Build134
 
-Build132 confirms working buttons on the iPhone. The log shows menu presentation
-falling to about 2.4 frames/second, then a 341 KiB texture allocation failing with
-440 MiB in the texture cache. Allocation-time eviction cannot acquire the cache
-lock; the RSX thread ends and final renderer cleanup times out. This is a new
-failure after the successful Build131 Press START/clean Stop test.
+Build133 is phone-verified with glitch-free graphics, working input and progress
+through the starter-car purchase. Locking the phone triggers the current clean
+stop-on-background path; the log confirms complete GPU/CPU cleanup, not a crash.
+Driving is not yet confirmed. The remaining issue is very low frame rate.
 
-Build133 checks texture-cache pressure before draw/blit cache locks, uses native
-GPU synchronization and eviction while preserving current textures, and waits
-for deferred deletion before allocating again. The iOS cache quota is capped at
-192 MiB, with growth hysteresis to avoid a hard wait on every draw. Native upload
-ring reuse remains enabled. Additional teardown markers locate any remaining
-cleanup stall.
+The six-minute run recycled about60.46GiB of texture uploads across1903 batches
+and481 cache-eviction passes. The192MiB quota freed useful content even when
+completed idle images were consuming the allocation budget. Build134 trims those
+idle allocations first, keeps the newest32MiB reuse reserve, and permits288MiB of
+texture-cache allocations before native synchronized eviction. It trims again
+after deferred deletion returns evicted images to the idle pool. Active cached
+pixels stay intact when trimming idle allocations is sufficient.
 
-Rendered sessions disable PPU branch-history recording. Logs still write every
-line immediately; routine core messages share a one-second disk-sync interval,
-while explicit startup/input/result markers sync immediately. These remove
-measurable sources of diagnostic work, but actual FPS gains and memory stability
-remain unverified on the phone. PPU/SPU decoders stay static; audio remains null.
+Host regressions preserve a200MiB warm scene across120 frames without repeated
+uploads, versus23960MiB of modeled uploads with the historical192MiB policy.
+These are regression-model results, not phone FPS measurements. Real memory
+stability and speed gains await the next test. Graphics/resolution/decoders and
+working input remain unchanged; audio remains null.
 
-Install `ARMSX3_iOS16_INSTALL_THIS_IPA`, **Quick start -> Start game**, then use
-**START**, arrows and **× / ○**. A connected iOS extended controller also works.
-Finish with **Stop game** and share the result/log, including how far the menu
-progressed and whether responsiveness improved. Firmware, imported disc and game
-cache persist; full120 diagnostics are optional. Historical checkpoints follow.
+Install `ARMSX3_iOS16_INSTALL_THIS_IPA`, **Quick start -> Start game**, use
+**START**, and try the same car/menu sequence. Keep the app foreground while
+testing. Finish with **Stop game** and share the log/result and responsiveness.
+Firmware, imported disc and game cache persist; full120 diagnostics are optional.
+Historical checkpoints follow.
 
 # ARMSX3 for iOS 16 — P0 port checkpoint
 

@@ -1,4 +1,4 @@
-"""Build133 pre-allocation cache reclamation and diagnostic overhead contracts.
+"""Historical Build133 pre-allocation cache reclamation and diagnostic overhead contracts.
 
 Compile exact new renderer method, native cache quota/eviction/pressure methods,
 and production log-sync policy. GPU submission/completion, image storage, FXO and
@@ -194,7 +194,7 @@ with tempfile.TemporaryDirectory(prefix='armsx3-menu133-') as directory:
  directory=Path(directory)
  for path in paths:
   target=directory/path;target.parent.mkdir(parents=True,exist_ok=True);target.write_text(original(path))
- for patch in sorted((root/'patches').glob('*.patch')):
+ for patch in sorted(p for p in (root/'patches').glob('*.patch') if int(p.name[:4]) <= 67):
   subprocess.run(['git','apply',*[f'--include={p}' for p in paths],str(patch)],cwd=directory,check=True,capture_output=True)
  cpp=(directory/paths[0]).read_text();header=(directory/paths[1]).read_text();draw=(directory/paths[2]).read_text();texture=(directory/paths[3]).read_text()
  method=cpp[cpp.index('void VKGSRender::reclaim_texture_cache()'):cpp.index('void VKGSRender::retire_completed_work()')]
