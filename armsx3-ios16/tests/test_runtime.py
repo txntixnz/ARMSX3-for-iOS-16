@@ -1,10 +1,11 @@
-"""Compile production runtime/frontend with the native callback ABI and BootGame.
+"""Compile production runtime/frontend, native JIT finalizer, callback ABI and BootGame.
 Load/VM/FXO/device/config backends are host interfaces, not a native game boot.
 The host exercises success, partial loading, failed firmware, callback errors,
-delayed teardown and timeout. UIKit dispatch is checked separately in source.
+native finalization, delayed teardown and timeout. UIKit dispatch is checked in source.
 """
 from pathlib import Path
 import re,subprocess,sys,tempfile
+from test_jit_lifecycle import patched_bodies,arena_cpp,target_header
 root=Path(__file__).resolve().parent.parent
 native=Path(sys.argv[1]).resolve()
 read=lambda p:(native/p).read_text()
@@ -24,10 +25,12 @@ assert 'dispatch_sync(dispatch_get_main_queue(), ^{})' in dispatch
 assert '*wake_up = 1; wake_up->notify_one()' in dispatch
 prelude=r'''
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cassert>
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -168,7 +171,7 @@ game_boot_result Emulator::Load(const std::string&){
 void Emulator::Kill(bool allow_autoexit){assert(!allow_autoexit);++kills;ticks=0;
  if(m_state!=system_state::stopped)m_state=system_state::stopping;
  main_queue.push_back([this]{assert(on_main);assert(m_state==system_state::stopped);workers=0;modules.clear();g_fxo->objects.clear();
-  g_emu_callbacks.on_stop();g_emu_callbacks.enable_display_sleep(true);if(after_kill_callback)std::exchange(after_kill_callback,nullptr)();});
+  jit_runtime::finalize();g_emu_callbacks.on_stop();g_emu_callbacks.enable_display_sleep(true);if(after_kill_callback)std::exchange(after_kill_callback,nullptr)();});
 }
 '''
 tests=r'''
@@ -198,16 +201,17 @@ int main(int argc,char**argv){
  assert(!dispatched&&!wake);ios_runtime::drain_main_queue();assert(dispatched&&wake);
  std::ofstream(host_root+"/cache/ARMSX3-prepared-executable.elf",std::ios::trunc)<<"BAD";
  const auto count=loads;assert(armsx3_core_check_runtime(detail,sizeof(detail))==-1);assert(loads==count);
- std::puts("PASS: production runtime/frontend compiled against49 native callback signatures and native BootGame; load-only override, mapped segments/firmware identity, missing inputs/idle/main-thread/C ABI guards, partial failures, delayed cleanup, timeout, queue/wake protocol and config restoration. Native Load/VM/FXO/devices/config and UIKit are host models/source contracts; actual iOS runtime loading pending.");
+ assert(jit_metrics.reserves==0&&jit_metrics.allocations==0&&jit_metrics.decommits==0&&jit_metrics.resets==0&&jit_metrics.write_protection.empty());
+ std::puts("PASS: production runtime/frontend plus native JIT finalizer,49 callback signatures and native BootGame; load-only override, mapped segments/firmware identity, missing inputs/idle/main-thread/C ABI guards, partial failures, delayed cleanup, timeout, queue/wake protocol and config restoration. Native Load/VM/FXO/devices/config and UIKit are host models/source contracts; actual iOS cleanup pending.");
 }
 '''
 # Accelerate the timeout scenario only. The native app retains its 30-second
 # budget; all other production logic and the native BootGame body are unchanged.
 runtime=runtime.replace('std::chrono::seconds(30)','std::chrono::milliseconds(30)')
 prelude=prelude.replace('enum class cfg_mode{custom,config_override};',strip(read('rpcs3/Emu/config_mode.h')))
-source=prelude+'\n'+strip(callbacks)+'\n'+backend+'\n'+boot+'\n'+strip(frontend)+'\n'+strip(runtime)+'\n'+tests
+source=prelude+'\n#define __APPLE__ 1\n'+arena_cpp+'\n'+patched_bodies(native)+'\n'+strip(callbacks)+'\n'+backend+'\n'+boot+'\n'+strip(frontend)+'\n'+strip(runtime)+'\n'+tests
 source=source.replace('std::string&=""','std::string& = ""').replace('std::string>&=std::nullopt','std::string>& = std::nullopt')
 with tempfile.TemporaryDirectory(prefix='armsx3-runtime-') as temp:
- temp=Path(temp);(temp/'host.cpp').write_text(source)
- subprocess.run(['g++','-std=c++23','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-omit-frame-pointer','-I',str(root/'core/loadtest'),'-include',str(root/'core/loadtest/Runtime.h'),str(temp/'host.cpp'),'-o',str(temp/'host')],check=True,timeout=180)
+ temp=Path(temp);(temp/'host.cpp').write_text(source);(temp/'TargetConditionals.h').write_text(target_header(True))
+ subprocess.run(['g++','-std=c++23','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-omit-frame-pointer','-I',str(temp),'-I',str(root/'core'),'-I',str(root/'core/loadtest'),'-include',str(root/'core/loadtest/Runtime.h'),str(temp/'host.cpp'),'-o',str(temp/'host')],check=True,timeout=180)
  subprocess.run([str(temp/'host'),str(temp/'data')],check=True,timeout=60)

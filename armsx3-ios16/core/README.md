@@ -1,10 +1,13 @@
-# ARMSX3 iOS 16 core — Build 111
+# ARMSX3 iOS 16 core — Build 112
 
 Target: iPhone 13 Pro Max/A15, iOS 16.0, Dopamine and TrollStore.
 The installable app links the actual pinned rpcs3_emu core. Build 110 passed
 all 120 device diagnostics, installed the user's firmware 4.93 (23 packages),
 and decrypted/parsed their EBOOT.BIN with five loadable segments. Build 111
-adds **Check runtime load** while keeping the same 120 readiness checks.
+reached native runtime ready state with two nonempty mapped segments, loaded
+liblv2.sprx (two segments, 3635 functions), and one stopped PPU context, then
+aborted during JIT cleanup. Build 112 repairs that unused-arena finalization
+and keeps **Check runtime load** plus the same 120 readiness checks.
 
 After the workflow succeeds, download **ARMSX3_iOS16_INSTALL_THIS_IPA** and
 install its IPA through TrollStore. Reopen the app and tap **Run all tests**.
@@ -49,7 +52,8 @@ LLVM and Vulkan/MoltenVK are disabled. Real game execution, renderer presentatio
 device audio and controller input remain future integration work. Successful
 readiness checks and executable inspection are not a playable-game result.
 
-The workflow keeps pinned dependencies and all 49 existing production patches.
+The workflow keeps pinned dependencies and the original 49 production patches,
+plus patch 0050 for unused JIT-arena finalization.
 34 synchronization host profiles plus the new intake host check gate the iOS
 compile, full link, signed bundle validation and one installable IPA. Matching
 core symbols and build logs remain available as separate artifacts.
@@ -65,5 +69,10 @@ The runtime host check compiles production runtime/frontend code against all 49
 native callback signatures and the actual BootGame wrapper. It tests temporary
 configuration, prerequisites, mapped-segment/firmware/context checks, partial
 failure, delayed cleanup, timeout, queue/wake behavior and restoration. Native
-Load/VM/FXO/device/config backends are modeled there; the new iOS runtime load
-must still be verified on the phone. Apple compilation is performed by Actions.
+Load/VM/FXO/device/config backends are modeled there. The host cleanup now also
+executes the native JIT finalizer and actual Apple portability boundary. A
+separate regression reproduces Build 111's abort, checks 64 empty-arena lifecycle
+cycles with a real immutable executable page, retains rejection of six nonempty
+counter/snapshot cases, and preserves macOS/Linux reset/restore branches with
+modeled arena operations. Runtime loading reached ready state on the phone;
+complete cleanup must still be verified in Build 112. Actions compiles for iOS.

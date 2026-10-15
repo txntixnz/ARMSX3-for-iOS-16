@@ -1,0 +1,18 @@
+--- a/Utilities/JITASM.cpp
++++ b/Utilities/JITASM.cpp
+@@ -325,6 +325,15 @@
+ 
+ void jit_runtime::finalize() noexcept
+ {
++#if defined(__APPLE__) && TARGET_OS_IOS
++	// Immutable iOS functions do not use this mutable arena. Finalizing an
++	// unused arena must neither create it nor request macOS write protection.
++	if (!s_code_pos.load() && !s_data_pos.load() && s_code_init.empty() && s_data_init.empty())
++	{
++		jit_log.notice("iOS JIT finalize: unused mutable arena; immutable functions retained");
++		return;
++	}
++#endif
+ #ifdef __APPLE__
+ 	utils::apple_jit_write_protect(false);
+ #endif

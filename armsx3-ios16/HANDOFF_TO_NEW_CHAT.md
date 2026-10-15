@@ -3049,3 +3049,91 @@ log after completion or failure. Installed firmware/prepared ELF may be reused.
 If prepared file was evicted, Inspect EBOOT/ELF again; reinstall firmware only
 if the app says it is missing. No Actions monitoring; user reports workflow.
 Keep replies concise. Both handoffs and current core README updated.
+
+
+## Build112 — fix native JIT finalization after successful runtime loading
+
+User reports 'Crashed at runtime load' with:
+- ARMSX3-startup-20261014-234707-324-28366.txt. Exported previous unfinished
+  Build111 session PID28347, all120 unique stages P2-P121 PASS. Firmware4.93
+  reinstalled successfully, EBOOT.BIN decrypted/parsed with5 LOAD headers and
+  entry11963416. Actual native BootGame returned result0/state6 (ready). The
+  check verified2 nonempty mapped LOAD segments, real liblv2.sprx PRX id587203072
+  with2segments/3635functions, one PPU context with STOP flag. Guest not started.
+  Native Kill then stopped all threads, unmounted VFS, cleared FXO objects.
+  Before stopped-state completion it hit the Apple JIT portability boundary.
+- ARMSX3CoreLoadTest-2026-10-15-014641.ips: Build111, EXC_CRASH/SIGABRT,
+  abort() on main thread. Full stack jit_runtime::finalize -> Emulator::Kill's
+  final main-queue callback -> ios_runtime::dispatch_main. Core UUID
+  55a20afd-8350-38c4-9cac-1c5fadda1e38. The startup log records the exact missing
+  pthread_jit_write_protect_np boundary and matching frames. Cause is confirmed
+  finalization, not failure to decrypt/map/load firmware, device memory pressure,
+  guest execution or a bad Files selection. No full runtime-cleanup PASS yet.
+- ARMSX3CoreLoadTest.diskwrites_resource-2026-10-14-103252.ips is older Build105,
+  PID23310, disk-write resource report, action taken none. It is not the latest
+  Build111 abort and should not be conflated with the cleanup failure.
+
+Patch0050-ios-empty-jit-finalize.patch adds an iOS-only early return in native
+Utilities/JITASM.cpp::jit_runtime::finalize. If BOTH full allocation counters
+are zero AND BOTH startup snapshots are empty, the mutable2GiB arena is unused.
+Immutable iOS functions/SPU heap bootstrap do not use that arena (existing
+patches0009/0010 strategy). Native finalization must not reserve/decommit/reset
+it, ask for macOS write protection or restore a zero-byte snapshot. Log that
+immutable functions remain published, then return. Existing initialize already
+has the empty-counter guard from0010; this closes its missing finalize half.
+
+Do not replace/disable the general apple_jit_write_protect failure boundary.
+The actual helper/header is unchanged; any nonempty code/data counter, including
+high-water-only state, or nonempty snapshot still follows the original mutable
+path and fails closed if that API is absent. The original macOS/Linux reset,
+restore, protection and cache maintenance behavior is unchanged. Real immutable
+RX mappings remain intact for process lifetime, as required by their allocator.
+Do not implement a generic no-op JIT protection fix or rewrite live RX pages.
+This does not enable mutable JIT/LLVM/Vulkan/game execution.
+
+Build112 changes only patch0050, bundle version112, focused host lifecycle tests,
+workflow intake-host command/common metadata fixture, and README/handoffs. All
+120 diagnostics, CoreBridge.cpp, Runtime.cpp/Frontend/Dispatch, Intake and the
+original49 production patches are unchanged. There are now50 production patches.
+
+New test_jit_lifecycle.py extracts actual pinned initialize/finalize bodies,
+materializing exact0010/0050 patch hunks and the two existing0003 API replacements
+in an isolated source copy when CI's checkout is pristine. It uses the actual
+apple_jit.hpp missing-symbol boundary and actual immutable_jit.hpp publisher.
+With the pre-fix finalizer, zero-state cleanup abort is reproduced. Fixed iOS
+initialize/finalize run64cycles and a real RW->RX x86-host return42 function
+continues to execute with unchanged bytes, with zero mutable arena reservation/
+allocation/reset/decommit/write-protection. Six separate nonempty code/data/
+snapshot/high-water cases still abort at the missing symbol. macOS/Linux macro
+variants retain snapshots, discard post-start data, perform reset/protection,
+restore startup counters/bytes and execute instruction-cache maintenance.
+The mutable arena operations are bounded host models; not real macOS/iOS memory
+backends. Intentional abort cases run as subprocesses with core dumps disabled.
+Do not misstate x86 host code as device ARM execution.
+
+The existing runtime host check now invokes the actual native JIT finalizer in
+its final main-queue teardown operation. Thus its load, partial-failure, context,
+timeout, wake acknowledgement and config-restoration scenarios cover this native
+cleanup boundary instead of bypassing it with an empty Kill model. Other native
+Load/FXO/VM/device/config backends remain host interfaces, clearly documented.
+Native loader/PRX/mappings/STOP context were verified by the phone; patched cleanup
+is still pending the next device run. No Actions monitoring after publication.
+
+Local validation: g++ C++23 Wall/Wextra/Werror ASAN+UBSAN with detect_leaks=0:
+native JIT lifecycle/regression/negative/non-iOS branches PASS; integrated runtime
+suite PASS. Clean pinned JIT source materialization matches intake-host's raw
+checkout path and passes. New patch applies cleanly after all49 existing patches.
+Common fixture/Python/YAML/plist/shell/unchanged bridge/whitespace checks recorded
+before publication. iOS compilation and complete device teardown await user.
+
+Next: install Build112 ARMSX3_iOS16_INSTALL_THIS_IPA through TrollStore, reopen,
+Run all120 tests, tap Check runtime load, keep app open and share startup log.
+Reuse installed firmware and prepared EBOOT if present; repeat their import only
+if the app says one is missing. Expected new boundary: 'iOS JIT finalize: unused
+mutable arena; immutable functions retained', then callback stop completed,
+fully-stopped/zero CPU context cleanup, RUNTIME UI PASS. If any mutable arena
+state is actually present on device, retain the fail-closed evidence and inspect
+its allocator source rather than bypassing protection.
+Then advance complete game-folder/PARAM.SFO/disc assets and guest execution/
+render integration. Current cache-only load cannot establish actual title identity
+or playable Midnight Club LA. Keep replies short; user reports Actions result.
