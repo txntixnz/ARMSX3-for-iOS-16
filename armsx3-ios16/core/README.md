@@ -1,4 +1,4 @@
-# ARMSX3 iOS 16 core — Build 115
+# ARMSX3 iOS 16 core — Build 116
 
 Target: iPhone 13 Pro Max/A15, iOS 16.0, Dopamine and TrollStore.
 The installable app links the actual pinned rpcs3_emu core. Build114 passed all
@@ -9,6 +9,12 @@ loading mapped two nonempty executable segments, loaded liblv2 firmware and
 completed thread/VM/JIT cleanup. The guest entry remained stopped.
 Build115 adds **Run game (3 seconds)** with an explicit native guest start,
 automatic stop and execution evidence captured from joined CPU contexts.
+The Build115 device run aborted in native SPU-cache initialization before reaching
+running state: the static interpreter entered an unavailable Apple mutable-code
+write-protection API. Build116 skips that guard only for static SPU initialization,
+which sets ordinary heap dispatcher/interpreter data. Other decoder paths keep
+the guard; macOS/Linux behavior and the cache continuation remain unchanged.
+The fix still needs a device run.
 
 After the workflow succeeds, download **ARMSX3_iOS16_INSTALL_THIS_IPA** and
 install its IPA through TrollStore. Reopen and tap **Run all tests**. Once all
@@ -96,20 +102,21 @@ game check adds those paths and validates native title/disc loading. Neither
 check starts the guest entry or produces picture/audio.
 
 The production core still uses the validated interpreter/immutable JIT path.
-LLVM and Vulkan/MoltenVK are disabled. The short interpreter run begins real
+LLVM and Vulkan/MoltenVK are disabled. The Run game action requests native
 guest execution; renderer presentation, device audio and controller input remain
 future integration work. Successful
 readiness checks and executable inspection are not a playable-game result.
 
 The workflow keeps pinned dependencies and the original 49 production patches,
 plus patch0050 for unused JIT-arena finalization and patch0051 for joined-context
-observation and the iOS RSX startup/stop guard (51 patches total).
+observation and the iOS RSX startup/stop guard, plus patch0052 for static SPU
+startup (52 patches total).
 34 synchronization host profiles plus the new intake host check gate the iOS
 compile, full link, signed bundle validation and one installable IPA. Matching
 core symbols and build logs remain available as separate artifacts.
 Build113's workflow produced the tested installable IPA. The historical patch
 validator remains scoped to its exact first 49 patches while preparation applies
-all 51. The host job also checks native PSF parsing and complete game
+all 52. The host job also checks native PSF parsing and complete game
 import. Local sanitizer
 checks use `ASAN_OPTIONS=detect_leaks=0` because LeakSanitizer cannot inspect
 processes in this environment.
@@ -134,8 +141,9 @@ modeled arena operations. Cached-executable loading and complete cleanup passed
 on the Build113 phone.
 Host game scenarios additionally reject wrong title/category/executable/disc
 mounts and missing asset mappings. Native game-folder loading, coordinated import and original SELF loading passed
-on the Build114 phone. Device guest execution awaits Build115. Actions
-compiles for iOS.
+on the Build114 phone. Build115 reached native PPU initialization but aborted
+before running state or joined execution evidence. Device guest execution awaits
+the Build116 retry. Actions compiles for iOS.
 
 The game import host check compiles production GameImport.cpp with the pinned
 native PSF reader, entry types and SFB validation. An independently encoded SFO
@@ -155,3 +163,15 @@ reconstructs pinned source plus the exact first50 patches, applies0051, verifies
 the capture follows native thread joins/precedes context destruction and checks
 that the remaining native source is unchanged. These host results do not replace
 the device guest-run test.
+
+The SPU startup regression reconstructs the exact pinned source plus all prior
+patches, reproduces the Build115 missing-API abort, and compiles the actual native
+startup prefix and write guard with the real Apple portability boundary. Static
+iOS startup fills all heap dispatcher slots and retains an immutable executable
+page across repeated setup; dynamic/asmjit/LLVM paths still reject the absent API.
+macOS guard pairing and Linux behavior are retained. The runtime host suite now
+also crosses that actual prefix during modeled PPU initialization. Cache-file I/O
+and compiler work after the prefix are explicit host interfaces; source checks
+verify that the patch leaves that entire continuation byte-for-byte unchanged.
+These sanitizer checks do not establish full native cache-backend or device game
+execution success.

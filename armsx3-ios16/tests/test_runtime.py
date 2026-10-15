@@ -7,11 +7,13 @@ from pathlib import Path
 import re,subprocess,sys,tempfile
 from test_jit_lifecycle import patched_bodies,arena_cpp,target_header
 from test_runtime_capture import patched_system,HOOK
+from test_spu_cache_startup import patched_startup,model_cpp as spu_startup_model
 root=Path(__file__).resolve().parent.parent
 native=Path(sys.argv[1]).resolve()
 read=lambda p:(native/p).read_text()
 callbacks=read('rpcs3/Emu/emu_callbacks.h')
 system,rsx_callback=patched_system(native)
+spu_prefix,_,spu_guard=patched_startup(native)
 run=system[system.index('void Emulator::Run(bool'):system.index('\nvoid Emulator::FixGuestTime(')]
 boot=system[system.index('game_boot_result Emulator::BootGame('):system.index('\nvoid Emulator::SetContinuousMode(')]
 frontend=(root/'core/loadtest/RuntimeFrontend.cpp').read_text()
@@ -87,7 +89,7 @@ struct MsgDialogBase{
  virtual void ProgressBarSetValue(u32,u32)=0;virtual void ProgressBarSetLimit(u32,u32)=0;
 };
 struct OskDialogBase{};struct SaveDialogBase{};struct SendMessageDialogBase{};struct RecvMessageDialogBase{};struct TrophyNotificationBase{};struct video_source{};
-enum class ppu_decoder_type{_static,llvm};enum class spu_decoder_type{_static,llvm};enum class video_renderer{null,vulkan};enum class audio_renderer{null,cubeb};
+enum class ppu_decoder_type{_static,llvm};enum class spu_decoder_type{_static,dynamic,asmjit,llvm};enum class video_renderer{null,vulkan};enum class audio_renderer{null,cubeb};
 enum class keyboard_handler{null,basic};enum class mouse_handler{null,basic};enum class np_internet_status{disabled,enabled};enum class np_psn_status{disabled,enabled};
 enum class cfg_mode{custom,config_override};enum class game_boot_result{no_errors,invalid_file_or_folder,nothing_to_boot,currently_restricted};
 enum class system_state{stopped,stopping,ready,starting,running,frozen,paused};
@@ -212,7 +214,7 @@ bool Emulator::IsRunning(){
 namespace ios_runtime{void invoke_main(std::function<void()>f){drain_main_queue();on_main=true;try{f();}catch(...){on_main=false;throw;}on_main=false;}}
 game_boot_result Emulator::Load(const std::string&){
  host_ppu={};host_spu={};host_guest_active=false;host_threads_joined=false;
- guest_notified=[] {++ppu_starts;host_guest_active=true;Emu.FinalizeRunRequest();if(mode!=21){host_ppu.exec_bytes=2400;host_ppu.syscall_history.index=3;host_spu.block_counter=7;}};
+ guest_notified=[] {++ppu_starts;spu_cache::initialize();host_guest_active=true;Emu.FinalizeRunRequest();if(mode!=21){host_ppu.exec_bytes=2400;host_ppu.syscall_history.index=3;host_spu.block_counter=7;}};
  ++loads;assert(m_config_mode==cfg_mode::config_override);assert(!m_force_boot);fs::file c(m_config_path,fs::read);assert(g_cfg.from_string(c.to_string()));
  assert(!g_cfg.misc.autostart.get()&&!g_cfg.misc.autoexit.get());assert(g_cfg.core.libraries_control.value==std::set<std::string>{"liblv2.sprx:lle"});
  assert(g_cfg.core.ppu_decoder.get()==ppu_decoder_type::_static&&g_cfg.core.spu_decoder.get()==spu_decoder_type::_static);
@@ -311,7 +313,7 @@ int main(int argc,char**argv){
  std::ofstream(host_root+"/cache/ARMSX3-prepared-executable.elf",std::ios::trunc)<<"BAD";
  const auto count=loads;assert(armsx3_core_check_runtime(detail,sizeof(detail))==-1);assert(loads==count);
  assert(jit_metrics.reserves==0&&jit_metrics.allocations==0&&jit_metrics.decommits==0&&jit_metrics.resets==0&&jit_metrics.write_protection.empty());
- std::puts("PASS: production runtime/frontend plus native JIT finalizer,49 callback signatures and native BootGame; load-only override, mapped segments/firmware identity, missing inputs/idle/main-thread/C ABI guards, partial failures, delayed cleanup, timeout, queue/wake protocol and config restoration. Native Load/VM/FXO/devices/config and UIKit are host models/source contracts; game identity/category/executable/disc/asset mapping checks; complete cached-ELF cleanup verified on Build113 phone; Build114 game identity/disc/assets/cleanup verified on phone; native Run/RunPPU and authorized start, startup timeout, zero-progress/paused outcomes and joined execution capture covered with modeled guest work; actual device guest execution pending.");
+ std::puts("PASS: production runtime/frontend plus native JIT finalizer,49 callback signatures and native BootGame; load-only override, mapped segments/firmware identity, missing inputs/idle/main-thread/C ABI guards, partial failures, delayed cleanup, timeout, queue/wake protocol and config restoration. Native Load/VM/FXO/devices/config and UIKit are host models/source contracts; game identity/category/executable/disc/asset mapping checks; complete cached-ELF cleanup verified on Build113 phone; Build114 game identity/disc/assets/cleanup verified on phone; native Run/RunPPU and authorized start, startup timeout, zero-progress/paused outcomes and joined execution capture covered with modeled guest work; actual native SPU-cache startup prefix/guard included in modeled PPU initialization; Build115 guard abort is separately reproduced; device guest execution pending.");
 }
 '''
 # Accelerate the timeout scenario only. The native app retains its 30-second
@@ -321,7 +323,7 @@ prelude=prelude.replace('enum class cfg_mode{custom,config_override};',strip(rea
 backend=backend.replace('// NATIVE_JOINED_CAPTURE_HOOK',HOOK).replace('/* NATIVE_RSX_START_CALLBACK */','\n'+rsx_callback+'\n')
 tests=tests.replace('/* LATE_NATIVE_RSX_START_CALLBACK */','\n'+rsx_callback+'\n')
 capture=strip((root/'core/loadtest/RuntimeCapture.cpp').read_text())
-source='#include "GameImport.h"\nextern "C" void armsx3_ios_runtime_capture_stopped() noexcept;\n'+prelude+'\n#define __APPLE__ 1\n'+arena_cpp+'\n'+patched_bodies(native)+'\n'+strip(callbacks)+'\n'+backend+'\n'+boot+'\n'+run+'\n'+strip(frontend)+'\n'+capture+'\n'+strip(runtime)+'\n'+tests
+source='#include "GameImport.h"\nextern "C" void armsx3_ios_runtime_capture_stopped() noexcept;\n'+prelude+'\n#define __APPLE__ 1\n'+arena_cpp+'\n'+patched_bodies(native)+'\n'+spu_startup_model+'\n'+spu_guard+'\n'+spu_prefix+'\n'+strip(callbacks)+'\n'+backend+'\n'+boot+'\n'+run+'\n'+strip(frontend)+'\n'+capture+'\n'+strip(runtime)+'\n'+tests
 source=source.replace('std::string&=""','std::string& = ""').replace('std::string>&=std::nullopt','std::string>& = std::nullopt')
 with tempfile.TemporaryDirectory(prefix='armsx3-runtime-') as temp:
  temp=Path(temp);(temp/'host.cpp').write_text(source);(temp/'TargetConditionals.h').write_text(target_header(True))

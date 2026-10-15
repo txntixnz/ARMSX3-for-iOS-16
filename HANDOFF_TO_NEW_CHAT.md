@@ -7357,3 +7357,83 @@ matching .ips. Avoid redundant firmware/game reimport unless reported missing.
 The resulting native running/startup/last-call/CPU counters determine subsequent
 execution fixes and rendering/audio integration. Keep responses short and no
 Actions monitoring after publication; user reports success/failure.
+
+
+## Build116 — static SPU startup guard fix (2026-10-15)
+
+Device evidence: ARMSX3-startup-20261015-020122-221-29413.txt exports the
+unfinished Build115 Game execution (3 seconds), PID29391; the matching
+ARMSX3CoreLoadTest-2026-10-15-040050.ips is Build115/PID29391, core UUID
+77324877-7a9c-30d2-94fb-585e2a2bc099. All120 diagnostics passed. The real
+Midnight Club: Los Angeles [BLUS30442], DG, original EBOOT load again reached
+native ready/state6 with two nonempty segments, real liblv2 and matching
+SFO/disc/EBOOT/carchive_audio.rpf mappings. Run(false) and the explicit one-use
+start callback were accepted. PPU[0x1000000] entered initialization, then
+spu_cache::initialize(bool) constructed jit_write_guard and aborted at the absent
+pthread_jit_write_protect_np Apple boundary. Symbolized constructor+100 and
+spu_cache::initialize+64 match the startup log. Running state was never reached;
+there is no three-second guest window, joined counter result or cleanup PASS.
+The preceding .eh_frame warnings are not the proven abort cause. This is a
+startup guard failure, not Build111's already-fixed empty-arena teardown abort.
+
+Patch0052-ios-static-spu-cache-startup.patch changes only the initial local guard
+in native SPUCommonRecompiler.cpp spu_cache::initialize. For iOS, optional guard
+emplacement occurs only when the decoder is not _static. The static path assigns
+the interpreter pointer and fills the existing ordinary heap dispatcher; it does
+not generate or modify code. The complete original cache-path/file/queue/worker
+continuation is preserved. Dynamic/asmjit/LLVM paths retain the real guard and
+missing-API rejection. macOS retains the original scoped guard and Linux retains
+its existing behavior. Global Apple JIT protection and immutable publication are
+unchanged; do not make apple_jit_write_protect a no-op. First51 patches unchanged;
+52 total. Production Runtime/Frontend/Capture/Intake/GameImport/CoreBridge and
+all120 diagnostics unchanged from115.
+
+New test_spu_cache_startup.py reconstructs pinned native SPU source and JIT.h from
+git objects, applies the exact prior51 patches to those files then0052, and proves
+that removing the new conditional restores the full original source byte-for-byte.
+It compiles the actual native initialize prefix through dispatcher/cache-path
+setup, the actual native jit_write_guard and real Apple portability boundary.
+The remaining cache-file I/O and compiler continuation are an explicit named
+host interface, not a full native cache/backend test. Before-patch static iOS
+startup reproduces the missing-API abort. Patched static iOS startup succeeds;
+all three non-static decoder variants still abort as expected. Eight cycles check
+all1<<20 heap dispatcher slots, interpreter pointer, empty/nonempty cache path,
+build flags, unchanged real immutable RX bytes and zero mutable-arena work.
+macOS all decoder variants preserve guard pairing; Linux original behavior is
+retained. ASAN+UBSAN/Wall/Wextra/Werror remain enabled, with detect_leaks=0 for the
+host environment's /proc restriction and core dumps disabled for intentional
+negative aborts.
+
+The existing runtime host test now executes that same actual SPU prefix and guard
+inside its modeled PPU notification, before FinalizeRunRequest. It retains actual
+native BootGame/Run/RunPPU, callback ABI49, production runtime/frontend/capture,
+native JIT finalization, late RSX callback, one-use permission, startup timeout,
+paused/zero-progress/missing-or-failed capture, stop/config/log restore coverage.
+Remaining PPU/guest work, Load/VM/FXO/devices/config/UIKit and cache continuation
+are host models. This catches the specific Build115 startup boundary that115's
+PPU initialization model skipped. It does not establish device guest execution.
+
+Workflow intake-host adds the SPU startup regression;34 synchronization profiles
+and the existing35-host-job dependency remain unchanged. Bundle version116,
+metadata fixture, README and both independent handoffs are updated. Run the exact
+clean pinned intake-host and all52-patch core-preparation steps before publishing.
+An actual iOS compile/link and phone run still belong to the workflow/device.
+
+Next: install Build116 ARMSX3_iOS16_INSTALL_THIS_IPA via TrollStore after the
+workflow succeeds. Reopen, Run all120 tests, reuse installed firmware and imported
+disc, then Run game (3 seconds). Keep the app open through automatic stop and
+share the startup log; if it crashes, also share the matching .ips. Do not repeat
+the5.67GB game import unless it is missing. Rendering/audio/controller presentation
+remain future work. Keep replies short, English, no images. After publication,
+verify the workflow queued once and do not monitor Actions; user reports result.
+
+Build116 prepublication validation PASSED in a fresh shared clone at pinned
+92b931b9fb5eef7f1317cb482917dfc19aceebd9: the exact YAML intake-host command
+(fixture, intake, runtime, JIT lifecycle, SPU startup, game import) and exact core
+Apply iOS core patches command both exited0. All52 patches apply; reverse-check
+of0052 and byte comparisons of both installed overlays passed. Python AST, YAML,
+plist/build116 and workflow shell syntax plus git diff --check passed. Prior51
+patches, Apple/immutable JIT headers and production runtime/intake/import/bridge
+sources remain unchanged. The unchanged34 synchronization profiles are left to
+Actions rather than redundantly rerun locally. iOS compile/link/device result
+still pending. No Actions monitoring after publishing.
