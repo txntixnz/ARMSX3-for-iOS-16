@@ -1,0 +1,30 @@
+diff --git a/rpcs3/Emu/RSX/RSXZCULL.cpp b/rpcs3/Emu/RSX/RSXZCULL.cpp
+index 3388b6270..474f46a05 100644
+--- a/rpcs3/Emu/RSX/RSXZCULL.cpp
++++ b/rpcs3/Emu/RSX/RSXZCULL.cpp
+@@ -1,4 +1,7 @@
+ #include "stdafx.h"
++#ifdef __APPLE__
++#include <TargetConditionals.h>
++#endif
+ #include "Core/RSXEngLock.hpp"
+ #include "Core/RSXReservationLock.hpp"
+ #include "Host/MM.h"
+@@ -10,6 +13,17 @@ namespace rsx
+ 	{
+ 		ZCULL_control::ZCULL_control()
+ 		{
++#if defined(__APPLE__) && TARGET_OS_IOS
++			// A 16 KiB host page can contain both reports and RSX control words.
++			// Fault-driven detection can block a PPU waiting for RSX to pause
++			// while RSX/SPU fault on the same still-protected page. Start in
++			// the existing urgent-report mode, before any report is queued.
++			// Queries/results remain active; enqueue/completion balance the
++			// critical count without protecting pages or transferring refs.
++			m_pages_accessed[0] = true;
++			m_pages_accessed[1] = true;
++			rsx_log.warning("iOS: urgent ZCULL reports enabled without report-page protection.");
++#endif
+ 			for (auto& query : m_occlusion_query_data)
+ 			{
+ 				m_free_occlusion_pool.push(&query);

@@ -77,6 +77,7 @@ bool run_window(bool render, const std::function<bool()>& should_stop)
     while (!Emu.IsRunning())
     {
         require(!frontend_failed(), "Guest startup reported a frontend error");
+        require(!core_failed(), "Native core reported a fatal error during guest startup");
         if (should_stop && should_stop()) { log("SESSION stop requested during guest startup"); return false; }
         require(!Emu.IsStopped(), "Guest stopped before reaching the running state; inspect the log");
         require(std::chrono::steady_clock::now() < startup_deadline, "Guest startup did not reach running state within 15 seconds");
@@ -90,6 +91,7 @@ bool run_window(bool render, const std::function<bool()>& should_stop)
     while (should_stop || std::chrono::steady_clock::now() < deadline)
     {
         require(!frontend_failed(), "Guest execution reported a frontend error");
+        require(!core_failed(), "Native core reported a fatal error during guest execution");
         if (should_stop && should_stop()) { log("SESSION user requested stop; starting GPU/CPU cleanup"); break; }
         if (Emu.IsStopped()) { log("EXECUTION guest requested an early stop"); break; }
         require(Emu.IsRunning(), "Guest left the running state during the execution window");
@@ -239,6 +241,7 @@ int check(std::string& detail, bool game = false, bool execute = false, bool ren
         });
         require(ppu_workers > 0, "Runtime loader created no main PPU context");
         require(!frontend_failed(), "Runtime frontend reported an error; inspect the log");
+        require(!core_failed(), "Native core reported a fatal error during guest loading");
         log("RUNTIME PASS native ready state: mapped segments=" + std::to_string(loaded_segments) +
             " firmware modules=" + std::to_string(firmware_modules) + " stopped PPU contexts=" + std::to_string(ppu_workers) +
             "; guest entry has not been started");
@@ -266,6 +269,7 @@ int check(std::string& detail, bool game = false, bool execute = false, bool ren
         }
         catch (...) { detail = "Runtime cleanup threw an unknown exception. Reopen the app."; return -2; }
     }
+    if (core_failed() && error.empty()) error = "Native core reported a fatal error; inspect the startup log";
     if (execute && executed && error.empty())
     {
         const auto progress = execution_progress();

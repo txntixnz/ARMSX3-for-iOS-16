@@ -7,6 +7,7 @@ namespace ios_runtime
 {
 void install_frontend();
 bool frontend_failed();
+bool core_failed();
 void drain_main_queue();
 void invoke_main(std::function<void()> operation);
 bool is_main_thread();

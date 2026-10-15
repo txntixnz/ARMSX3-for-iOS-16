@@ -8176,3 +8176,70 @@ publication. Publish via GitHub API lease; confirm one queued run, do not monito
 Next: install ARMSX3_iOS16_INSTALL_THIS_IPA, Quick start -> Start game, keep
 foreground, let loading progress, Stop game and send log/result. Disc/firmware
 persist. Audio/gamepad pending. Concise English; no generated images.
+
+
+## Build129 — eager iOS report policy and fatal-worker result reporting (2026-10-15)
+
+User reports “Same I think” with Build128 PID33377 log at
+/workspace/scratch/8dcd4680dd95/upload/ARMSX3-startup-20261015-171753-725-33377.txt.
+The game still has not reached its main menu. Native Run reaches running at
+1792084570.626297; RSX and SPU4 die around1792084659.4 while reading guest
+0x40300400 / host0x340300400, ESR0x92000007. At Stop1792084662.969207, the PPU
+Render Thread finally logs ZCULL optimization disabling. Cleanup completes at
+1792084663.145533, zero live CPU threads. The old UI falsely reports PASS based
+on earlier2679 presents and2,285,355 calls despite both fatal worker deaths.
+
+Native source exposes a race consistent with this timing: ZCULL's first guest
+fault sets m_pages_accessed=true, releases its pages mutex and waits for an RSX
+pause before unprotecting. Other RSX/SPU faults then immediately decline because
+m_pages_accessed is already true, although the shared host page is inaccessible.
+The Build128 host test modeled locks/eng_lock as no-ops and missed concurrency.
+
+Patch0060-ios-urgent-zcull-reports.patch enables both report locations' existing
+urgent mode in the iOS ZCULL constructor, before any report can be queued. Reports
+and real occlusion queries/results remain active; native enqueue/completion
+balance m_critical_reports_in_flight. This prevents ZCULL from protecting report
+pages and avoids fault-driven recovery on16KiB pages shared with RSX controls.
+Other platforms retain their prior constructor and fault-based policy. This is a
+conservative iOS compatibility policy with a possible performance cost. It does
+not disable queries, fake results, skip faulting instructions or widen generic
+translation retries. Existing patches0057-0059 remain unchanged for other faults.
+The app logs “iOS: urgent ZCULL reports enabled without report-page protection.”
+
+RuntimeFrontend now installs one process-lifetime native fatal-log observer. Its
+atomic core-failure flag resets only when the next idle session installs its
+frontend. Load/run loops and the final result after cleanup check this flag, so
+native fatal errors cause FAIL and automatic teardown. A fatal with completed
+cleanup returns -1, releases the frame/configuration and permits retry; incomplete
+cleanup still returns -2. Ordinary guest error logs remain nonfatal. Frozen
+CoreBridge.cpp and120 diagnostic stages are untouched.
+
+Validation completed locally:
+- All60 patches apply in order on a clean pinned92b931b9f native worktree; source
+  whitespace check recognizes the original CRLF in RSXZCULL.cpp (per-command
+  core.whitespace=cr-at-eol, no repository configuration changes).
+- New test_ios_zcull_reports.py compiles exact native constructor/destructor and
+  report-page methods with real atomics/host locks/mprotect under ASAN+UBSAN.
+  Before0060, a held guest pause request reproduces concurrent RSX/SPU rejection
+  while the page remains protected. Patched iOS completes4000 report enqueue/
+  completions with concurrent PPU/SPU/RSX accesses on real aligned16KiB main/local
+  mappings, zero protection calls/engine pauses and balanced critical counts.
+  Patched desktop retains the original policy/race. GPU/pause/query-pool/VM are
+  explicit host interfaces; no actual iOS signals or Vulkan queries are executed.
+- Existing signal recovery matrix,16 real fault retries and negative regressions
+  pass; this test intentionally covers unchanged patches0057-0059 separately.
+- Production runtime/frontend host harness passes with fatal injections during
+  load, from a worker during execution, and during teardown despite prior progress
+  and presents; normal errors do not fail, clean release and fresh retry pass.
+- Build129 fixture/frozen bridge/Quick start/session contracts, Python AST, plist
+  and staged non-patch whitespace checks pass. Workflow adds the new ZCULL test
+  to the existing intake job, retaining34+2 host prerequisites.
+
+Complete iOS compile/link/package and actual device main-menu/performance behavior
+remain unverified. Parent main b7b37d50250ecd98daaf35bf50f4427ce19b8e35. User has
+explicitly authorized publication and builds. Publish via GitHub API with expected
+parent lease; inspect only one queued run, then do not monitor it. User reports
+workflow outcome. Next: install ARMSX3_iOS16_INSTALL_THIS_IPA, Quick start -> Start
+game, keep foreground, let loading progress, Stop game and send the log/result.
+Firmware/disc persist; no reimport or full diagnostics required. Audio/gamepad
+remain pending. Concise English; no generated images.

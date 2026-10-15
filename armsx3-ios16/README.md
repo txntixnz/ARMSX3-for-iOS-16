@@ -1,10 +1,11 @@
-# Current checkpoint — Build128
+# Current checkpoint — Build129
 
-Midnight Club LA displays startup screens on A15/iOS16. Longer Build127
-sessions report a data translation fault in the GPU report page. Build128
-routes allocated guest translation faults to the native renderer, with a
-required renderer acceptance check. Native GPU report-page host regressions
-pass; actual iOS loading/main-menu/shutdown verification is pending.
+Midnight Club LA displays startup screens on A15/iOS16. Build128 still loses
+RSX/SPU workers to a GPU report-page fault. Build129 starts iOS in the native
+urgent-report mode, avoiding protection of shared 16 KiB report/control pages.
+A host regression reproduces the previous concurrent recovery race; the new
+policy and fatal-worker failure reporting pass host tests. Actual iOS loading,
+main-menu behavior and performance need device verification.
 Install `ARMSX3_iOS16_INSTALL_THIS_IPA`, **Quick start -> Start game**, keep
 foreground, then **Stop game** and share the log/result. Firmware/disc persist.
 Full120 diagnostics optional; audio/gamepad controls pending.

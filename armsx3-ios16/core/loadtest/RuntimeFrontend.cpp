@@ -7,6 +7,7 @@
 #include "Emu/emu_callbacks.h"
 #include "Emu/IdManager.h"
 #include "Utilities/Thread.h"
+#include "util/logs.hpp"
 #include "Emu/RSX/Null/NullGSRender.h"
 #include "Emu/RSX/VK/VKGSRender.h"
 #include "Emu/Audio/Null/NullAudioBackend.h"
@@ -30,7 +31,15 @@ void dispatch_main(std::function<void()> operation, atomic_t<u32>* wake_up);
 namespace
 {
 std::atomic<bool> failed{false};
+std::atomic<bool> core_fatal{false};
 std::atomic<bool> start_permitted{false};
+class RuntimeLog final : public logs::listener
+{
+    void log(u64, const logs::message& message, std::string_view, std::string_view) override
+    {
+        if (logs::level(message) == logs::level::fatal) core_fatal.store(true);
+    }
+};
 void log(const char* text) { ARMSX3StartupLog(text); }
 std::string resolve(std::string_view value)
 {
@@ -54,15 +63,20 @@ public:
 }
 void record_frontend_failure(const char* message) { failed.store(true); log(message); }
 bool frontend_failed() { return failed.load(); }
+bool core_failed() { return core_fatal.load(); }
 void permit_guest_start(bool allowed) { start_permitted.store(allowed); }
 void install_frontend()
 {
     // These callbacks remain installed for the process lifetime. Runtime checks
     // are serialized by UIKit and finish teardown before any intake can resume.
     failed.store(false);
+    core_fatal.store(false);
     start_permitted.store(false);
     static bool installed = false;
     if (installed) return;
+    // The core retains its listeners. Keep this observer alive with the dylib,
+    // and only reset it after the previous session's workers have joined.
+    logs::listener::add(new RuntimeLog);
     g_emu_callbacks.call_from_main_thread = dispatch_main;
     g_emu_callbacks.on_run = [](bool) {
         if (start_permitted.exchange(false))

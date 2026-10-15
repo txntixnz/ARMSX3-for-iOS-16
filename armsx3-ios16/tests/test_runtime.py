@@ -99,7 +99,18 @@ enum class keyboard_handler{null,basic};enum class mouse_handler{null,basic};enu
 enum class cfg_mode{custom,config_override};enum class game_boot_result{no_errors,invalid_file_or_folder,nothing_to_boot,currently_restricted};
 enum class system_state{stopped,stopping,ready,starting,running,frozen,paused};
 struct State{system_state value=system_state::stopped;operator system_state()const{return value;}State&operator=(system_state v){value=v;return *this;}void notify_all();};
-namespace logs{enum class level{warning=5,notice=6};}
+namespace logs{
+enum class level{fatal=1,error=2,warning=5,notice=6};
+struct message{level severity;operator level()const{return severity;}};
+struct listener{
+ virtual ~listener()=default;
+ virtual void log(u64,const message&,std::string_view,std::string_view)=0;
+ static void add(listener*);
+};
+std::vector<listener*>listeners;
+void listener::add(listener*value){listeners.push_back(value);}
+void emit(level severity){const message value{severity};for(auto*entry:listeners)entry->log(0,value,"worker","injected worker log");}
+}
 struct LogSetting{std::map<std::string,logs::level,std::less<>>value;void set_map(std::map<std::string,logs::level,std::less<>>&&v){value=std::move(v);}};
 template<class T>struct Setting{T value{};void set(T v){value=v;}T get()const{return value;}operator T()const{return value;}};
 struct LibrarySet{std::set<std::string>value;void set_set(std::set<std::string>&&v){value=std::move(v);}};
@@ -223,7 +234,9 @@ bool Emulator::IsRunning(){
 namespace ios_runtime{void invoke_main(std::function<void()>f){drain_main_queue();on_main=true;try{f();}catch(...){on_main=false;throw;}on_main=false;}}
 game_boot_result Emulator::Load(const std::string&){
  host_ppu={};host_spu={};host_guest_active=false;host_threads_joined=false;
- guest_notified=[] {++ppu_starts;spu_cache::initialize();host_guest_active=true;Emu.FinalizeRunRequest();if(g_cfg.video.renderer.get()==video_renderer::vulkan&&mode!=26)armsx3_ios_runtime_note_present(mode==27?-4:mode==28?1000001003:0);if(mode!=21){host_ppu.exec_bytes=2400;host_ppu.syscall_history.index=3;host_spu.block_counter=7;}};
+ guest_notified=[] {++ppu_starts;spu_cache::initialize();host_guest_active=true;Emu.FinalizeRunRequest();if(g_cfg.video.renderer.get()==video_renderer::vulkan&&mode!=26)armsx3_ios_runtime_note_present(mode==27?-4:mode==28?1000001003:0);if(mode!=21){host_ppu.exec_bytes=2400;host_ppu.syscall_history.index=3;host_spu.block_counter=7;}
+  if(mode==29||mode==31)std::thread([]{logs::emit(mode==29?logs::level::fatal:logs::level::error);}).join();
+ };
  ++loads;assert(m_config_mode==cfg_mode::config_override);assert(!m_force_boot);fs::file c(m_config_path,fs::read);assert(g_cfg.from_string(c.to_string()));
  /* NATIVE_RENDERER_FIXUP */
  assert(!g_cfg.misc.autostart.get()&&!g_cfg.misc.autoexit.get());assert(g_cfg.core.libraries_control.value==std::set<std::string>{"liblv2.sprx:lle"});
@@ -240,11 +253,13 @@ game_boot_result Emulator::Load(const std::string&){
  if(mode==8)g_fxo->main.segs.pop_back();
  if(mode==9)g_fxo->main.elf_entry=0;
  if(mode==10)ios_runtime::record_frontend_failure("injected frontend failure");
+ if(mode==32)logs::emit(logs::level::fatal);
  return game_boot_result::no_errors;
 }
 void Emulator::Kill(bool allow_autoexit){assert(on_main);assert(!allow_autoexit);++kills;ticks=0;
  if(m_state!=system_state::stopped)m_state=system_state::stopping;
  host_threads_joined=true;
+ if(mode==30)logs::emit(logs::level::fatal);
  if(mode!=24){
  // NATIVE_JOINED_CAPTURE_HOOK
  }
@@ -342,6 +357,30 @@ int main(int argc,char**argv){
   assert(Emu.IsStopped(true)&&workers==0&&g_fxo->objects.empty()&&!ios_runtime::renderer_frame_ready());
   assert(g_cfg.to_string()==prior&&g_backup_cfg.to_string()==backup&&Emu.IsHeadless());
  }
+ // A fatal worker log must override prior presents/progress, including a fatal
+ // logged during teardown. Ordinary guest errors are not fatal. All three
+ // paths release the frame/config and permit a fresh, successful session.
+ for(int scenario:{29,30,31,0}){
+  mode=scenario;g_fxo->main={};std::atomic<bool>stop{false};const auto log_start=host_log.size();
+  std::thread cancel([&]{std::this_thread::sleep_for(std::chrono::milliseconds(120));stop.store(true);});
+  const int result=armsx3_core_render_session(&layer,1280,720,stop_flag,&stop,detail,sizeof(detail));cancel.join();
+  const bool fatal=scenario==29||scenario==30;
+  assert(result==(fatal?-1:0));assert(ios_runtime::core_failed()==fatal);
+  assert(logs::listeners.size()==1); // One observer for the retained dylib.
+  if(fatal){
+   assert(std::string(detail).find("Native core reported a fatal error")!=std::string::npos);
+   assert(std::string(detail).find("Cleanup completed")!=std::string::npos);
+   for(auto i=log_start;i<host_log.size();++i)assert(!host_log[i].starts_with("RENDER PASS"));
+  }
+  assert(Emu.IsStopped(true)&&workers==0&&g_fxo->objects.empty()&&!ios_runtime::renderer_frame_ready());
+  assert(g_cfg.to_string()==prior&&g_backup_cfg.to_string()==backup&&Emu.IsHeadless());
+ }
+ mode=32;g_fxo->main={};const auto before_fatal_load=starts;
+ assert(armsx3_core_render_game(&layer,1280,720,detail,sizeof(detail))==-1);
+ assert(starts==before_fatal_load&&std::string(detail).find("fatal error during guest loading")!=std::string::npos);
+ assert(Emu.IsStopped(true)&&workers==0&&g_fxo->objects.empty()&&!ios_runtime::renderer_frame_ready());
+ assert(g_cfg.to_string()==prior&&g_backup_cfg.to_string()==backup&&Emu.IsHeadless());
+ std::puts("PASS fatal log observer: load/run/teardown failures override progress/presents; ordinary errors remain nonfatal; clean releases and next-session reset verified");
  // Stop tapped while loading must prevent Run, then fully release its surface.
  mode=0;g_fxo->main={};std::atomic<bool>already_stopped{true};const auto before_cancelled_start=starts;
  assert(armsx3_core_render_session(&layer,1280,720,stop_flag,&already_stopped,detail,sizeof(detail))==0);
