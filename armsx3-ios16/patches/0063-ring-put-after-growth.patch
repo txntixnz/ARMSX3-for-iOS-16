@@ -1,0 +1,21 @@
+diff --git a/rpcs3/Emu/RSX/Common/ring_buffer_helper.h b/rpcs3/Emu/RSX/Common/ring_buffer_helper.h
+--- a/rpcs3/Emu/RSX/Common/ring_buffer_helper.h
++++ b/rpcs3/Emu/RSX/Common/ring_buffer_helper.h
+@@ -94,13 +94,16 @@
+ 		usz alloc(usz size)
+ 		{
+ 			const usz alloc_size = utils::align(size, Alignment);
+-			const usz aligned_put_pos = utils::align(m_put_pos, Alignment);
+ 
+ 			if (!can_alloc<Alignment>(size) && !grow(alloc_size))
+ 			{
+ 				fmt::throw_exception("[%s] Working buffer not big enough, buffer_length=%d requested=%d guard=%d",
+ 					m_name, m_size, size, m_min_guard_size);
+ 			}
++
++			// grow() can replace the heap and reset PUT to zero.
++			// Read the current PUT after growth/reclaim, not the old buffer's offset.
++			const usz aligned_put_pos = utils::align(m_put_pos, Alignment);
+ 
+ 			const usz alloc_end = aligned_put_pos + alloc_size;
+ 			if (alloc_end < m_size)

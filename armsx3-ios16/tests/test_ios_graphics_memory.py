@@ -194,7 +194,7 @@ with tempfile.TemporaryDirectory(prefix='armsx3-ios-memory-') as directory:
         subprocess.run(['git', 'apply', '--reverse', str(patch)], cwd=temp, check=True)
     assert before == [(temp / rel).read_bytes() for rel in paths]
 
-    ring_base = strip((native / 'rpcs3/Emu/RSX/Common/ring_buffer_helper.h').read_text())
+    ring_base = strip(subprocess.check_output(['git', '-C', str(native), 'show', pin + ':rpcs3/Emu/RSX/Common/ring_buffer_helper.h'], text=True))
     for name, source, ios, small in [('build129', before[0], 1, 0), ('ios', after[0], 1, 1), ('desktop', after[0], 0, 0)]:
         text = source.decode().replace('\r\n', '\n')
         grow = text[text.index('\tbool data_heap::grow('):text.index('\n\tvoid* data_heap::map_impl(')]

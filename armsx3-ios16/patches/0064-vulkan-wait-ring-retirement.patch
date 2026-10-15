@@ -1,0 +1,37 @@
+diff --git a/rpcs3/Emu/RSX/VK/VKGSRenderTypes.hpp b/rpcs3/Emu/RSX/VK/VKGSRenderTypes.hpp
+--- a/rpcs3/Emu/RSX/VK/VKGSRenderTypes.hpp
++++ b/rpcs3/Emu/RSX/VK/VKGSRenderTypes.hpp
+@@ -85,7 +85,7 @@
+ 		{
+ 			if (is_pending && !poke())
+ 			{
+-				wait(FRAME_PRESENT_TIMEOUT);
++				CHECK_RESULT(wait(FRAME_PRESENT_TIMEOUT));
+ 			}
+ 
+ 			++reset_id;
+@@ -163,12 +163,24 @@
+ 
+ 			const auto ret = vk::wait_for_fence(m_submit_fence, timeout);
+ 
++			// A timeout/error does not prove completion. Keep the fence and
++			// its snapshot pending so no in-flight allocation can be reused.
++			if (ret != VK_SUCCESS) return ret;
++
+ 			lock.upgrade();
+ 
+ 			if (is_pending)
+ 			{
+ 				m_submit_fence->reset();
+ 				vk::on_event_completed(eid_tag);
++
++				// Match poke(): blocking completion also returns ring space.
++				if (heap_snapshot_id)
++				{
++					data_heap_manager::restore_snapshot(heap_snapshot, heap_snapshot_id);
++					heap_snapshot.clear();
++					heap_snapshot_id = 0;
++				}
+ 
+ 				is_pending = false;
+ 				eid_tag = 0;

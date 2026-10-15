@@ -1,0 +1,93 @@
+diff --git a/rpcs3/Emu/RSX/Common/ring_buffer_helper.h b/rpcs3/Emu/RSX/Common/ring_buffer_helper.h
+--- a/rpcs3/Emu/RSX/Common/ring_buffer_helper.h
++++ b/rpcs3/Emu/RSX/Common/ring_buffer_helper.h
+@@ -167,6 +167,12 @@
+ 			// @unused
+ 		}
+ 
++		// Includes alignment/wrap padding; one byte distinguishes full from empty.
++		usz pending_bytes() const
++		{
++			return (m_put_pos + m_size - m_get_pos - 1) % m_size;
++		}
++
+ 		usz size() const
+ 		{
+ 			return m_size;
+diff --git a/rpcs3/Emu/RSX/VK/VKGSRender.cpp b/rpcs3/Emu/RSX/VK/VKGSRender.cpp
+--- a/rpcs3/Emu/RSX/VK/VKGSRender.cpp
++++ b/rpcs3/Emu/RSX/VK/VKGSRender.cpp
+@@ -1,5 +1,8 @@
+ #include "Emu/RSX/VK/vkutils/descriptors.h"
+ #include "stdafx.h"
++#ifdef __APPLE__
++#include <TargetConditionals.h>
++#endif
+ #include "../Overlays/overlay_compile_notification.h"
+ #include "../Overlays/Shaders/shader_loading_dialog_native.h"
+ 
+@@ -1736,6 +1739,32 @@
+ 	}
+ }
+ 
++void VKGSRender::reclaim_texture_uploads()
++{
++#if defined(__APPLE__) && TARGET_OS_IOS
++	// Called before texture-cache/sampler locks and outside upload recording.
++	// A long load may not present, so submit bounded batches explicitly.
++	// Completion returns space through the existing command-buffer snapshot.
++	if (vk::is_uninterruptible() ||
++		(m_queue_status & flush_queue_state::flushing) ||
++		(m_queue_status & flush_queue_state::deadlock) ||
++		!m_texture_upload_buffer_ring_info.heap ||
++		m_texture_upload_buffer_ring_info.pending_bytes() < 32 * 0x100000)
++	{
++		return;
++	}
++
++	ensure(is_current_thread());
++	const auto bytes = m_texture_upload_buffer_ring_info.pending_bytes();
++	auto* submitted = m_current_command_buffer;
++	flush_command_queue();
++	CHECK_RESULT(submitted->wait(FRAME_PRESENT_TIMEOUT));
++	rsx_log.warning("iOS: completed texture upload batch (%lluK); pending %lluK.",
++		static_cast<u64>(bytes / 1024),
++		static_cast<u64>(m_texture_upload_buffer_ring_info.pending_bytes() / 1024));
++#endif
++}
++
+ void VKGSRender::retire_completed_work()
+ {
+ 	// Hard sync: the point is that frames actually RETIRE. check_present_status() inside
+@@ -2972,6 +3001,8 @@
+ 
+ 	if (swapchain_unavailable)
+ 		return false;
++
++	reclaim_texture_uploads();
+ 
+ 	vk::gpu_scope blit_gpu_scope(*m_current_command_buffer, vk::gpu_timer::region::blit);
+ 
+diff --git a/rpcs3/Emu/RSX/VK/VKGSRender.h b/rpcs3/Emu/RSX/VK/VKGSRender.h
+--- a/rpcs3/Emu/RSX/VK/VKGSRender.h
++++ b/rpcs3/Emu/RSX/VK/VKGSRender.h
+@@ -312,6 +312,7 @@
+ 	void update_vertex_env(u32 id, const vk::vertex_upload_info& vertex_info);
+ 	void upload_transform_constants(const rsx::io_buffer& buffer);
+ 
++	void reclaim_texture_uploads();
+ 	void load_texture_env();
+ 	bool bind_texture_env();
+ 	bool bind_interpreter_texture_env();
+diff --git a/rpcs3/Emu/RSX/VK/VKDraw.cpp b/rpcs3/Emu/RSX/VK/VKDraw.cpp
+--- a/rpcs3/Emu/RSX/VK/VKDraw.cpp
++++ b/rpcs3/Emu/RSX/VK/VKDraw.cpp
+@@ -312,6 +312,8 @@
+ 
+ void VKGSRender::load_texture_env()
+ {
++	reclaim_texture_uploads();
++
+ 	// Per-draw texture cache search, surface-cache expiry tests and sampler lookup.
+ 	// texcache_lookup's only other site is on_access_violation, which runs on guest
+ 	// threads, so none of this draw-path work was ever attributed.

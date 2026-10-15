@@ -4354,3 +4354,87 @@ game, keep foreground, Stop game, send log/result. Firmware/disc persist. No
 reimport/full diagnostics. Concise English; no generated images; audio/input
 pending. Scratch native130-validation has all62 patches; native129-validation
 also now contains these current changes (its directory name is historical).
+
+
+## Build131 — completed upload reuse and correct ring/fence accounting (2026-10-15)
+
+User supplied ARMSX3-startup-20261015-183748-236-34201.txt and then asked to
+continue. Local attachment at /workspace/scratch/8dcd4680dd95/upload/ARMSX3-startup-20261015-183748-236-34201.txt;
+Library ID libfile_70a161bf5c6c81918536473c1e996a4b. Read local copy directly.
+Recovered previous unfinished Build130 run is PID34187, export process34201.
+
+At running1792089360.581512, accepted presents38. They progress to1662 at
+1792089415.650123. Texture upload buffer then grows64->80MiB at1792089417.746798
+(request64KiB),80->96MiB at1792089417.820559 (request1024KiB),96->112MiB at
+1792089417.859684 (request256KiB). Refusal of112MiB kills RSX at1792089418.054669.
+Thus Build130's earlier hypothesized64MiB+padding request is NOT the observed
+cause: the real workload consists of small uploads and missing reuse. Fatal
+observer starts teardown; this time SPU0 cannot join, so capture/FXO stage markers
+are never reached. Runtime times out30s later and RENDER UI FAIL is logged at
+1792089448.095490. UIKit is responsive enough to report incomplete cleanup;
+clean Stop and main menu are still not confirmed. Do not attribute this run's
+blocked join to FXO destruction: the log identifies an earlier stuck SPU join.
+
+Found three concrete native issues/changes, combined in this iteration:
+1. Patch0063-ring-put-after-growth.patch recomputes the aligned write position
+   AFTER grow() can reset the ring to zero. The original cached pre-growth PUT
+   skipped64MiB in a fresh80MiB replacement for a4KiB request, wasting most of the
+   new buffer and causing another resize after only16MiB. Normal allocation and
+   fixed-size static allocation semantics remain native. This common correctness
+   fix is portable, not an iOS-only preprocessor workaround.
+2. Patch0064-vulkan-wait-ring-retirement.patch makes successful blocking fence
+   waits restore/clear the existing command-buffer heap snapshot like poke().
+   Previously only polling reclaimed ring memory. Timeout/device error now leaves
+   fence, snapshot, event and pending state intact. reset() checks the wait result
+   before resetting a command buffer, preventing reuse after an unsuccessful wait.
+   Native monotonic snapshot IDs still prevent older completion from rolling GET
+   back. These are portable correctness fixes in the native completion primitive.
+3. Patch0065-ios-texture-upload-batches.patch adds pending_bytes() and an iOS
+   renderer method which submits and waits for a command buffer once upload space
+   held reaches32MiB. It uses native flush_command_queue and snapshot retirement;
+   it never resets ring pointers by hand. Calls precede sampler/cache locks in
+   load_texture_env and precede the GPU scope/cache entry in scaled-image blits.
+   Uninterruptible, flushing/deadlock, missing heap and below-threshold cases skip
+   submission. This lets loads reclaim space without a present. Other platforms
+   have no added batching policy. New marker: “iOS: completed texture upload batch
+   (...K); pending ...K.” Waits are bounded by native FRAME_PRESENT_TIMEOUT.
+
+The extra synchronization may slow texture-heavy loads. Large single uploads,
+other GPU allocations and actual MoltenVK behavior remain device concerns; no
+promise of main-menu or clean-stop success. No allocation-limit increase, shader
+result substitutions, discarded uploads, new diagnostic stages or intake changes.
+Previous report-page compatibility mode and responsive-timeout ownership remain.
+
+Validation completed locally:
+- All65 patches apply sequentially on clean pinned92b931b9f source; affected
+  source matches prepared files and CRLF-aware whitespace check passes.
+- New test_ios_upload_retirement.py reconstructs exact first62 then applies and
+  reverses63-65. It compiles exact native common ring helper, atomic queue mask,
+  command-buffer chunk (tag/poke/wait/reset), snapshot manager and renderer batch
+  method under ASAN+UBSAN. Queue/fence/driver are explicit host interfaces.
+- Fresh replacement begins at0 and serves another64MiB without growing again.
+  Timeout/device error preserve pending ownership; reset refuses failed waits;
+  success releases exactly once; older completion cannot roll GET backwards;
+  polling and blocking retirement agree. A held simulated GPU wait proves no ring
+  space is reclaimed before completion. Busy/missing/below-threshold gates pass.
+- Simulated5GiB stream of256KiB uploads with no presents uses one64MiB buffer,
+  with byte markers checked before completion/reuse. Desktop policy is unchanged.
+  Native Vulkan/Metal command execution is not simulated by a real driver here.
+- Negative historical native PUT code fails the fresh-buffer assertion; old wait
+  fails timeout-ownership checks and exhausts the modeled buffer on the same
+  successful-upload stream. Tests require the expected assertion/error text.
+- Earlier graphics-memory/shutdown regression passes. It now reads the common
+  helper from git pin explicitly so its historical first62 fixture cannot drift
+  when a patched input checkout is supplied. Frozen bridge/120 stages/four Quick
+  start foundations/session ABI/Build131 plist and Python AST checks pass.
+- Workflow adds the new retirement regression to intake, retaining34+2 host jobs.
+  Staged non-patch whitespace check passes. Full iOS build and phone test pending.
+
+Parent main2e8edaca2081693dd623e1019990a2b1a16192ad. User explicitly authorizes
+main publication and workflow builds. Publish with GitHub API expected-parent
+lease. Check one queued run only; do not monitor. Next: install
+ARMSX3_iOS16_INSTALL_THIS_IPA, Quick start -> Start game, keep foreground, let
+loading progress, Stop game, send result/log. Firmware and game persist; no full
+diagnostics/reimport required. Audio/input pending. Concise English, no generated
+images. native131-validation contains all65 patches; native130-validation also
+now contains these latest changes despite its historical directory name.

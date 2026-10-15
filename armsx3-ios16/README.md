@@ -1,15 +1,15 @@
-# Current checkpoint — Build130
+# Current checkpoint — Build131
 
-Midnight Club LA displays startup screens on A15/iOS16. Build129 avoids the
-previous report-page fault, but its log shows a 192 MiB Vulkan allocation failure
-and a shutdown timeout. Build130 reduces iOS streaming-buffer growth overhead,
-logs buffer growth and presentation progress, and moves core destruction off
-UIKit's main thread so a blocked GPU cleanup can report its timeout.
-Host regressions cover memory sizing, retained resources and shutdown ordering;
-actual iOS loading, main-menu behavior and clean shutdown remain unverified.
-Install `ARMSX3_iOS16_INSTALL_THIS_IPA`, **Quick start -> Start game**, keep
-foreground, then **Stop game** and share the log/result. Firmware/disc persist.
-Full 120 diagnostics optional; audio/gamepad controls pending.
+Midnight Club LA displays startup screens on A15/iOS16. Build130 identifies
+runaway texture-upload buffer growth and reports incomplete cleanup without
+freezing UIKit. Build131 fixes ring allocation after growth and returns ring
+space on successful blocking fence waits. iOS submits and waits for upload
+batches before entering draw/blit texture-cache work, allowing loading to reuse
+completed space even without a present. Timeout/error paths keep work pending.
+Host regressions cover these paths; actual menu/loading and clean Stop remain
+unverified. Install `ARMSX3_iOS16_INSTALL_THIS_IPA`, **Quick start -> Start game**,
+keep foreground, then **Stop game** and share the log/result. Firmware/disc
+persist. Full120 diagnostics optional; audio/gamepad controls pending.
 Historical checkpoints follow.
 
 # ARMSX3 for iOS 16 — P0 port checkpoint
