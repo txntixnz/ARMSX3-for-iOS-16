@@ -57,6 +57,7 @@ using usz=std::size_t;constexpr usz umax=~usz{0};
 using u8=std::uint8_t;using u32=std::uint32_t;using s32=std::int32_t;using u64=std::uint64_t;using f32=float;using f64=double;using draw_context_t=void*;using display_handle_t=void*;
 enum class vsync_mode{off};
 template<class T>struct atomic_t{std::atomic<T>value;atomic_t(T v={}):value(v){}operator T()const{return value.load();}atomic_t&operator=(T v){value.store(v);return *this;}void notify_one(){value.notify_one();}};
+atomic_t<bool> g_game_window_focused{false};
 namespace utils{struct serial{};}namespace stx{template<class T>using shared_ptr=std::shared_ptr<T>;template<class T>struct atomic_ptr{};}
 namespace cfg{struct _base{};}
 enum class localized_string_id{placeholder};

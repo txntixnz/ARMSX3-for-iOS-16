@@ -1,16 +1,22 @@
-# Current checkpoint — Build131
+# Current checkpoint — Build132
 
-Midnight Club LA displays startup screens on A15/iOS16. Build130 identifies
-runaway texture-upload buffer growth and reports incomplete cleanup without
-freezing UIKit. Build131 fixes ring allocation after growth and returns ring
-space on successful blocking fence waits. iOS submits and waits for upload
-batches before entering draw/blit texture-cache work, allowing loading to reuse
-completed space even without a present. Timeout/error paths keep work pending.
-Host regressions cover these paths; actual menu/loading and clean Stop remain
-unverified. Install `ARMSX3_iOS16_INSTALL_THIS_IPA`, **Quick start -> Start game**,
-keep foreground, then **Stop game** and share the log/result. Firmware/disc
-persist. Full120 diagnostics optional; audio/gamepad controls pending.
-Historical checkpoints follow.
+Build131 reaches Midnight Club LA's Press START screen on A15/iOS16. The user
+reports no crash or hang; the log confirms 2151 accepted presents and complete
+GPU/CPU shutdown after Stop game. Upload batches reuse completed ring space.
+
+Build132 adds an iOS player-one controller, an on-screen START button, D-pad,
+SELECT and four face buttons. A connected iOS extended gamepad also supplies
+sticks, face/shoulder/trigger/stick buttons, Menu/Options -> PS3 START and
+Share/secondary menu -> SELECT. The touch controls remain available. Input and
+native focus clear before stopping, on focus loss, and after session completion.
+Rendering/JIT/memory settings retain the verified Build131 behavior; audio is
+still null. Host tests exercise the native standard cellPad packet path; real
+phone controls and progression beyond Press START await this build's test.
+
+Install `ARMSX3_iOS16_INSTALL_THIS_IPA`, **Quick start -> Start game**, then tap
+**START** once the game asks. Use arrows and **× / ○** to navigate. Finish with
+**Stop game** and share the result/log. Firmware and the imported disc persist;
+full120 diagnostics are optional. Historical checkpoints follow.
 
 # ARMSX3 for iOS 16 — P0 port checkpoint
 

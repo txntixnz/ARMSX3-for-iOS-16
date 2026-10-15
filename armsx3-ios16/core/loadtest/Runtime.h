@@ -6,6 +6,7 @@
 namespace ios_runtime
 {
 void install_frontend();
+void set_input_focus(bool focused) noexcept;
 bool frontend_failed();
 bool core_failed();
 void drain_main_queue();

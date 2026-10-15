@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 #import <UIKit/UIKit.h>
+#import "GameInputController.h"
 #import <QuartzCore/CAMetalLayer.h>
 #import <Metal/Metal.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
@@ -152,6 +153,7 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
 @property(nonatomic,strong) RenderSurface* surface;
 @property(nonatomic,strong) UILabel* status;
 @property(nonatomic,strong) UIButton* stopGameButton;
+@property(nonatomic,strong) GameInputController* input;
 @property(nonatomic,copy) dispatch_block_t stopAction;
 - (void)requestGameStop;
 @end
@@ -171,18 +173,24 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
     self.status.textColor = UIColor.whiteColor;
     self.status.numberOfLines = 0;
     self.status.textAlignment = NSTextAlignmentCenter;
-    self.status.text = @"Game session · tap Stop game when finished";
+    self.status.text = @"Press START · use arrows and × / ○ in menus";
     [self.view addSubview:self.status];
     self.stopGameButton = [UIButton buttonWithType:UIButtonTypeSystem];
     [self.stopGameButton setTitle:@"Stop game" forState:UIControlStateNormal];
     [self.stopGameButton setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
     [self.stopGameButton addTarget:self action:@selector(requestGameStop) forControlEvents:UIControlEventTouchUpInside];
     [self.view addSubview:self.stopGameButton];
+    [self.view addSubview:self.input.touchControls];
 }
 - (void)requestGameStop {
+    [self.input stop];
     self.stopGameButton.enabled = NO;
     self.status.text = @"Stopping game… waiting for cleanup";
     if (self.stopAction) self.stopAction();
+}
+- (void)viewDidDisappear:(BOOL)animated {
+    [super viewDidDisappear:animated];
+    [self.input stop];
 }
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
@@ -193,6 +201,9 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
     ((CAMetalLayer*)self.surface.layer).drawableSize = CGSizeMake(1280,720);
     self.status.frame = CGRectMake(area.origin.x + 12,CGRectGetMaxY(area) - 72,MAX(1,area.size.width - 148),70);
     self.stopGameButton.frame = CGRectMake(CGRectGetMaxX(area) - 128,CGRectGetMaxY(area) - 64,116,54);
+    const CGFloat controlsWidth = MIN(620,MAX(1,area.size.width - 24));
+    self.input.touchControls.frame = CGRectMake(CGRectGetMidX(area) - controlsWidth/2,
+        CGRectGetMaxY(area) - 176,controlsWidth,96);
 }
 @end
 
@@ -510,6 +521,9 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
     if (self.running || self.intakeBusy || self.failed || (!self.foundationReady && self.nextStage != stageCount) || !self.coreHandle) return;
     auto action = reinterpret_cast<int (*)(void*,unsigned,unsigned,int (*)(void*),void*,char*,size_t)>(dlsym(self.coreHandle,"armsx3_core_render_session"));
     if (!action) { [self showLogMessage:@"Rendering unavailable" detail:@"The native rendering function is missing."]; return; }
+    auto stateWriter = reinterpret_cast<ios_input::StateWriter>(dlsym(self.coreHandle,"armsx3_core_set_pad_state"));
+    auto enableWriter = reinterpret_cast<ios_input::EnableWriter>(dlsym(self.coreHandle,"armsx3_core_enable_pad"));
+    if (!stateWriter || !enableWriter) { [self showLogMessage:@"Input unavailable" detail:@"The player-one input functions are missing."]; return; }
     self.intakeBusy = YES; self.previousRunPending = NO;
     const BOOL previousIdle = UIApplication.sharedApplication.idleTimerDisabled;
     UIApplication.sharedApplication.idleTimerDisabled = YES;
@@ -520,11 +534,13 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
     self.output.text = self.transcript;
     self.progressLabel.text = @"Starting native Vulkan renderer…";
     RenderController* display = [[RenderController alloc] init];
+    display.input = [[GameInputController alloc] initWithStateWriter:stateWriter enableWriter:enableWriter];
     display.stopAction = ^{ renderStopRequested.store(true, std::memory_order_relaxed); };
     display.modalPresentationStyle = UIModalPresentationFullScreen;
     display.modalInPresentation = YES;
     self.renderController = display;
     [display loadViewIfNeeded];
+    [display.input start];
     void* layer = (__bridge void*)display.surface.layer;
     [self refreshControls];
     ARMSX3StartupLog("RENDER UI BEFORE native Vulkan game; UIKit retains CAMetalLayer through GPU/CPU cleanup");
@@ -535,6 +551,7 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
                 const int result = action(layer,1280,720,renderShouldStop,&renderStopRequested,buffer,sizeof(buffer));
                 NSString* detail = [NSString stringWithUTF8String:buffer] ?: @"Renderer returned no detail.";
                 dispatch_async(dispatch_get_main_queue(), ^{
+                    [display.input stop];
                     self.intakeBusy = NO;
                     UIApplication.sharedApplication.idleTimerDisabled = previousIdle;
                     self.failed = result == -2;

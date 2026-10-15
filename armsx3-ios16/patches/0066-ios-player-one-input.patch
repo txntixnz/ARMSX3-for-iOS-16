@@ -1,0 +1,143 @@
+diff --git a/rpcs3/Emu/Io/pad_config_types.h b/rpcs3/Emu/Io/pad_config_types.h
+--- a/rpcs3/Emu/Io/pad_config_types.h
++++ b/rpcs3/Emu/Io/pad_config_types.h
+@@ -1,6 +1,9 @@
+ #pragma once
+ 
+ #include "util/types.hpp"
++#ifdef __APPLE__
++#include <TargetConditionals.h>
++#endif
+ 
+ enum class pad_handler
+ {
+@@ -24,6 +27,9 @@
+ #ifdef __ANDROID__
+ 	virtual_pad,
+ #endif
++#if defined(__APPLE__) && TARGET_OS_IPHONE
++	ios,
++#endif
+ };
+ 
+ enum class mouse_movement_mode : s32
+diff --git a/rpcs3/Emu/Io/pad_config_types.cpp b/rpcs3/Emu/Io/pad_config_types.cpp
+--- a/rpcs3/Emu/Io/pad_config_types.cpp
++++ b/rpcs3/Emu/Io/pad_config_types.cpp
+@@ -9,6 +9,9 @@
+ 		switch (value)
+ 		{
+ 		case pad_handler::null: return "Null";
++#if defined(__APPLE__) && TARGET_OS_IPHONE
++		case pad_handler::ios: return "iOS Player 1";
++#endif
+ 		case pad_handler::keyboard: return "Keyboard";
+ 		case pad_handler::ds3: return "DualShock 3";
+ 		case pad_handler::ds4: return "DualShock 4";
+diff --git a/rpcs3/Input/pad_thread.cpp b/rpcs3/Input/pad_thread.cpp
+--- a/rpcs3/Input/pad_thread.cpp
++++ b/rpcs3/Input/pad_thread.cpp
+@@ -1,6 +1,9 @@
+ #include "stdafx.h"
+ #include "pad_thread.h"
+ #include "product_info.h"
++#ifdef ARMSX3_IOS
++#include "ios_pad_handler.h"
++#endif
+ #ifndef ARMSX3_IOS
+ #include "ds3_pad_handler.h"
+ #include "ds4_pad_handler.h"
+@@ -159,6 +162,15 @@
+ 	{
+ 		input_log.notice("Reloaded empty pad config");
+ 	}
++
++#ifdef ARMSX3_IOS
++	// The iOS frontend supplies one combined touch/GameController player. Keep
++	// other ports disconnected; do not write over the user's saved pad profiles.
++	for (usz i = 0; i < g_cfg_input.player.size(); i++)
++	{
++		g_cfg_input.player[i]->handler.set(i == 0 ? pad_handler::ios : pad_handler::null);
++	}
++#endif
+ 
+ 	input_log.trace("Using pad config:\n%s", g_cfg_input);
+ 
+@@ -942,6 +954,10 @@
+ 	{
+ 	case pad_handler::null:
+ 		return std::make_shared<NullPadHandler>();
++#ifdef ARMSX3_IOS
++	case pad_handler::ios:
++		return std::make_shared<ios_pad_handler>();
++#endif
+ 	case pad_handler::keyboard:
+ #if defined(ANDROID) || defined(ARMSX3_IOS)
+ 		return std::make_shared<NullPadHandler>();
+diff --git a/rpcs3/Input/ios_pad_handler.h b/rpcs3/Input/ios_pad_handler.h
+new file mode 100644
+--- /dev/null
++++ b/rpcs3/Input/ios_pad_handler.h
+@@ -0,0 +1,62 @@
++// SPDX-License-Identifier: GPL-2.0-only
++#pragma once
++#include "Emu/Io/PadHandler.h"
++#include "pad_thread.h"
++#include <cstdint>
++#include <mutex>
++
++// One atomic snapshot: PS3 digital1/digital2 bytes, then LX/LY/RX/RY bytes.
++// The frontend owns no Pad pointers. This is safe during startup and teardown.
++extern "C" std::uint64_t armsx3_ios_pad_state() noexcept;
++
++class ios_pad_handler final : public PadHandlerBase
++{
++	std::shared_ptr<Pad> m_pad;
++public:
++	ios_pad_handler() : PadHandlerBase(pad_handler::ios)
++	{
++		b_has_pressure_intensity_button = false;
++	}
++	void init_config(cfg_pad* cfg) override
++	{
++		if (cfg) cfg->from_default();
++	}
++	std::vector<pad_list_entry> list_devices() override
++	{
++		return {pad_list_entry("iOS Player 1", false)};
++	}
++	bool bindPadToDevice(std::shared_ptr<Pad> pad) override
++	{
++		// Called by pad_thread::Init under g_pad_mutex.
++		if (!pad || pad->m_player_id != 0 || m_pad) return false;
++		pad->Init(CELL_PAD_STATUS_CONNECTED | CELL_PAD_STATUS_ASSIGN_CHANGES,
++			CELL_PAD_CAPABILITY_PS3_CONFORMITY | CELL_PAD_CAPABILITY_PRESS_MODE | CELL_PAD_CAPABILITY_HP_ANALOG_STICK,
++			CELL_PAD_DEV_TYPE_STANDARD, CELL_PAD_PCLASS_TYPE_STANDARD, 0, 0x054c, 0x0268, 100);
++		for (u32 offset : {CELL_PAD_BTN_OFFSET_DIGITAL1, CELL_PAD_BTN_OFFSET_DIGITAL2})
++		{
++			for (u32 bit = 0; bit < 8; bit++)
++				pad->m_buttons.emplace_back(offset, std::vector<std::set<u32>>{}, 1u << bit);
++		}
++		constexpr u32 offsets[] = {CELL_PAD_BTN_OFFSET_ANALOG_LEFT_X, CELL_PAD_BTN_OFFSET_ANALOG_LEFT_Y,
++			CELL_PAD_BTN_OFFSET_ANALOG_RIGHT_X, CELL_PAD_BTN_OFFSET_ANALOG_RIGHT_Y};
++		for (usz i = 0; i < pad->m_sticks.size(); i++)
++			pad->m_sticks[i].m_offset = offsets[i];
++		m_pad = std::move(pad);
++		connected_devices = 1; // Touch controls keep player one connected even without a physical pad.
++		return true;
++	}
++	void process() override
++	{
++		std::lock_guard lock(pad::g_pad_mutex);
++		if (!m_pad) return;
++		const std::uint64_t state = armsx3_ios_pad_state();
++		for (usz i = 0; i < m_pad->m_buttons.size(); i++)
++		{
++			auto& button = m_pad->m_buttons[i];
++			button.m_pressed = (state & (std::uint64_t{1} << i)) != 0;
++			button.m_value = button.m_pressed ? 255 : 0;
++		}
++		for (usz i = 0; i < m_pad->m_sticks.size(); i++)
++			m_pad->m_sticks[i].m_value = (state >> (16 + 8 * i)) & 255;
++	}
++};

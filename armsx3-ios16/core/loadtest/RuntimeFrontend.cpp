@@ -25,8 +25,11 @@
 #include <filesystem>
 #include <stdexcept>
 
+extern atomic_t<bool> g_game_window_focused;
+
 namespace ios_runtime
 {
+void set_input_focus(bool focused) noexcept { g_game_window_focused = focused; }
 void dispatch_main(std::function<void()> operation, atomic_t<u32>* wake_up);
 namespace
 {
@@ -110,7 +113,7 @@ void install_frontend()
         ensure(g_fxo->init<MouseHandlerBase, NullMouseHandler>(Emu.DeserialManager()));
     };
     g_emu_callbacks.init_pad_handler = [](std::string_view title) {
-        log("RUNTIME frontend: native pad thread (iOS null handlers)");
+        log("RUNTIME frontend: native pad thread (iOS touch/GameController player one)");
         ensure(g_fxo->init<named_thread<pad_thread>>(nullptr, nullptr, title));
     };
     g_emu_callbacks.update_emu_settings = [] {};

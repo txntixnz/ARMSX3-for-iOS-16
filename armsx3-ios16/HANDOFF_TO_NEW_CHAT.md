@@ -4438,3 +4438,77 @@ loading progress, Stop game, send result/log. Firmware and game persist; no full
 diagnostics/reimport required. Audio/input pending. Concise English, no generated
 images. native131-validation contains all65 patches; native130-validation also
 now contains these latest changes despite its historical directory name.
+
+
+## Build132 — verified Build131 menu/Stop; player-one START and menu input (2026-10-15)
+
+User: “Didn’t crash didn’t hang up reached the ‘main main menu’. Couldn’t proceed
+further because the game requested me to press START”. Treat this as user-verified
+Press START/menu presentation, not proof of gameplay or navigation past START.
+Read local attachment directly, no Library lookup:
+/workspace/scratch/8dcd4680dd95/upload/ARMSX3-startup-20261015-201829-418-35679.txt
+Library ID libfile_285ca60c29d88191a417566200e23958. Build131/PID35679.
+
+Build131 evidence: running1792095415.212071 with40 accepted presents;2134 at
+5485.306598. Seven upload batches at5487.936244..5488.666678, each32-36MiB,
+pending0K afterward. No ring growth/fatal/OOM. User Stop5502.346595;28PPU+6SPU
+contexts joined, execution capture11.5B estimated instructions/1,927,291 HLE
+calls; CPU/FXO/VM destruction markers all finish by5506.2933. Native stopped
+callback5506.2947, fully stopped zero liveCPU5506.2966. RENDER/UI PASS and2151
+accepted presents. Prior rendering/loading/shutdown issue now phone-verified.
+
+Build132 implementation:
+- Patch0066-ios-player-one-input.patch adds an iOS-only pad_handler::ios at the
+  END of the enum; TargetConditionals guards match in header and formatter.
+  Important: ARMSX3_IOS compile definition is only set for the core dylib, not
+  rpcs3_emu, so it MUST NOT guard an enum shared by those translation units.
+- Native pad_thread overrides its loaded in-memory handler selection to iOS for
+  player0, null for other6 ports. Saved profiles are not written. New header
+  ios_pad_handler binds a standard Sony054c/0268 pad, reports connected+assign
+  changes,16 digital buttons/four centered sticks, PS3/pressure/high-precision
+  stick capabilities, no rumble/sensors. It polls one atomic snapshot under
+  pad::g_pad_mutex, then uses native copilot publication and cellPadGetData.
+- PadInput.h and RuntimeInput.cpp pack digital1/digital2 and LX/LY/RX/RY bytes in
+  one lock-free64-bit atomic, with a session enable bit. Disable clears the state;
+  CAS writers cannot republish after disable. Fresh sessions start neutral.
+- GameInputController.mm owns on-screen arrows, START/SELECT and square,
+  triangle,cross,circle buttons. TouchDown/DragEnter hold; UpInside/UpOutside/
+  Cancel/DragExit release. Physical iOS GameController extended profile supplies
+  all16 buttons and two sticks, Y inverted and0.12 deadzone. Menu (DS4 Options)
+  maps START; secondary Options (DS4 Share) maps SELECT. Digital trigger pressure
+  is0/255; analog trigger/motion/rumble fidelity is not implemented.
+- Main-queue callbacks merge physical and touch buttons. One physical controller
+  selected, connect/disconnect observed; old handlers detached, weak ownership
+  plus active/current-pad checks discard stale callbacks. Disconnect returns to
+  touch state with centered sticks. System gestures disabled for menu/options
+  during this app's input ownership. On-screen controls stay visible.
+- RuntimeFrontend::set_input_focus updates native g_game_window_focused atomically
+  when input is enabled/disabled. Native is_input_allowed otherwise depends on
+  this or saved background_input_enabled. Do not rely only on its true default.
+- App resolves two new input exports, enables before presenting the renderer,
+  clears/disables before Stop cancellation, on resign-active via existing Stop,
+  on view disappearance and on all result paths including incomplete cleanup.
+  Rendering/JIT/memory policy is unchanged from131. Audio remains null.
+- CMake builds RuntimeInput.cpp in the dylib, GameInputController.mm in the app,
+  links GameController framework only to the app. Info/fixture version132.
+
+Validation: all66 patches apply from exact92b931b9fb5eef7f1317cb482917dfc19aceebd9.
+New test_ios_pad_input.py reconstructs affected native files with all patches,
+compiles exact handler, Pad/Button/Stick types, native copilot copying and standard
+pad_get_data body with production atomic bridge under ASAN+UBSAN. All16 independent
+press/release packets, held/no-change packets, pressure mode, neutral/inverted axes,
+wrong-port/duplicate binding rejection, stop/focus/disconnect state,64 resets,
+100000 concurrent alternating snapshots and racing writers after disable pass.
+FXO/config/clock/logging/endian storage/PadHandlerBase are host interfaces; UIKit
+and physical GameController are source contracts, pending iOS compilation/device.
+Production runtime/frontend lifecycle regression and frozen CoreBridge/120 stages/
+four Quick start foundation/session ABI fixtures pass. Workflow runs new input
+regression in intake job;34+2 prerequisites retained. No full iOS SDK locally.
+
+Parent main e275027ed3343def02fe39ebfa92610019526b25. User already authorizes main
+publication/builds. Publish with expected-parent lease; check one queued run, do
+NOT monitor. Next phone test: install ARMSX3_iOS16_INSTALL_THIS_IPA, Quick start ->
+Start game, wait for Press START, tap the visible START (hold briefly if needed),
+then arrows/cross/circle or connected controller. Stop game and share log/result.
+No reimport/full diagnostics required. No sub-agents. Concise English, no images.
+native132-validation has all66; native131-validation also now has66 despite name.
