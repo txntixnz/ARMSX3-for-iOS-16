@@ -1,35 +1,36 @@
-# Current checkpoint — Build136
+# Current checkpoint — Build137
 
-Build135 completed a clean phone session and Stop with2138 accepted presents.
-The21 slow timing windows averaged2.01FPS over216.68seconds. The RSX thread
-spent71.0% of that wall time waiting on an empty command FIFO and9.0% waiting
-on fences. This points toward CPU command production/synchronization as the
-main next target. It does not identify which PPU/SPU thread is responsible.
+Build136 completed a clean phone session and Stop with2352 accepted presents.
+The22 slow windows averaged1.78FPS over225.26seconds, with66.8% of RSX wall time
+waiting on an empty FIFO. Later kernel samples show about555% sampled live CPU
+usage (100%=one core). Three SPU workers use roughly96–98% each; the RSX thread
+still consumes about70% of a core on average. This indicates CPU contention even
+while the renderer waits for commands. Runs differ, so these are not controlled
+before/after FPS measurements.
 
-Build136 caches the bounded-diagnostic probe pointer once per PPU dispatch
-invocation, removing repeated Darwin TLS resolution from that interpreter loop.
-Nested callbacks retain their own probe and restore the caller's probe. Existing
-instruction budgets, state/Stop checks and the static decoder remain intact.
-This is a limited optimization; actual FPS improvement requires a phone test.
+Build137 preserves the initial8 empty-FIFO hot polls, then uses the native
+interruptible timed wait with a requested100-microsecond duration. GET remains
+published before waiting; the next poll checks for commands normally. The sleep
+is timed because guest PUT writes do not notify this wait. Actual wake latency
+depends on iOS scheduling and may exceed the requested duration.
 
-Every render heartbeat now also samples kernel thread CPU times, reporting the
-eight busiest live threads, with user/system percentages.100% means one CPU
-core. Kernel thread IDs prevent port-name reuse from corrupting the comparison.
-The sampler creates no extra thread and reads no live guest registers/memory.
-It releases all acquired Mach rights/arrays, including partial failures, and
-observation failures leave the game running. Longer iOS thread names preserve
-the guest thread identity in these reports. RSX timing remains enabled.
+After parking, the outer loop services local tasks, ZCULL and host DMA on its
+next iteration. This prevents the usual64-poll service interval from becoming
+a millisecond-scale maintenance delay. macOS/Android/x86 wait policies are
+unchanged. This change aims to reduce idle renderer CPU contention; its effect
+on phone FPS remains unmeasured. Both existing timing reports remain active.
 
-Host checks pass for production CPU accounting and snapshot cleanup, exact PPU
-dispatch with two workers/nested probes/Stop/exception recovery, the historical
-P55 caller/callee/stack fixture, runtime cleanup, and RSX timing. Apple SDK
-compilation and actual performance remain pending Actions and the next phone run.
-Graphics/input/texture policies remain as in the working build; audio remains null.
+Host checks pass for the exact native FIFO wait case and outer poll loop:
+GET publication, hot polls, repeated parking, command arrival, fresh hot windows,
+Stop/pause, and next-poll maintenance. All71 patches apply. Runtime, RSX timing,
+CPU sampling and the frozen120-stage/Quickstart contracts also pass. Apple SDK
+compilation and real device performance remain pending the next test.
 
 Install `ARMSX3_iOS16_INSTALL_THIS_IPA`, **Quick start -> Start game**, and try the
 same menu/car sequence for about60seconds. Finish with **Stop game** and share
-the log and responsiveness. Imported firmware/disc/cache persist. Full120
-checks are optional. Historical checkpoints follow.
+the log and responsiveness. Imported firmware/disc/cache persist. Full120 checks
+are optional. Graphics/input/texture policies remain as before; audio remains null.
+Historical checkpoints follow.
 
 # ARMSX3 for iOS 16 — P0 port checkpoint
 

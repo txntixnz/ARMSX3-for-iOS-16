@@ -8837,3 +8837,98 @@ PPU enum supports only static and LLVM; SPU dynamic still has the missing Apple
 mutable-JIT boundary. Do not flip decoder blindly. Full recompiler performance
 will require implementing the real iOS JIT backend/LLVM build, not bypassing
 apple_jit_write_protect or pretending static is a recompiler. Driving unconfirmed.
+
+
+## Build137 — park sustained empty RSX FIFO on iOS
+
+Latest attachment read directly from upload:
+ARMSX3-startup-20261015-231031-944-37145.txt, PID37145, Build136.
+Parent mainc6a8658ec54bc32779e9e1565a10083c726fbeef; tree
+00ebbf9dbedb22c5e01bc285d91f4ad428537e36; installable run38819019886.
+
+Phone evidence:
+- Running1792105523.486214; user Stop5826.403588; final2352 accepted presents;
+  RSX final5826.888175; GPU idle5826.903573; device/instance5827.810685;
+  FXO5828.003297; VM5828.006490; fully stopped5828.010174; RENDER/UI PASS
+ 5828.012070/5828.023808. No fatal/crash or hung teardown.28PPU+6SPU contexts,
+ 22,784,884,733 estimated instructions/4,480,224 completed HLE/LV2 calls.
+-22 complete slow windows:400frames/225.26seconds =1.78FPS. Weighted RSX wall:
+  empty FIFO66.79%, fences10.84%, texcache lookup6.08%. Many late windows
+  empty FIFO~78–80%, frame time~570–595ms. Startup generally~30FPS.
+- Kernel sampling now works on the phone. Later29 snapshots (timestamp>=5680)
+  average555.1% sampled LIVE CPU usage;100%=one core. Main persistent consumers:
+  Primary SPURS Kernel2 and3 each98.2% CPU (97.5%user/0.7%system), Secondary
+  SPURS Kernel0 96.5%(95.8/0.7). RSX mean70.1%(69.3/0.7), often75–85% in late
+  samples. Other SPUs30–65%, guest render thread~13–16%, audio engine~14–16%.
+  SPU interpretation dominates CPU consumption; RSX is also consuming a large
+  fraction of a core despite spending most frame time in an empty-FIFO wait.
+-259 upload batches/about8.25GiB in~303seconds. No controlled playback comparison;
+  do not infer a PPU-cache regression merely from1.78 vs previous2.01FPS.
+
+Native source finding:
+- RSXFIFO.cpp EMPTY case always sync_get_force()s before idling, initializes an
+ 8-poll hot window on running->empty, then ARM uses has_wfe_event_stream() to
+  choose WFE or yield. util/sysinfo.cpp returns TRUE for non-Linux, including
+  Apple, WITHOUT a measured capability probe. The iOS path was therefore using
+  the ARM WFE shape, not necessarily sched_yield. Do not mislabel its observed
+  high USER CPU time as kernel yield overhead. We have direct CPU/wall evidence
+  it is still an expensive wait on this phone, without proving exact WFE behavior.
+- Upstream comments discuss50us sleeps previously reverted after Android affinity/
+  reservation changes left cores idle. That evidence does not match this A15
+  run:~5.55core-equivalents busy across a six-core CPU. Keep non-iOS paths intact.
+
+Patch0071-ios-park-idle-rsx-fifo.patch:
+- iOS-only branch retains initial8pause() polls. On sustained FIFO_EMPTY use
+  native thread_ctrl::wait_for(100), default alert=true. PUT stores do NOT notify
+  that wait, hence timed100us request rather than indefinite park. No WFE event
+  stream assumption on this branch. Scheduler may wake later than100us; actual
+  latency/frame pacing must be measured on phone.
+- Native sync_get_force publication, FIFO reread, command flow/state transitions,
+  thread Stop/pause/interrupt checks, shaders, texture policy, decoder and input
+  remain intact. No extra sleeping for already available commands. Native busy,
+  NOP, jump-to-self and guest semaphore paths are not modified.
+- Set RSX-owned m_cycles_counter=0 after parking. Only its outer-loop64-poll
+  maintenance cadence uses this field. Next iteration therefore services native
+  do_local_task/ZCULL/host DMA before reading again; otherwise100us*64 would
+  add~6.4ms requested delay to periodic servicing. Stop/pause remains first.
+- Existing idle_fifo scope encloses the wait. begin_ios_timing log identifies
+  “empty FIFO wait=100us after 8 hot polls”; RSX wall and kernel CPU reports stay
+  enabled so next log can compare idle CPU reduction and actual frame progress.
+- No new ABI/source/helper dependencies; RSXFIFO.cpp includes the patched profiler
+  header providing TargetConditionals. m_cycles_counter is accessed by its own
+  member function. Current wait implementation/backend already compiles in core.
+
+Validation completed:
+- All71 patches apply to exact92b931b9fb5eef7f1317cb482917dfc19aceebd9;
+  native137-validation has71; native136-validation has70. Native whitespace clean.
+- New test_ios_fifo_idle.py reconstructs exact native RSXFIFO prefix through
+  EMPTY/NOP and exact complete outer while(!test_stopped()) loop, with explicit
+  FIFO/clock/wait/state/subunit interfaces. ASAN+UBSAN, warnings as errors.
+  Four compile profiles: iOS ARM64, macOS ARM64, non-Apple ARM64, non-ARM.
+  Pinned non-ARM code already has an unused-but-set ARM spin counter, so ONLY
+  that profile suppresses that inherited warning; all iOS/ARM checks retain it.
+-300idle polls: GET published each time,8hot polls then291timed parks on iOS;
+  zero iOS WFE/yield. Command injected during a wait is consumed once on the next
+  poll; subsequent drain gets8fresh hot polls. Stop injected during park exits
+  before another FIFO read; external pause uses native exit path. NOP transitions
+  remain native. Every park followed by another running iteration gets native
+  local-task/ZCULL/DMA service on THAT iteration, with matching service counts.
+- Non-iOS ARM retains WFE when capability=true and yield when=false; non-ARM
+  retains yield and zero new timed waits. Host wait duration is modeled; this
+  does not establish real Mach/iOS wake precision or CPU/FPS improvements.
+- Production runtime/frontend/BootGame/JIT-finalizer/Stop regression passes,
+  isolated RSX timing and complete kernel CPU collector regression pass, frozen
+  bridge/120stages/four Quickstart/Build137 fixture passes. Scripts parse.
+- Workflow adds FIFO regression;34+2 prerequisites unchanged. No agents/images.
+  No SPU profiling overhead, decoder change, recompiler enablement, GPU quality
+  change or arbitrary clock/scheduler tuning added. Real FPS remains untested.
+
+Next publish137 with leasec6a8658..., verify installable workflow queued ONCE,
+DO NOT monitor. User authorizes publication/builds. Install
+ARMSX3_iOS16_INSTALL_THIS_IPA, Quick start -> Start game, same menu/car sequence
+about60seconds, Stop, share log/responsiveness. Compare rsx::thread CPU vs its
+FIFO idle wall time and frame count, and SPU CPU usage. Static SPU may still be
+real-work-bound or spinning in guest loops; utilization alone cannot distinguish
+those. If lag persists, investigate SPU work using owner-thread-safe evidence
+and/or real iOS recompiler implementation. Do not enable native live guest sampler
+or bypass the missing mutable-JIT boundary. Driving remains unconfirmed.

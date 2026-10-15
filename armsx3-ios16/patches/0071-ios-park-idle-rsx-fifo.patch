@@ -1,0 +1,40 @@
+--- a/rpcs3/Emu/RSX/RSXFIFO.cpp
++++ b/rpcs3/Emu/RSX/RSXFIFO.cpp
+@@ -811,7 +811,25 @@
+ 					// had to walk it back (832c23078) when the wake latency cost frametime smoothness.
+ 					RSX_PROF_SCOPE(idle_fifo);
+ 
+-#if defined(ARCH_ARM64)
++#if defined(__APPLE__) && TARGET_OS_IOS
++					// On A15 the empty-FIFO poller still consumes most of a core
++					// while SPU interpreters saturate the other cores. Preserve the
++					// short hot window, then use the native interruptible wait.
++					// PUT writes do not signal this wait, so keep it short and timed.
++					if (s_fifo_idle_spins < 8)
++					{
++						s_fifo_idle_spins++;
++						utils::pause();
++					}
++					else
++					{
++						thread_ctrl::wait_for(100);
++						// The outer loop normally services sub-units every64 polls.
++						// Timed waits must not stretch that into a millisecond-scale
++						// maintenance delay. Service them on the very next iteration.
++						m_cycles_counter = 0;
++					}
++#elif defined(ARCH_ARM64)
+ 					if (s_fifo_idle_spins < 8)
+ 					{
+ 						s_fifo_idle_spins++;
+--- a/rpcs3/Emu/RSX/rsx_profiler.cpp
++++ b/rpcs3/Emu/RSX/rsx_profiler.cpp
+@@ -749,7 +749,7 @@
+ 		g_last_switch = g_acc.window_start;
+ 		g_current = bucket::unclassified;
+ 		g_ios_timing_owner.store(current_thread_token(), std::memory_order_relaxed);
+-		prof_log.success("iOS RSX timing started; exclusive wall time only; guest sampler disabled");
++		prof_log.success("iOS RSX timing started; exclusive wall time only; guest sampler disabled; empty FIFO wait=100us after 8 hot polls");
+ 	}
+ 
+ 	void report_ios_timing(bool finishing)
