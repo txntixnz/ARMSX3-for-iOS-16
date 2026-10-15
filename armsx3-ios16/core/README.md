@@ -1,6 +1,25 @@
-# ARMSX3 iOS 16 core — Build 121
+# ARMSX3 iOS 16 core — Build 122
 
 Target: iPhone 13 Pro Max/A15, iOS 16.0, Dopamine and TrollStore.
+
+Build121 passed all 36 host jobs, compiled the full native Vulkan core and UIKit
+app, and verified 522 arm64 iPhoneOS archive objects with minimum OS <=16.0.
+The final dylib link then found one unresolved native function:
+capture_presented_frame's non-Android fallback still had six arguments, while its
+public header and VKPresent caller used eight. Build122 patch0056 corrects only
+that existing fallback signature. Its disabled return behavior and Android
+implementation remain unchanged. The full iOS link/package and phone presentation
+are pending; use Build122 for the next Render game (10 seconds) test.
+
+The new graphics-host regression compiles the entire native non-Android
+VKFrameGen.cpp and unchanged public header with real Vulkan ABI types and explicit
+unused RSX/config include interfaces. A separate consumer retains the exact native
+VKPresent capture call and exercises all frame-generation fallback APIs. It
+reproduces Build121's undefined eight-argument function at link, then links and
+runs the corrected iOS/macOS/Linux branches under ASAN+UBSAN. This test is an ABI
+and disabled-path check; it submits no GPU work. First55 patches remain unchanged;
+56 patches total. Native Vulkan rendering remains enabled and frame generation
+remains off.
 
 Build120 passed all 36 host jobs but failed the native iOS archive compile.
 The renderer referenced five frame-generation settings that upstream declared
@@ -8,8 +27,8 @@ only under __ANDROID__. This caused 83 missing-member errors across swapchain,
 presentation and frame-generation translation units. Build121 adds patch0055:
 explicit Apple platform detection and iOS visibility for that exact settings
 block. The production render action still forces frame generation off. Native
-Vulkan rendering remains enabled; the full iOS compile/link and phone presentation
-are pending. Use Build121 for the next Render game (10 seconds) test.
+Vulkan rendering remains enabled. Build121 subsequently passed iOS compilation;
+Build122 corrects the final link failure described above.
 
 The regression compiles the complete native system_config.h and
 system_config_types.h plus actual FrameGenConfig helpers against modeled config
@@ -139,13 +158,14 @@ observation and the iOS RSX startup/stop guard, plus patch0052 for static SPU
 startup and patch0053 for static SPU thread entry, plus patch0054 for the native
 Vulkan importer, optional Apple portability policy, borrowed iOS layer and present
 observer plus patch0055 for iOS visibility of shared Vulkan configuration settings
-(55 patches total).
+plus patch0056 for the non-Android frame-generation capture signature
+(56 patches total).
 34 synchronization host profiles plus the intake and graphics host checks gate the iOS
 compile, full link, signed bundle validation and one installable IPA. Matching
 core symbols and build logs remain available as separate artifacts.
 Build113's workflow produced the tested installable IPA. The historical patch
 validator remains scoped to its exact first 49 patches while preparation applies
-all 55. The host job also checks native PSF parsing and complete game
+all 56. The host job also checks native PSF parsing and complete game
 import. Local sanitizer
 checks use `ASAN_OPTIONS=detect_leaks=0` because LeakSanitizer cannot inspect
 processes in this environment.

@@ -3883,3 +3883,55 @@ One queued check permitted; do not monitor new Actions run after publication.
 After successful CI install ARMSX3_iOS16_INSTALL_THIS_IPA, run120 tests, tap Render
 game (10 seconds), keep app open and share log + what appeared. No images and
 concise English replies. Audio/controls pending; meaningful pixels/FPS unverified.
+
+
+## Build122 — 2026-10-15: correct non-Android frame-generation fallback ABI
+
+User reported Build121 failed. Actions38728549593 / native job116400862689:
+all36 host jobs passed; the full rpcs3_emu archive INCLUDING native Vulkan built,
+and verify-archive passed522 arm64 iPhoneOS objects/minOS<=16.0. Production Runtime,
+RuntimeFrontend, RuntimeFrame and ObjC++ App.mm all compiled. Final ARMSX3Core dylib
+link failed on exactly one unresolved symbol: vk::frame_gen::capture_presented_frame
+with command_buffer/render_device/VkImage/VkImageLayout/four u32 arguments, called
+by VKPresent.cpp. Its public header and actual caller have8 arguments; upstream's
+non-Android fallback definition still had6. No IPA and no new phone renderer result.
+
+Patch0056 changes only that existing native fallback signature from6 to8 args.
+It continues returning false off Android, as the native header explicitly promises;
+no fabricated renderer implementation or ignored undefined symbol was added.
+Native Android frame-generation implementation is byte-for-byte unchanged. The
+first55 patches, cfg visibility fix0055, native Vulkan backend, GPU library pin,
+UIKit layer ownership, Runtime render configuration/action and full undefined-error
+link policy are unchanged.56 patches total. iOS frame generation remains off.
+
+New tests/test_framegen_link.py reconstructs pinned native VKFrameGen.cpp/.h and
+VKPresent.cpp through exact first55+56; reverse checks56 and proves only the fallback
+arity changes. It compiles the FULL native non-Android VKFrameGen.cpp and unchanged
+public header against REAL Vulkan ABI headers. Only unused config/RSX/timer include
+seams and empty command/device interfaces are modeled. Separate caller TU retains
+the EXACT native VKPresent capture call, including its four dimensions, and exercises
+all public fallback APIs/shared_image operations. Old code compiles but fails linking
+on the exact eight-argument symbol; corrected iOS/macOS/Linux profiles compile/link/
+execute under ASAN+UBSAN, returning disabled/empty as promised. No GPU work in this
+ABI test. Graphics-host now checks out the pinned native source and runs it after
+the existing real Vulkan regression; job count/prerequisite graph stays34+2.
+The test fixture scopes itself to first56; config regression now scopes to first55.
+
+Local validation: exact workflow intake-host step passes; fresh build122-validation
+executes exact core preparation, frozen historical first49/registries, all56 patches
+and overlays. Native framegen link regression passes, actual config regression
+retained. Production graphics-device/check still passes14 real lavapipe/validation
+process cases. AST/YAML/plist/source freeze checks pass. No local iOS SDK; the FINAL
+full iOS dylib/app link, packaging and phone Metal presentation remain pending.
+Build121 proves real native archive and new frontend/app compilation; do not keep
+claiming native iOS compile is wholly untested, and do not claim final link passed.
+
+Repo main parent06c5a296d1948999e1efd85bad22b0bd5f866ea6 (Build121), parent tree
+14808b7e4ad274f04733c361c5a3ed59fd08bd85. Build122 plist/fixture/README updated;
+both independent handoffs appended. Publish via Git data API expected-head lease,
+verify identical tree, sync local branch. One queued run check allowed; DO NOT
+monitor after publication. User reports completion/failure. Once IPA builds:
+install ARMSX3_iOS16_INSTALL_THIS_IPA in TrollStore, run120 tests, then Render game
+(10 seconds), keep app foreground, share log and screen result. Retained firmware/
+disc should be reused. Audio/controls pending, meaningful game pixels/FPS unverified.
+Keep replies concise English and do not create images.

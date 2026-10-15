@@ -9,7 +9,7 @@ root=Path(__file__).resolve().parent.parent
 native=Path(sys.argv[1]).resolve();PIN='92b931b9fb5eef7f1317cb482917dfc19aceebd9'
 paths=['rpcs3/Emu/system_config.h','rpcs3/Emu/system_config_types.h',
  'rpcs3/Emu/RSX/VK/FrameGen/FrameGenConfig.h']
-patches=sorted((root/'patches').glob('*.patch'))
+patches=sorted(p for p in (root/'patches').glob('*.patch') if int(p.name[:4])<=55)
 assert [p.name[:4] for p in patches]==[f'{n:04d}' for n in range(1,56)]
 model=r'''
 #pragma once

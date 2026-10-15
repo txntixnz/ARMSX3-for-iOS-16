@@ -162,6 +162,13 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+      - name: Checkout pinned native source
+        uses: actions/checkout@v4
+        with:
+          repository: ARMSX2/ARMSX3
+          ref: 92b931b9fb5eef7f1317cb482917dfc19aceebd9
+          path: upstream-armsx3
+          submodules: false
       - name: Install software Vulkan and validation layers
         run: sudo apt-get update && sudo apt-get install -y libvulkan-dev mesa-vulkan-drivers vulkan-validationlayers
       - name: Verify GPU commands and failure lifecycles
@@ -173,6 +180,7 @@ jobs:
           export VK_ICD_FILENAMES="$(find /usr/share/vulkan/icd.d -name '*lvp*json' -print -quit)"
           test -n "$VK_ICD_FILENAMES"
           python3 armsx3-ios16/tests/test_graphics_device.py
+          python3 armsx3-ios16/tests/test_framegen_link.py upstream-armsx3
   core:
     needs: [synchronization-host, intake-host, graphics-host]
     name: Cross-compile real rpcs3_emu for iOS 16 arm64
