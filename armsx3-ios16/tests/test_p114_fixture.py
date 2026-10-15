@@ -1,4 +1,4 @@
-"""Build116 intake/runtime contracts, UI gating and prior-core freeze."""
+"""Build117 intake/runtime contracts, UI gating and prior-core freeze."""
 from pathlib import Path
 import hashlib,plistlib,re
 here=Path(__file__).resolve().parent
@@ -28,7 +28,7 @@ cmake=(here.parent/'core/loadtest/CMakeLists.txt').read_text()
 assert 'FrontendHooks.cpp Intake.cpp' in cmake and '-framework UniformTypeIdentifiers' in cmake
 assert 'Emu.BootGame(' not in intake and 'Emu.Run(' not in intake # inspection does not launch uncontrolled guest workers
 info=plistlib.loads((here.parent/'core/loadtest/Info.plist.in').read_bytes())
-assert info['CFBundleVersion']=='116' and info['MinimumOSVersion']=='16.0'
+assert info['CFBundleVersion']=='117' and info['MinimumOSVersion']=='16.0'
 workflow=(here.parent.parent/'.github/workflows/build-armsx3-ios16-core.yml').read_text()
 assert 'needs: [synchronization-host, intake-host]' in workflow
 assert len(re.findall(r'^\s+- script: test_p\d+_pair.py$',workflow,re.M))==34
@@ -48,8 +48,9 @@ assert 'self.failed = result == -2' in app and 'Runtime load check' in app
 assert 'python3 armsx3-ios16/tests/test_runtime.py upstream-armsx3' in workflow
 assert 'python3 armsx3-ios16/tests/test_jit_lifecycle.py upstream-armsx3' in workflow
 assert 'python3 armsx3-ios16/tests/test_spu_cache_startup.py upstream-armsx3' in workflow
+assert 'python3 armsx3-ios16/tests/test_spu_thread_entry.py upstream-armsx3' in workflow
 assert 'python3 armsx3-ios16/tests/test_game_import.py upstream-armsx3' in workflow
 for token in ['UTTypeFolder] asCopy:NO', 'NSFileCoordinator', 'armsx3_core_import_game', 'armsx3_core_check_game']:
  assert token in app,token
 assert 'GameImport.cpp' in cmake
-print('PASS: prior bridge freeze;120 ordered stages; native intake, load-only BootGame gates and explicit bounded guest start; scoped UIKit actions; Build116/iOS16;34+1 host dependencies')
+print('PASS: prior bridge freeze;120 ordered stages; native intake, load-only BootGame gates and explicit bounded guest start; scoped UIKit actions; Build117/iOS16;34+1 host dependencies')

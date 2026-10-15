@@ -7437,3 +7437,94 @@ patches, Apple/immutable JIT headers and production runtime/intake/import/bridge
 sources remain unchanged. The unchanged34 synchronization profiles are left to
 Actions rather than redundantly rerun locally. iOS compile/link/device result
 still pending. No Actions monitoring after publishing.
+
+
+## Build117 — static SPU thread entry protection (2026-10-15)
+
+Build116 device progress/crash: attached ARMSX3-startup-20261015-023410-566-29730.txt
+exports previous unfinished Game execution (3 seconds), PID29712. Matching
+ARMSX3CoreLoadTest-2026-10-15-043349.ips is Build116/PID29712, EXC_CRASH/SIGABRT,
+faulting thread39 SPU[0x0000200], core UUID ab8fffae-1487-3ced-af17-a9c447f1428d.
+All120 diagnostics passed, firmware installed, full19-file/5,668,431,532-byte
+Midnight Club: Los Angeles [BLUS30442], DG, imported and game load/cleanup passed.
+Run again passed title/segments/firmware/disc/SFO/EBOOT/carchive_audio.rpf checks.
+
+Patch0052 worked on phone: native running state was reached at1792031628.650217;
+heartbeat reported2liveCPUobjects. Guest firmware/game startup executed real
+syscalls, loaded libsre/libnet/libfs/libusbd, created PrimaryCellSpursKernelGroup
+with5SPUs and SecondaryCellSpursKernelGroup with1SPU, PPU SPURS handler threads,
+RAGE printf threads and event ports/queues. Later calls include cellGameBootCheck,
+cellGameGetParamString, cellGameContentPermit and cellSysutilRegisterCallback.
+This is real startup execution evidence beyond load readiness. Do not claim a
+completed window, joined instruction totals, menu, rendering or playable FPS.
+
+At1792031628.717593 six SPU threads hit the absent pthread_jit_write_protect_np
+boundary. The backtraces all enter spu_thread::cpu_task +0x28c33c. The .ips places
+spu_thread::cpu_task+1340 below an optimizer-shared cold abort block misleadingly
+named named_thread<Emulator::Load...>::trampoline cold.5; this is not the original
+loader thread failure. Actual native cpu_task begins with an unconditional Apple
+execute-mode call, even for static interpretation. There was no clean stop,
+joined capture or completed three-second result. The preceding eh_frame/unknown
+cellLibprof warnings are not the proven abort cause.
+
+Patch0053-ios-static-spu-thread-entry.patch adds an iOS-only condition around that
+one entry call: require it if jit is present OR configured decoder != _static.
+Static with no JIT uses native C++ interpretation and existing immutable gateways;
+it does not mutate code and needs no per-thread mutable-JIT protection transition.
+Any non-static decoder, including dynamic with jit==null, retains the real call.
+A static configuration with a JIT instance also retains the boundary. macOS still
+always calls the original protection API; Linux is unchanged. First52 patches,
+Apple/immutable JIT headers, production runtime/frontend/capture/intake/import/
+bridge and all120 diagnostics remain unchanged.53patches total.
+
+Audited static SPU continuation: cpu_task's no-jit loop calls g_interpreter then
+native old_interpreter via the existing immutable ARM gateway/heap dispatcher.
+old_interpreter contains no mutable-code protection call. Recompiler dispatch,
+branch patchpoints, LLVM and worker code keep their protection calls. PPU static
+execution already excludes its non-static-only guard. General fault-recovery
+Apple protection is untouched; do not disable the global boundary or conflate
+future memory faults with this entry-only abort. Forced-interpreter environment
+behavior is unchanged and is not used to broaden this exception.
+
+New test_spu_thread_entry.py reconstructs both native SPU files from pinned git
+92b931b9fb5eef7f1317cb482917dfc19aceebd9, applies the first52 scoped patches then0053.
+Removing0053's conditional restores all of prior SPUThread.cpp byte-for-byte.
+Compiles complete actual native spu_thread::cpu_task AND
+spu_recompiler_base::old_interpreter bodies with the actual Apple portability
+header/missing symbol. Original116 entry reproduces SIGABRT. Patched static iOS
+passes64entries:8cycles of six concurrent SPURS threads, plus raw and isolated
+pre-stopped entries. Native PC masking/interrupt setup, interpreter branch and
+advance loop, stop checks, interrupt-work flag cleanup, group cleanup and real
+immutable executable RX bytes are checked. The tiny instruction table handlers,
+CPU state/storage/group/logging/platform/JIT gateway interfaces are explicit host
+models; it is not a full native SPU ISA/scheduler or ARM gateway execution test.
+Dynamic/asmjit/LLVM and static-with-JIT iOS variants still abort at the missing
+API. macOS all5profiles retain64execute-mode protection calls; Linux all5profiles
+retain zero calls. macOS protection recording is serial to avoid a host recorder
+race; iOS/Linux six-thread groups run concurrently. ASAN+UBSAN/Wall/Wextra/Werror
+remain enabled with detect_leaks=0 for the host /proc restriction; intentional
+negative aborts disable core dumps. Existing runtime/JIT/cache/import checks stay.
+
+Workflow intake-host adds this new regression;34synchronization jobs and35total
+host dependencies remain. Metadata/Info.plist version117, README and both
+independent handoffs updated. Run exact clean pinned intake-host/core-preparation
+commands and all53patches before publishing. Actual iOS compile/link and the
+completed device execution window remain pending the workflow/phone.
+
+Next: install Build117 ARMSX3_iOS16_INSTALL_THIS_IPA via TrollStore, reopen and
+Run all120tests. Reuse firmware/disc if present, then Run game (3 seconds) and
+keep app open through automatic stop. Share startup log and matching .ips if
+crashed. Do not require another5.67GBimport unless the app reports it missing.
+Keep replies concise English, no images. Verify queued once after publishing;
+no Actions monitoring beyond that. User reports outcome.
+
+Build117 prepublication validation PASSED in fresh build117-validation clone:
+exact YAML intake-host (fixture/intake/runtime/JIT/cache/thread-entry/game-import)
+and core Apply iOS core patches steps both exited0 on pinned native source.
+All53patches applied;0053 reverse-check and all overlay byte comparisons passed
+(README refreshed after documentation edits). Python AST/YAML/plist/version117/
+workflow bash syntax and git diff --check passed. Prior52patches, Apple/immutable
+JIT headers and production app/runtime/frontend/capture/intake/import/bridge
+sources remain unchanged. Unchanged34synchronization profiles remain for Actions.
+Phone success and full iOS compile/link are still pending; no monitoring Actions
+after the single queued check at publication.

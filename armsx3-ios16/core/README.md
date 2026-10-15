@@ -1,4 +1,4 @@
-# ARMSX3 iOS 16 core — Build 116
+# ARMSX3 iOS 16 core — Build 117
 
 Target: iPhone 13 Pro Max/A15, iOS 16.0, Dopamine and TrollStore.
 The installable app links the actual pinned rpcs3_emu core. Build114 passed all
@@ -14,7 +14,11 @@ running state: the static interpreter entered an unavailable Apple mutable-code
 write-protection API. Build116 skips that guard only for static SPU initialization,
 which sets ordinary heap dispatcher/interpreter data. Other decoder paths keep
 the guard; macOS/Linux behavior and the cache continuation remain unchanged.
-The fix still needs a device run.
+Build116 passed that boundary on the phone, reached running state and executed
+real game/firmware startup calls. It created five primary and one secondary SPURS
+threads before an unconditional SPU cpu_task entry call hit the same absent API.
+Build117 skips that entry call only for the static decoder with no JIT instance.
+All other decoder/instance combinations keep it. This new fix needs a device run.
 
 After the workflow succeeds, download **ARMSX3_iOS16_INSTALL_THIS_IPA** and
 install its IPA through TrollStore. Reopen and tap **Run all tests**. Once all
@@ -110,13 +114,13 @@ readiness checks and executable inspection are not a playable-game result.
 The workflow keeps pinned dependencies and the original 49 production patches,
 plus patch0050 for unused JIT-arena finalization and patch0051 for joined-context
 observation and the iOS RSX startup/stop guard, plus patch0052 for static SPU
-startup (52 patches total).
+startup and patch0053 for static SPU thread entry (53 patches total).
 34 synchronization host profiles plus the new intake host check gate the iOS
 compile, full link, signed bundle validation and one installable IPA. Matching
 core symbols and build logs remain available as separate artifacts.
 Build113's workflow produced the tested installable IPA. The historical patch
 validator remains scoped to its exact first 49 patches while preparation applies
-all 52. The host job also checks native PSF parsing and complete game
+all 53. The host job also checks native PSF parsing and complete game
 import. Local sanitizer
 checks use `ASAN_OPTIONS=detect_leaks=0` because LeakSanitizer cannot inspect
 processes in this environment.
@@ -141,9 +145,11 @@ modeled arena operations. Cached-executable loading and complete cleanup passed
 on the Build113 phone.
 Host game scenarios additionally reject wrong title/category/executable/disc
 mounts and missing asset mappings. Native game-folder loading, coordinated import and original SELF loading passed
-on the Build114 phone. Build115 reached native PPU initialization but aborted
-before running state or joined execution evidence. Device guest execution awaits
-the Build116 retry. Actions compiles for iOS.
+on the Build114 phone. Build116 reached running state and actual game startup
+including guest-created SPURS groups, PPU handler threads, firmware module loads
+and game-content calls. It aborted at SPU thread entry before completing the
+three-second window or joined capture/cleanup. Build117 retries that window.
+Actions compiles for iOS.
 
 The game import host check compiles production GameImport.cpp with the pinned
 native PSF reader, entry types and SFB validation. An independently encoded SFO
@@ -175,3 +181,15 @@ and compiler work after the prefix are explicit host interfaces; source checks
 verify that the patch leaves that entire continuation byte-for-byte unchanged.
 These sanitizer checks do not establish full native cache-backend or device game
 execution success.
+
+The SPU entry regression reconstructs pinned native source plus the exact first52
+patches, applies0053 and verifies that the entire remaining SPUThread.cpp is
+unchanged. It compiles the complete actual cpu_task and old_interpreter bodies,
+reproduces Build116's missing-API abort and passes the patched iOS static/no-JIT
+path through repeated six-thread groups and raw/isolated pre-stop entries. It
+checks native PC/interrupt setup, interpreter routing, stop/flag cleanup and
+immutable RX-byte preservation. Dynamic/asmjit/LLVM and static-with-JIT entries
+still reject the missing API; macOS protection and Linux behavior remain. CPU
+state, local storage, instruction-table handlers, group/logging/platform interfaces
+and JIT gateway are host models. This checks native loops, not the full native
+SPU ISA, scheduler, ARM gateway or a successful phone execution window.

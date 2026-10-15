@@ -1,0 +1,18 @@
+--- a/rpcs3/Emu/Cell/SPUThread.cpp
++++ b/rpcs3/Emu/Cell/SPUThread.cpp
+@@ -1715,7 +1715,14 @@
+ void spu_thread::cpu_task()
+ {
+ #ifdef __APPLE__
+-	utils::apple_jit_write_protect(true);
++#if TARGET_OS_IOS
++	// Static interpretation does not execute mutable generated code. A JIT
++	// instance or any other decoder still requires the real Apple boundary.
++	if (jit || g_cfg.core.spu_decoder != spu_decoder_type::_static)
++#endif
++	{
++		utils::apple_jit_write_protect(true);
++	}
+ #endif
+ 	start_time = 0;
+ 
