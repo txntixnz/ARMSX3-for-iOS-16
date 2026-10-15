@@ -3935,3 +3935,43 @@ install ARMSX3_iOS16_INSTALL_THIS_IPA in TrollStore, run120 tests, then Render g
 (10 seconds), keep app foreground, share log and screen result. Retained firmware/
 disc should be reused. Audio/controls pending, meaningful game pixels/FPS unverified.
 Keep replies concise English and do not create images.
+
+
+## Build123 — 2026-10-15: link CoreGraphics into the app executable
+
+User reported Build122 failure. Actions38731608703 / native job116411215237:
+all36 host prerequisites passed, real native Vulkan archive built/verified, and
+libARMSX3Core.dylib FINALLY linked successfully. App.mm and all frontend/runtime
+objects compiled. The separate ARMSX3CoreLoadTest executable then failed linking
+only CGRectGetMaxY/CGRectGetMidX/CGRectGetMidY from RenderController geometry.
+CoreGraphics was already linked into the core dylib but omitted from the separate
+app target. The app deliberately dlopens the core, so it does not inherit those
+private link dependencies. No IPA or phone renderer validation occurred.
+
+Build123 adds exactly "-framework CoreGraphics" to the app's explicit CMake
+framework list: UIKit/Foundation/UniformTypeIdentifiers/QuartzCore/Metal/CoreGraphics.
+All56 native patches, renderer source, C ABI, UIKit layer ownership, configuration,
+Vulkan library pin and strict core link are unchanged. No new patch or dummy
+implementation; frame generation remains off. Metadata/fixture/README now123.
+
+Local verification: existing full120-stage fixture/intake/UI/runtime contract
+passes; actual app target_link_libraries command extracted into temporary CMake
+project configures and generates all6 frameworks INCLUDING CoreGraphics in its
+link command. Native source/all56 patches and packaging/workflow are frozen;
+AST/plist/YAML/diff checks pass. Audited UIKit/Metal/QuartzCore/UTType/CoreGraphics
+uses against direct app frameworks, plus existing copy/license/platform/dependency/
+symbol/signing/bundle/IPA packaging sequence. Did not repeat native tests or all56
+patch preparation: none of their source/patches/workflow changed and all36 host
+jobs plus the native core full link passed Build122. No local iOS SDK; app's final
+iOS link, packaging/signing and phone Metal presentation remain pending CI/device.
+No new repository test for this one-framework build dependency change.
+
+Repo main parentd1dbcfc0cf94ce3aaa809f6c172c819a2337854b (Build122), parent tree
+8954b4ab86c2b4d582951b60439e6e2e1fa2a458. Both independent handoffs appended.
+Publish through Git data API expected-head lease, verify tree, sync local branch.
+One queued Actions check allowed; no monitoring afterwards. User will report.
+Once IPA succeeds, install ARMSX3_iOS16_INSTALL_THIS_IPA via TrollStore, run120
+tests, tap Render game (10 seconds), keep foreground and share log/screen result.
+Reuse retained firmware/disc. Audio/controls pending and game content/FPS unverified.
+Keep concise English; do not create images. Build122 proved full native core link;
+do not describe that as still wholly untested or claim app link/packaging passed.

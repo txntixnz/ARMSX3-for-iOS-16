@@ -1,6 +1,15 @@
-# ARMSX3 iOS 16 core — Build 122
+# ARMSX3 iOS 16 core — Build 123
 
 Target: iPhone 13 Pro Max/A15, iOS 16.0, Dopamine and TrollStore.
+
+Build122 passed all 36 host jobs, native compilation and the complete
+ARMSX3Core dylib link. The final app executable link then failed on
+CGRectGetMidX, CGRectGetMidY and CGRectGetMaxY used by the new render view.
+CoreGraphics was linked by the core target but missing from the separate app
+target. Build123 adds CoreGraphics to ARMSX3CoreLoadTest's explicit framework
+list. Native code, all56 patches, renderer actions and GPU/CPU ownership remain
+unchanged. App linking, IPA packaging and phone presentation still need CI/device
+validation; use Build123 for the next Render game (10 seconds) test.
 
 Build121 passed all 36 host jobs, compiled the full native Vulkan core and UIKit
 app, and verified 522 arm64 iPhoneOS archive objects with minimum OS <=16.0.
@@ -8,8 +17,8 @@ The final dylib link then found one unresolved native function:
 capture_presented_frame's non-Android fallback still had six arguments, while its
 public header and VKPresent caller used eight. Build122 patch0056 corrects only
 that existing fallback signature. Its disabled return behavior and Android
-implementation remain unchanged. The full iOS link/package and phone presentation
-are pending; use Build122 for the next Render game (10 seconds) test.
+implementation remain unchanged. Build122 subsequently passed the full core dylib
+link; Build123 corrects the app framework dependency described above.
 
 The new graphics-host regression compiles the entire native non-Android
 VKFrameGen.cpp and unchanged public header with real Vulkan ABI types and explicit
