@@ -1,13 +1,13 @@
-# Current checkpoint — Build125
+# Current checkpoint — Build126
 
-Build124 displays Midnight Club LA startup screens on iPhone13 Pro Max/A15
-through native Vulkan, with318 accepted presentations and clean shutdown.
-Build125 replaces the main10-second rendering action with **Start game** and
-**Stop game**. It runs until stopped or interrupted; extended device testing is
-pending. Install `ARMSX3_iOS16_INSTALL_THIS_IPA`, tap **Quick start**, then
-**Start game**. Keep ARMSX3 foreground; tap **Stop game** before sharing the log.
-Existing firmware/disc can be reused; full120 diagnostics remain optional.
-Audio and gamepad controls are pending. Historical checkpoints follow.
+Build124 displays Midnight Club LA startup screens on A15/iOS16. Build125
+adds persistent sessions, but a longer test hit guest-memory faults before
+the main menu. Build126 corrects the iOS SIGBUS permission-fault recovery
+route and adds precise fatal fault details; device verification is pending.
+Install `ARMSX3_iOS16_INSTALL_THIS_IPA`, **Quick start -> Start game**, keep
+foreground, then **Stop game** and share the log/result. Firmware/disc persist.
+Full120 diagnostics remain optional; audio and gamepad controls are pending.
+Historical checkpoints follow.
 
 # ARMSX3 for iOS 16 — P0 port checkpoint
 

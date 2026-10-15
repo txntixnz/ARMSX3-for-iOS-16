@@ -1,0 +1,98 @@
+diff --git a/Utilities/Thread.cpp b/Utilities/Thread.cpp
+--- a/Utilities/Thread.cpp
++++ b/Utilities/Thread.cpp
+@@ -3198,6 +3198,10 @@
+ // from a misaligned operand, and those point at completely different bugs.
+ static const char* bus_error_kind(int code) noexcept
+ {
++#if defined(__APPLE__) && defined(ARCH_ARM64) && TARGET_OS_IOS
++    // Darwin sets BUS_ADRALN for SIGBUS protection faults too. ESR separates them.
++    if (code == BUS_ADRALN) return "Darwin access fault; inspect ESR";
++#endif
+ 	switch (code)
+ 	{
+ 	case BUS_ADRALN: return "misaligned operand";
+@@ -3496,13 +3500,14 @@
+ #endif
+ 
+ 
+-	// SIGBUS arrives here too now (see the sigaction block below), and never takes a recovery
+-	// path. The recovery below is for pages this process protected itself, and a write to an
++	// SIGBUS arrives here too now (see the sigaction block below). Linux/Android do not
++	// recover it: the recovery below is for pages this process protected itself, and a write to an
+ 	// mprotect'd page raises SIGSEGV/SEGV_ACCERR, never SIGBUS. A bus error means the page behind
+ 	// an otherwise valid address could not be produced at all -- unbacked, past the backing size,
+ 	// or an operand the instruction cannot address at that alignment. Nothing here changes any of
+ 	// those, so handling one and returning would re-execute the same instruction and fault again
+-	// immediately: a livelock in place of a crash report.
++	// immediately: a livelock in place of a crash report. Darwin differs: its protection
++	// faults also use SIGBUS; the iOS gate below checks hardware permission status.
+ 	const bool is_bus_error = sig == SIGBUS;
+ 
+ #if defined(ARCH_X64)
+@@ -3588,7 +3593,14 @@
+ 	const auto cause = is_executing ? "executing" : is_writing ? "writing" : "reading";
+ 
+ 	// Gated on more than "not an instruction fetch" now: see is_bus_error above.
++#if defined(__APPLE__) && defined(ARCH_ARM64) && TARGET_OS_IOS
++	// Darwin reports mprotect access faults as SIGBUS/BUS_ADRALN as well.
++	// Only retry a hardware data-permission fault through the existing VM/RSX
++	// handler. True alignment/unbacked-page faults must still terminate.
++	const bool try_recovery = !is_executing && (!is_bus_error || aarch64::is_data_permission_fault(context));
++#else
+ 	const bool try_recovery = !is_executing && !is_bus_error;
++#endif
+ 
+ 	if (auto [addr, ok] = vm::try_get_addr(info->si_addr); ok && try_recovery)
+ 	{
+@@ -3701,6 +3713,11 @@
+ 		? fmt::format("Bus error (%s) %s location %p at %p.\n", bus_error_kind(info->si_code), cause, info->si_addr, RIP(context))
+ 		: fmt::format("Segfault %s location %p at %p.\n", cause, info->si_addr, RIP(context));
+ 
++#if defined(__APPLE__) && defined(ARCH_ARM64) && TARGET_OS_IOS
++	const auto* darwin_context = reinterpret_cast<const aarch64::aarch64_darwin_mcontext64*>(context->uc_mcontext);
++	fmt::append(msg, "iOS ESR: 0x%08x, FAR: 0x%llx\n", darwin_context->es.ESR, darwin_context->es.FAR);
++#endif
++
+ 	if (vm::try_get_addr(info->si_addr).second)
+ 	{
+ 		fmt::append(msg, "Sudo Addr: %p, VM Addr: %p\n", vm::g_sudo_addr, vm::g_base_addr);
+@@ -3708,7 +3725,7 @@
+ 
+ 	append_thread_name(msg);
+ 
+-#ifdef __APPLE__
++#if defined(__APPLE__) && !TARGET_OS_IOS
+ 	thread_local bool s_tls_is_attempting_recovery = false;
+ 	thread_local bool s_tls_last_cause_is_executing = false;
+ 
+diff --git a/rpcs3/Emu/CPU/Backends/AArch64/AArch64Signal.h b/rpcs3/Emu/CPU/Backends/AArch64/AArch64Signal.h
+--- a/rpcs3/Emu/CPU/Backends/AArch64/AArch64Signal.h
++++ b/rpcs3/Emu/CPU/Backends/AArch64/AArch64Signal.h
+@@ -54,4 +54,7 @@
+     };
+ 
+     fault_reason decode_fault_reason(const ucontext_t* uctx);
++    // Data-abort permission faults only; excludes alignment, translation,
++    // external/backing errors and instruction aborts even when SIGBUS is used.
++    bool is_data_permission_fault(const ucontext_t* uctx);
+ }
+diff --git a/rpcs3/Emu/CPU/Backends/AArch64/AArch64Signal.cpp b/rpcs3/Emu/CPU/Backends/AArch64/AArch64Signal.cpp
+--- a/rpcs3/Emu/CPU/Backends/AArch64/AArch64Signal.cpp
++++ b/rpcs3/Emu/CPU/Backends/AArch64/AArch64Signal.cpp
+@@ -68,6 +68,15 @@
+     }
+ #endif
+ 
++    bool is_data_permission_fault(const ucontext_t* uctx)
++    {
++        const u64 esr = _read_ESR_EL1(uctx);
++        const u32 exception_class = (esr >> 26) & 0x3f;
++        const u32 fault_status = esr & 0x3f;
++        return (exception_class == 0x24 || exception_class == 0x25) &&
++            fault_status >= 0x0c && fault_status <= 0x0f;
++    }
++
+     fault_reason decode_fault_reason(const ucontext_t* uctx)
+     {
+         auto esr = _read_ESR_EL1(uctx);

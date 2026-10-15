@@ -8028,3 +8028,59 @@ ARMSX3_iOS16_INSTALL_THIS_IPA via TrollStore, Quick start -> Start game; keep
 foreground, allow startup to progress, then Stop game and share log/screen result.
 Firmware/disc persist. Audio/gamepad controls still pending. Concise English,
 no generated images; extracted video frames used only for internal inspection.
+
+
+## Build126 — 2026-10-15: iOS protected-page signal recovery
+
+User reports Build125 did not reach the main menu. Attached
+ARMSX3-startup-20261015-155642-086-32731.txt exports the previous unfinished
+PID32705 session: boot/request around1792079628, native threads progress through
+shader compilation and game disk-cache creation. At1792079690.44, two SPUs, the
+MC Render PPU and RSX all fault reading guest addresses0x40300400/440/480/410
+(host0x340300400 etc, all in one page). Upstream labels SIGBUS/BUS_ADRALN as
+misaligned without logging ESR. Native writer_lock then waits on the dead Render
+PPU, heartbeats continue; Stop at1792079763 reaches incomplete cleanup/-2 after
+30s waiting on SPU3. No main-menu or successful long shutdown evidence.
+
+Confirmed code bug: native signal_handler unconditionally excludes SIGBUS from
+handle_access_violation. Darwin sends SIGBUS for KERN_PROTECTION_FAILURE, and
+ARM unix_signal.c assigns BUS_ADRALN to every SIGBUS. Thus this log label alone
+does NOT establish alignment. Sources inspected: Apple xnu
+bsd/uxkern/ux_exception.c, bsd/dev/arm/unix_signal.c; CPU syndrome constants
+confirmed against Linux arch/arm64/include/asm/esr.h. Recovery of GPU-protected
+guest pages is the strong working explanation; exact fault ESR was absent, so
+do NOT claim the phone root cause or menu fix already proven.
+
+New patch0057 applies after frozen first56 to Utilities/Thread.cpp and actual
+AArch64Signal.h/.cpp. Adds hardware decoder for DATA ABORT EC0x24/25 plus
+permission FSC0x0c..0x0f. Only on Apple ARM64 TARGET_OS_IOS may SIGBUS with that
+classification reach existing guest/metadata VM/RSX recovery. Normal SIGSEGV and
+Linux/Android/macOS SIGBUS behavior unchanged. Alignment0x21, translation, backing/
+external errors, instruction faults and outside addresses are not newly retried.
+It does NOT blindly unprotect memory or ignore a fatal error; native handler must
+accept the page. Fatal iOS reports now include ESR/FAR and remove misleading
+misalignment-only wording. Unhandled iOS faults skip the inapplicable macOS
+pthread-JIT recovery branch; real JIT allocation/publication behavior untouched.
+
+Validation: new test_ios_signal_recovery.py reconstructs exact first56+57 and
+reverse checks57. Compiles real native decoder and actual direction/dispatch
+branches against explicit host context/VM/RSX interfaces.8192 EC/FSC/write cases
+per iOS/macOS profile; true alignment/invalid/outside faults rejected. Eight real
+Linux mprotect read/write faults at the uploaded within-page offsets are routed
+through Darwin-shaped SIGBUS/ESR contexts and exact dispatch; model RSX backend
+restores page permission, native host accesses retry correctly. ASAN+UBSAN pass.
+Pre57 gate fails the same matrix as expected. This is NOT native iOS signal or
+full RSX recovery proof. Build126 fixture/frozen bridge/Quick start/session checks
+pass. Exact fresh pinned core preparation/audits/registries/all57 patches/overlays
+pass (registry retry used CI ASAN_OPTIONS=detect_leaks=0 after host LeakSanitizer
+ptrace restriction). Python syntax/plist/diff checks pass.
+
+Workflow adds new regression to existing intake-host;34+2 jobs unchanged.
+Runtime/session/UI/renderer/decoders/configuration remain Build125. No new device
+diagnostic stages; Quick start remains four. Native iOS compile and full game
+load/shutdown with this patch pending CI/phone. Parentmain
+a64e4ec181c5a0718f7ce90c973622eacca8f775. User authorized main publication.
+Use GitHub tools expected-head lease, one queued check; do not monitor. Next:
+install ARMSX3_iOS16_INSTALL_THIS_IPA, Quick start -> Start game, keep foreground,
+let loading progress, Stop game and send log/screen result. Audio/pad pending.
+Do not generate images; concise English replies.
