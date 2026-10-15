@@ -1,0 +1,196 @@
+--- a/rpcs3/Emu/RSX/rsx_profiler.h
++++ b/rpcs3/Emu/RSX/rsx_profiler.h
+@@ -5,6 +5,13 @@
+ 
+ #include <array>
+ #include <atomic>
++
++#ifdef __APPLE__
++#include <TargetConditionals.h>
++#if TARGET_OS_IOS
++#include <pthread.h>
++#endif
++#endif
+ 
+ /**
+  * Exclusive time accounting for the RSX thread.
+@@ -113,7 +120,9 @@
+ 	/** Cheap identity check: one register read, no TLS machinery. */
+ 	inline const void* current_thread_token()
+ 	{
+-#if defined(__aarch64__)
++#if defined(__APPLE__) && TARGET_OS_IOS
++		return reinterpret_cast<const void*>(pthread_self());
++#elif defined(__aarch64__)
+ 		return __builtin_thread_pointer();
+ #else
+ 		// Falls back to a real thread local off the hot path's critical arch.
+@@ -122,6 +131,26 @@
+ #endif
+ 	}
+ 
++#if defined(__APPLE__) && TARGET_OS_IOS
++	// RSX-only timing is independent of g_enabled. The full native profiler also
++	// walks live guest state from other threads; that sampler stays disabled.
++	extern std::atomic<const void*> g_ios_timing_owner;
++	void begin_ios_timing();
++	void report_ios_timing(bool finishing);
++	void end_ios_timing();
++#endif
++
++	inline bool timing_enabled()
++	{
++#if defined(__APPLE__) && TARGET_OS_IOS
++		const auto owner = g_ios_timing_owner.load(std::memory_order_relaxed);
++		return owner && current_thread_token() == owner;
++#else
++		return g_enabled.load(std::memory_order_relaxed) &&
++			current_thread_token() == g_owner_thread;
++#endif
++	}
++
+ 	/** Claim the accounting for this thread. Called from the RSX thread when arming. */
+ 	void bind_to_current_thread();
+ 
+@@ -162,8 +191,7 @@
+ 	public:
+ 		explicit scope(bucket b)
+ 			: m_prev(bucket::unclassified)
+-			, m_active(g_enabled.load(std::memory_order_relaxed) &&
+-				current_thread_token() == g_owner_thread)
++			, m_active(timing_enabled())
+ 		{
+ 			if (m_active) [[unlikely]]
+ 			{
+@@ -413,8 +441,7 @@
+ 	public:
+ 		explicit method_scope(u32 slot)
+ 			: m_prev(bucket::unclassified)
+-			, m_active(g_enabled.load(std::memory_order_relaxed) &&
+-				current_thread_token() == g_owner_thread)
++			, m_active(timing_enabled())
+ 			, m_slot(slot)
+ 			, m_start(0)
+ 		{
+--- a/rpcs3/Emu/RSX/rsx_profiler.cpp
++++ b/rpcs3/Emu/RSX/rsx_profiler.cpp
+@@ -180,6 +180,10 @@
+ 
+ 	void start_sampler()
+ 	{
++#if defined(__APPLE__) && TARGET_OS_IOS
++		// The iOS report uses only RSX-owned clock buckets, never live guest PCs.
++		return;
++#endif
+ 		auto& s_sampler = g_sampler;
+ 
+ 		if (s_sampler)
+@@ -733,6 +737,58 @@
+ 		counts[rp_caller_slots - 1]++;
+ 	}
+ 
++#if defined(__APPLE__) && TARGET_OS_IOS
++	std::atomic<const void*> g_ios_timing_owner{nullptr};
++
++	void begin_ios_timing()
++	{
++		// Called on the new RSX worker, before it enters any measured scopes.
++		// Always reset: pthread identities may be reused by a later session.
++		g_acc = {};
++		g_acc.window_start = utils::get_tsc();
++		g_last_switch = g_acc.window_start;
++		g_current = bucket::unclassified;
++		g_ios_timing_owner.store(current_thread_token(), std::memory_order_relaxed);
++		prof_log.success("iOS RSX timing started; exclusive wall time only; guest sampler disabled");
++	}
++
++	void report_ios_timing(bool finishing)
++	{
++		if (!timing_enabled()) return;
++		const u64 now = utils::get_tsc();
++		const u64 freq = utils::get_tsc_freq();
++		const u64 elapsed = now - g_acc.window_start;
++		if (!freq || !elapsed || (!finishing && elapsed < freq * 10)) return;
++
++		// Flush the current bucket before reporting. Nested scopes retain their
++		// enclosing bucket across the reset, so no interval is counted twice.
++		switch_to(g_current);
++		std::string detail;
++		for (usz i = 0; i < bucket_count; ++i)
++		{
++			const double percent = 100.0 * g_acc.ticks[i] / elapsed;
++			if (percent >= 0.5)
++				fmt::append(detail, "; %s=%.1f%%", name_of(static_cast<bucket>(i)), percent);
++		}
++		const double wall_ms = 1000.0 * elapsed / freq;
++		prof_log.success("iOS RSX timing: frames=%u; wall=%.1f ms; avg=%.1f ms; final=%u%s",
++			g_acc.frames, wall_ms, g_acc.frames ? wall_ms / g_acc.frames : 0.0,
++			finishing ? 1u : 0u, detail);
++
++		// Exclude reporting/log-writing time from the next measurement window.
++		g_acc = {};
++		g_acc.window_start = utils::get_tsc();
++		g_last_switch = g_acc.window_start;
++	}
++
++	void end_ios_timing()
++	{
++		if (!timing_enabled()) return;
++		report_ios_timing(true);
++		g_ios_timing_owner.store(nullptr, std::memory_order_relaxed);
++	}
++#endif
++
+ 	void bind_to_current_thread()
+ 	{
+ 		g_owner_thread = current_thread_token();
+@@ -789,6 +845,11 @@
+ 
+ 	void set_enabled(bool enabled)
+ 	{
++#if defined(__APPLE__) && TARGET_OS_IOS
++		// Keep full-profiler counters and live guest walks disarmed.
++		(void)enabled;
++		return;
++#endif
+ 		if (enabled == g_enabled.load(std::memory_order_relaxed))
+ 		{
+ 			return;
+@@ -1298,6 +1359,14 @@
+ 	void tick_frame()
+ 	{
+ 		g_last_frame_tsc.store(utils::get_tsc());
++#if defined(__APPLE__) && TARGET_OS_IOS
++		if (timing_enabled())
++		{
++			++g_acc.frames;
++			report_ios_timing(false);
++		}
++		return;
++#endif
+ 
+ 		if (!g_enabled.load(std::memory_order_relaxed)) [[likely]]
+ 		{
+--- a/rpcs3/Emu/RSX/RSXThread.cpp
++++ b/rpcs3/Emu/RSX/RSXThread.cpp
+@@ -1049,6 +1049,10 @@
+ 		{
+ 			Emu.WaitReady();
+ 		}
++
++#if defined(__APPLE__) && TARGET_OS_IOS
++		prof::begin_ios_timing();
++#endif
+ 
+ 		do
+ 		{
+@@ -1465,6 +1469,9 @@
+ 
+ 	void thread::on_exit()
+ 	{
++#if defined(__APPLE__) && TARGET_OS_IOS
++		prof::end_ios_timing();
++#endif
+ 		// Before anything else: the sampler walks guest thread objects, and everything below
+ 		// leads to those being destroyed.
+ 		rsx::prof::stop_sampler();

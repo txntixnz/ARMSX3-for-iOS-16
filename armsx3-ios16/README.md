@@ -1,29 +1,33 @@
-# Current checkpoint — Build134
+# Current checkpoint — Build135
 
-Build133 is phone-verified with glitch-free graphics, working input and progress
-through the starter-car purchase. Locking the phone triggers the current clean
-stop-on-background path; the log confirms complete GPU/CPU cleanup, not a crash.
-Driving is not yet confirmed. The remaining issue is very low frame rate.
+Build134 is phone-verified: the user reports a small speed improvement, continued
+severe lag, and an intentional Stop. The log confirms complete GPU/CPU teardown.
+Input and the previously confirmed clean graphics remain working; driving is
+not yet confirmed. Audio remains null.
 
-The six-minute run recycled about60.46GiB of texture uploads across1903 batches
-and481 cache-eviction passes. The192MiB quota freed useful content even when
-completed idle images were consuming the allocation budget. Build134 trims those
-idle allocations first, keeps the newest32MiB reuse reserve, and permits288MiB of
-texture-cache allocations before native synchronized eviction. It trims again
-after deferred deletion returns evicted images to the idle pool. Active cached
-pixels stay intact when trimming idle allocations is sufficient.
+Texture churn fell substantially: the latest roughly199-second run completed134
+upload batches (about4.32GiB), compared with1903 batches (60.46GiB) in the previous
+roughly362-second run. However, a30-second interval still averaged about2FPS with
+no upload batches or cache evictions. Upload/cache pressure is therefore not a
+complete explanation for the remaining lag. These are different user-driven
+runs, not a controlled benchmark.
 
-Host regressions preserve a200MiB warm scene across120 frames without repeated
-uploads, versus23960MiB of modeled uploads with the historical192MiB policy.
-These are regression-model results, not phone FPS measurements. Real memory
-stability and speed gains await the next test. Graphics/resolution/decoders and
-working input remain unchanged; audio remains null.
+Build135 adds an RSX-only timing report every10 seconds on a frame boundary,
+plus a final report before renderer teardown. Exclusive wall-clock buckets
+separate empty FIFO/guest waits, texture and shader work, and GPU/fence waits.
+The native live guest sampler stays disabled; no new profiling thread, live CPU
+register reads, guest-memory walks or GPU timestamp queries are enabled. The
+existing graphics, decoder, texture-reuse and input settings are retained.
+This build measures the remaining bottleneck; an FPS improvement is not promised.
+
+Host regressions check nested/exclusive accounting, reporting across active
+scopes, foreign-thread exclusion, Stop and restart with a reused thread identity.
+Apple compilation and actual timing results still require the Actions/phone test.
 
 Install `ARMSX3_iOS16_INSTALL_THIS_IPA`, **Quick start -> Start game**, use
-**START**, and try the same car/menu sequence. Keep the app foreground while
-testing. Finish with **Stop game** and share the log/result and responsiveness.
-Firmware, imported disc and game cache persist; full120 diagnostics are optional.
-Historical checkpoints follow.
+**START**, and try the same car/menu sequence for about60 seconds. Finish with
+**Stop game** and share the log and responsiveness. Firmware, imported disc and
+game cache persist; full120 diagnostics are optional. Historical checkpoints follow.
 
 # ARMSX3 for iOS 16 — P0 port checkpoint
 

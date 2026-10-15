@@ -8659,3 +8659,85 @@ do NOT monitor. Next install ARMSX3_iOS16_INSTALL_THIS_IPA, Quick start -> Start
 game, same menu/car sequence, keep foreground, Stop game, share log/result/FPS
 impression. Firmware/disc/cache persist, no reimport/full diagnostics required.
 native134-validation has all68; native133-validation also68 despite directory name.
+
+
+## Build135 — measure remaining RSX frame time after verified texture reuse
+
+User: “Still very laggy but little improvement I think. I stopped the game myself”.
+Respect the intentional Stop report. Latest attachment read directly from upload:
+ARMSX3-startup-20261015-215246-219-36483.txt, PID36483. Build134 main commit
+84151d72eb7ad49d9259c9ca626f751647350adf; run38811129582. No Library tools.
+
+Phone evidence:
+- Running1792100957.788703; final1964 accepted presents over roughly199seconds.
+-134 upload batches, about4.32GiB,20 fatal-budget cache passes,2 idle-only trims.
+  Prior133 run had1903 batches/60.46GiB and481 evictions over roughly362seconds.
+  Different user-driven runs; not a controlled FPS comparison. Build134 clearly
+  reduces repeated upload/eviction traffic but the user still sees severe lag.
+- First30seconds~28.8FPS; next30~27.27FPS; slow scene~1.5–2.6FPS.
+  Crucially the90–121second window averages~2.05FPS with ZERO upload batches and
+  ZERO cache evictions. Texture churn is not a complete explanation for low FPS.
+- Main PPU estimated10.187B instructions; [MC] Render Thread2.631B instructions
+  and2,013,643 completed HLE calls; all34 joined guest threads total16.257B
+  estimated instructions/3,104,051 calls. These are collected AFTER joining,
+  not a new license to race live guest cia/registers/function/history fields.
+- Log inactive marker1792101156.418729, Stop1156.422664; all28PPU+6SPU joined;
+  Vulkan device/instance teardown1157.1925, FXO1157.3812, VM1157.3844;
+  fully stopped zeroCPU1157.386671, RENDER/UI PASS1157.392093. Clean Stop,
+  no fatal/OOM. Do not treat the nearby inactive marker as a crash or contradict
+  the user's report that they stopped intentionally.
+
+Patch0069-ios-rsx-exclusive-timing.patch:
+- Uses existing native rsx::prof scope buckets for RSX-thread exclusive wall
+  time, independently of g_enabled. Existing fine scopes include FIFO decode,
+  FIFO starvation, guest semaphore wait, vertex/shaders/textures, submissions,
+  fence waits, swap waits and resource collection. Method scope also bills the
+  method-handler bucket. No graphics algorithm, quality, decoder or input change.
+- iOS owner is atomic<const void*>; only matching pthread_self() accesses the
+  plain clock/bucket accounting. Foreign threads return before accessing it.
+  Darwin identity uses pthread_self rather than assuming ARM's generic thread
+  pointer builtin identifies Darwin pthreads. Non-iOS gating remains unchanged.
+- begin_ios_timing on RSX cpu_task before measured scopes resets every session,
+  even if pthread identities are reused. report every>=10seconds at frame end;
+  flush current bucket, print only buckets>=0.5%, frames/window wall/average,
+  then reset clocks while preserving the active/enclosing scope. Final report
+  from thread::on_exit before native cleanup, then disarm owner. Reporting/log
+  time excluded from the next window. Zero frequency/elapsed cannot divide by0.
+- Full native profiler has live guest-register/VM walks, background sampler,
+  watchdog snapshots and racy auxiliary histograms. Do NOT enable it wholesale.
+  On iOS start_sampler and set_enabled return without enabling or creating it;
+  g_enabled remains false; iOS tick_frame returns after its dedicated report,
+  bypassing native spike/guest snapshot code. No new background thread and no
+  enabled GPU timestamp profiler. Native default config rsx_profiler is false.
+- Timing reports describe wall time, NOT actual CPU utilization or measured GPU
+  execution. Idle FIFO dominance would support guest production bottleneck;
+  fence/swap dominance suggests synchronization/GPU path; expensive work buckets
+  select the next fix. It cannot alone identify a guest loop or exact GPU kernel.
+  Counter reads/pthread identity add profiling overhead; no FPS gain promised.
+
+Validation completed:
+-69 patches apply cleanly to pinned92b931b9fb5eef7f1317cb482917dfc19aceebd9.
+- New test_ios_rsx_timing.py compiles the COMPLETE patched native profiler header
+  plus exact iOS report/lifecycle/prefix bodies under ASAN+UBSAN, warnings as
+  errors, mocked clock/log interfaces. Covers nested exclusive70/20/10percent,
+  ten-second windows, reset inside nested scopes, idempotent early scope close,
+  foreign-thread exclusion, final Stop, same-pthread restart, method attribution,
+  zero length/frequency and disabled sampler/full-profiler enable calls.
+- Production runtime/frontend/native BootGame/JIT-finalizer regression passes,
+  including Stop, delayed teardown and cleanup failure paths. Complete native
+  Vulkan/Apple compilation is NOT possible without SDK; Actions validates it.
+- Texture retirement/reuse regression passes:200MiB modeled scene uploaded once
+  across120frames, zero content evictions; historical192MiB path23960MiB/234
+  evictions; completion/ownership/failed-wait/concurrent idle pool checks pass.
+- Native input regression passes all16buttons, holds/releases/axes/Stop/concurrent
+  snapshot checks. Frozen bridge/120stages/four Quickstart foundations/Build135
+  fixture passes; scripts parse; nonpatch whitespace check passes.
+- Workflow adds timing regression, retains34+2 prerequisites. No agents/images.
+
+Next publish135 to main using expected-parent lease84151d72..., check one queued
+installable core workflow only, do NOT monitor builds. User already authorizes
+publishing/builds. Install ARMSX3_iOS16_INSTALL_THIS_IPA, Quick start -> Start game,
+START, same menu/car sequence about60seconds, Stop game, share log/responsiveness.
+Existing firmware/disc/cache persist. Graphics previously glitch-free and starter
+car purchase verified; driving still unconfirmed. Null audio unchanged.
+Native135-validation contains69 patches; native134-validation still68.
