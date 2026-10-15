@@ -144,6 +144,8 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
 @property(nonatomic,strong) UIButton* firmwareButton;
 @property(nonatomic,strong) UIButton* executableButton;
 @property(nonatomic,strong) UIButton* runtimeButton;
+@property(nonatomic,strong) UIButton* gameButton;
+@property(nonatomic,strong) UIButton* gameLoadButton;
 @property(nonatomic,assign) BOOL intakeBusy;
 @property(nonatomic,assign) NSInteger intakeMode;
 @property(nonatomic,assign) BOOL previousRunPending;
@@ -216,6 +218,15 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
     [self.runtimeButton setTitle:@"Check runtime load" forState:UIControlStateNormal];
     [self.runtimeButton addTarget:self action:@selector(checkRuntime) forControlEvents:UIControlEventTouchUpInside];
     [stack addArrangedSubview:self.runtimeButton];
+    self.gameButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    [self.gameButton setTitle:@"Import game folder" forState:UIControlStateNormal];
+    [self.gameButton addTarget:self action:@selector(selectGame) forControlEvents:UIControlEventTouchUpInside];
+    self.gameLoadButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    [self.gameLoadButton setTitle:@"Check game load" forState:UIControlStateNormal];
+    [self.gameLoadButton addTarget:self action:@selector(checkGame) forControlEvents:UIControlEventTouchUpInside];
+    UIStackView* gameControls = [[UIStackView alloc] initWithArrangedSubviews:@[self.gameButton,self.gameLoadButton]];
+    gameControls.distribution = UIStackViewDistributionFillEqually; gameControls.spacing = 12;
+    [stack addArrangedSubview:gameControls];
     self.output = [[UITextView alloc] init];
     self.output.editable = NO;
     self.output.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
@@ -244,6 +255,7 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
     const BOOL intakeReady = self.coreHandle && !self.running && !self.intakeBusy && !self.failed && self.nextStage == stageCount;
     self.firmwareButton.enabled = intakeReady; self.executableButton.enabled = intakeReady;
     self.runtimeButton.enabled = intakeReady;
+    self.gameButton.enabled = intakeReady; self.gameLoadButton.enabled = intakeReady;
     [self.runButton setTitle:self.nextStage ? @"Run remaining tests" : @"Run all tests" forState:UIControlStateNormal];
     self.progress.progress = float(self.nextStage) / float(stageCount);
 }
@@ -375,19 +387,23 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
 }
 - (void)selectFirmware { [self selectIntake:1]; }
 - (void)selectExecutable { [self selectIntake:2]; }
-- (void)checkRuntime {
+- (void)selectGame { [self selectIntake:3]; }
+- (void)checkRuntime { [self checkRuntimeMode:NO]; }
+- (void)checkGame { [self checkRuntimeMode:YES]; }
+- (void)checkRuntimeMode:(BOOL)game {
     if (self.running || self.intakeBusy || self.failed || self.nextStage != stageCount || !self.coreHandle) return;
-    auto action = reinterpret_cast<int (*)(char*,size_t)>(dlsym(self.coreHandle,"armsx3_core_check_runtime"));
+    auto action = reinterpret_cast<int (*)(char*,size_t)>(dlsym(self.coreHandle,game ? "armsx3_core_check_game" : "armsx3_core_check_runtime"));
     if (!action) { [self showLogMessage:@"Runtime loading unavailable" detail:@"The core runtime function is missing."]; return; }
     self.intakeBusy = YES; self.previousRunPending = NO;
     const BOOL previousIdle = UIApplication.sharedApplication.idleTimerDisabled;
     UIApplication.sharedApplication.idleTimerDisabled = YES;
-    [NSUserDefaults.standardUserDefaults setObject:@"Runtime load check" forKey:pendingStageKey];
+    [NSUserDefaults.standardUserDefaults setObject:game ? @"Game load check" : @"Runtime load check" forKey:pendingStageKey];
     [NSUserDefaults.standardUserDefaults synchronize];
-    self.progressLabel.text = @"Loading executable and firmware modules…";
-    [self.transcript appendString:@"\nRUN · Native runtime load and cleanup\n"];
+    self.progressLabel.text = game ? @"Loading imported game and checking disc paths…" : @"Loading executable and firmware modules…";
+    [self.transcript appendString:game ? @"\nRUN · Imported game load and cleanup\n" : @"\nRUN · Native runtime load and cleanup\n"];
     self.output.text = self.transcript;
-    ARMSX3StartupLog("RUNTIME UI BEFORE native load check; prepared executable, no guest execution");
+    ARMSX3StartupLog(game ? "GAME UI BEFORE native game load; original EBOOT and disc assets, no guest execution" :
+        "RUNTIME UI BEFORE native load check; prepared executable, no guest execution");
     [self refreshControls];
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0), ^{
         @autoreleasepool {
@@ -405,7 +421,7 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
                 self.output.text = self.transcript;
                 [self.output scrollRangeToVisible:NSMakeRange(self.output.text.length,0)];
                 self.progressLabel.text = result == 0 ? @"Runtime load complete · share the log" : @"Runtime load failed · share the log";
-                ARMSX3StartupLog([NSString stringWithFormat:@"RUNTIME UI %@: %@",result == 0 ? @"PASS" : @"FAIL",detail].UTF8String);
+                ARMSX3StartupLog([NSString stringWithFormat:@"%@ UI %@: %@",game ? @"GAME" : @"RUNTIME",result == 0 ? @"PASS" : @"FAIL",detail].UTF8String);
                 [self refreshControls];
             });
         }
@@ -414,7 +430,10 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
 - (void)selectIntake:(NSInteger)mode {
     if (self.running || self.intakeBusy || self.failed || self.nextStage != stageCount || !self.coreHandle) return;
     self.intakeMode = mode;
-    UIDocumentPickerViewController* picker = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTTypeData] asCopy:YES];
+    UIDocumentPickerViewController* picker = mode == 3 ?
+        [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTTypeFolder] asCopy:NO] :
+        [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTTypeData] asCopy:YES];
+    if (mode == 3) picker.title = @"Select folder with PS3_GAME and PS3_DISC.SFB";
     picker.delegate = self; picker.allowsMultipleSelection = NO;
     [self presentViewController:picker animated:YES completion:nil];
 }
@@ -423,16 +442,16 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
     NSURL* source = urls.firstObject;
     if (!source || self.running || self.intakeBusy || !self.coreHandle) return;
     const NSInteger mode = self.intakeMode;
-    const char* symbol = mode == 1 ? "armsx3_core_import_firmware" : "armsx3_core_inspect_executable";
+    const char* symbol = mode == 1 ? "armsx3_core_import_firmware" : mode == 3 ? "armsx3_core_import_game" : "armsx3_core_inspect_executable";
     auto action = reinterpret_cast<int (*)(const char*,char*,size_t)>(dlsym(self.coreHandle,symbol));
     if (!action) { [self showLogMessage:@"Import unavailable" detail:@"The core import function is missing."]; return; }
     self.intakeBusy = YES; self.previousRunPending = NO;
     const BOOL previousIdle = UIApplication.sharedApplication.idleTimerDisabled;
     UIApplication.sharedApplication.idleTimerDisabled = YES;
-    NSString* label = mode == 1 ? @"Install PS3 firmware" : @"Inspect PS3 executable";
+    NSString* label = mode == 1 ? @"Install PS3 firmware" : mode == 3 ? @"Import PS3 game folder" : @"Inspect PS3 executable";
     [NSUserDefaults.standardUserDefaults setObject:label forKey:pendingStageKey];
     [NSUserDefaults.standardUserDefaults synchronize];
-    self.progressLabel.text = mode == 1 ? @"Installing firmware…" : @"Preparing executable…";
+    self.progressLabel.text = mode == 1 ? @"Installing firmware…" : mode == 3 ? @"Copying game folder… keep the app open" : @"Preparing executable…";
     [self.transcript appendFormat:@"\n%@ · %@\n",label,source.lastPathComponent]; self.output.text = self.transcript;
     ARMSX3StartupLog([NSString stringWithFormat:@"INTAKE UI BEFORE %@ selected=%@",label,source.lastPathComponent].UTF8String);
     [self refreshControls];
@@ -441,8 +460,19 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
             const BOOL scoped = [source startAccessingSecurityScopedResource];
             NSURL* local = [[NSURL fileURLWithPath:NSTemporaryDirectory() isDirectory:YES]
                 URLByAppendingPathComponent:[@"ARMSX3-intake-" stringByAppendingString:NSUUID.UUID.UUIDString]];
-            NSError* error = nil; NSString* detail = nil; int result = -1;
-            if ([NSFileManager.defaultManager copyItemAtURL:source toURL:local error:&error]) {
+            NSError* error = nil; __block NSString* detail = nil; __block int result = -1;
+            if (mode == 3) {
+                // Open the selected directory under its security scope. The
+                // core makes one staged copy; avoid duplicating a multi-GB game
+                // into NSTemporaryDirectory before importing it again.
+                NSFileCoordinator* coordinator = [[NSFileCoordinator alloc] initWithFilePresenter:nil];
+                [coordinator coordinateReadingItemAtURL:source options:0 error:&error byAccessor:^(NSURL* readingURL) {
+                    char buffer[4096] = {};
+                    result = action(readingURL.fileSystemRepresentation,buffer,sizeof(buffer));
+                    detail = [NSString stringWithUTF8String:buffer] ?: @"Game import returned no detail.";
+                }];
+                if (!detail) detail = error.localizedDescription ?: @"The selected game folder is unavailable.";
+            } else if ([NSFileManager.defaultManager copyItemAtURL:source toURL:local error:&error]) {
                 char buffer[4096] = {};
                 result = action(local.fileSystemRepresentation,buffer,sizeof(buffer));
                 detail = [NSString stringWithUTF8String:buffer] ?: @"Import returned no detail.";

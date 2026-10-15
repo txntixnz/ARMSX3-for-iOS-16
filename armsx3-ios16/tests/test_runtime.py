@@ -106,6 +106,17 @@ struct file{std::string path;mutable std::ifstream input;std::ofstream output;
 std::string get_cache_dir(){return host_root+"/cache/";}bool is_file(const std::string&p){return std::filesystem::is_regular_file(p);}
 bool is_dir(const std::string&p){return std::filesystem::is_directory(p);}bool get_optical_raw_device(const std::string&){return false;}
 }
+namespace ios_intake{fs::file read_executable(const char*path){fs::file f(path,fs::read);if(!f)throw std::runtime_error("Executable unavailable");return f;}}
+namespace ios_game{Disc installed(){
+ const auto root=std::filesystem::path(host_root)/"game";
+ if(!std::filesystem::is_regular_file(root/"PS3_GAME/PARAM.SFO"))throw std::runtime_error("Import a game folder first");
+ return {root,"Host disc","TEST00001","DG","data/asset.bin"};
+}}
+namespace vfs{std::string get(const std::string&path){
+ if(mode==14)return host_root+"/cache";
+ if(mode==15&&path.ends_with("asset.bin"))return {};
+ assert(path.starts_with("/dev_bdvd"));return host_root+"/game"+path.substr(9);
+}}
 enum class elf_error{ok,bad};struct ppu_exec_object{
  struct{u64 e_entry=0x20000;}header;struct Segment{u32 p_type=1,p_memsz=0x1000;};std::vector<Segment>progs{Segment{},Segment{}};
  elf_error error;explicit ppu_exec_object(const fs::file&f):error(f.to_string()=="ELF-FIXTURE"?elf_error::ok:elf_error::bad){}elf_error get_error()const{return error;}
@@ -136,6 +147,10 @@ public:
  bool IsStopped(bool fully=false)const{if(m_state==system_state::stopping&&mode!=7&&++ticks>1){m_state=system_state::stopped;workers=0;}
   return fully?m_state==system_state::stopped:m_state<=system_state::stopping;}
  bool IsReady()const{return m_state==system_state::ready;}system_state GetStatus(bool)const{return m_state;}
+ std::string GetBoot()const{return mode==16?host_root+"/cache/ARMSX3-prepared-executable.elf":m_path;}
+ std::string GetTitleID()const{return mode==13?"WRONG0001":"TEST00001";}
+ std::string GetTitle()const{return mode==18?"Wrong disc":"Host disc";}
+ std::string GetCat()const{return mode==17?"HG":"DG";}
  utils::serial*DeserialManager(){return nullptr;}
  game_boot_result BootGame(const std::string&,const std::string&="",bool=false,cfg_mode=cfg_mode::custom,const std::string&="",const std::optional<std::string>&=std::nullopt);
  game_boot_result GetElfPathFromDir(std::string&,const std::string&){return game_boot_result::nothing_to_boot;}
@@ -199,17 +214,31 @@ int main(int argc,char**argv){
  assert(std::string(detail).starts_with("Native runtime load passed"));
  ios_runtime::install_frontend();atomic_t<u32>wake{0};bool dispatched=false;g_emu_callbacks.call_from_main_thread([&]{assert(on_main);dispatched=true;},&wake);
  assert(!dispatched&&!wake);ios_runtime::drain_main_queue();assert(dispatched&&wake);
+ mode=0;const auto before_game=loads;
+ assert(armsx3_core_check_game(detail,sizeof(detail))==-1&&loads==before_game);
+ std::filesystem::create_directories(host_root+"/game/PS3_GAME/USRDIR/data");
+ std::ofstream(host_root+"/game/PS3_GAME/PARAM.SFO")<<"SFO-FIXTURE";
+ std::ofstream(host_root+"/game/PS3_GAME/USRDIR/EBOOT.BIN")<<"ELF-FIXTURE";
+ std::ofstream(host_root+"/game/PS3_GAME/USRDIR/data/asset.bin")<<"ASSET-FIXTURE";
+ for(int scenario:{0,13,14,15,16,17,18,0}){
+  mode=scenario;g_fxo->main={};const auto before=loads;
+  assert(armsx3_core_check_game(detail,sizeof(detail))==(scenario==0?0:-1));
+  assert(loads==before+1&&Emu.IsStopped(true)&&workers==0&&main_queue.empty());
+  assert(g_cfg.to_string()==prior&&g_backup_cfg.to_string()==backup);
+ }
+ assert(std::string(detail).starts_with("Game load passed: Host disc [TEST00001]"));
+ assert(armsx3_core_check_game(nullptr,0)==-1);mode=0;
  std::ofstream(host_root+"/cache/ARMSX3-prepared-executable.elf",std::ios::trunc)<<"BAD";
  const auto count=loads;assert(armsx3_core_check_runtime(detail,sizeof(detail))==-1);assert(loads==count);
  assert(jit_metrics.reserves==0&&jit_metrics.allocations==0&&jit_metrics.decommits==0&&jit_metrics.resets==0&&jit_metrics.write_protection.empty());
- std::puts("PASS: production runtime/frontend plus native JIT finalizer,49 callback signatures and native BootGame; load-only override, mapped segments/firmware identity, missing inputs/idle/main-thread/C ABI guards, partial failures, delayed cleanup, timeout, queue/wake protocol and config restoration. Native Load/VM/FXO/devices/config and UIKit are host models/source contracts; actual iOS cleanup pending.");
+ std::puts("PASS: production runtime/frontend plus native JIT finalizer,49 callback signatures and native BootGame; load-only override, mapped segments/firmware identity, missing inputs/idle/main-thread/C ABI guards, partial failures, delayed cleanup, timeout, queue/wake protocol and config restoration. Native Load/VM/FXO/devices/config and UIKit are host models/source contracts; game identity/category/executable/disc/asset mapping checks; complete cached-ELF cleanup verified on Build113 phone; new game loading awaits device.");
 }
 '''
 # Accelerate the timeout scenario only. The native app retains its 30-second
 # budget; all other production logic and the native BootGame body are unchanged.
 runtime=runtime.replace('std::chrono::seconds(30)','std::chrono::milliseconds(30)')
 prelude=prelude.replace('enum class cfg_mode{custom,config_override};',strip(read('rpcs3/Emu/config_mode.h')))
-source=prelude+'\n#define __APPLE__ 1\n'+arena_cpp+'\n'+patched_bodies(native)+'\n'+strip(callbacks)+'\n'+backend+'\n'+boot+'\n'+strip(frontend)+'\n'+strip(runtime)+'\n'+tests
+source='#include "GameImport.h"\n'+prelude+'\n#define __APPLE__ 1\n'+arena_cpp+'\n'+patched_bodies(native)+'\n'+strip(callbacks)+'\n'+backend+'\n'+boot+'\n'+strip(frontend)+'\n'+strip(runtime)+'\n'+tests
 source=source.replace('std::string&=""','std::string& = ""').replace('std::string>&=std::nullopt','std::string>& = std::nullopt')
 with tempfile.TemporaryDirectory(prefix='armsx3-runtime-') as temp:
  temp=Path(temp);(temp/'host.cpp').write_text(source);(temp/'TargetConditionals.h').write_text(target_header(True))

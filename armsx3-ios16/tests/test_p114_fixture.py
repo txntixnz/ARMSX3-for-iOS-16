@@ -1,4 +1,4 @@
-"""Build113 intake/runtime contracts, UI gating and prior-core freeze."""
+"""Build114 intake/runtime contracts, UI gating and prior-core freeze."""
 from pathlib import Path
 import hashlib,plistlib,re
 here=Path(__file__).resolve().parent
@@ -28,7 +28,7 @@ cmake=(here.parent/'core/loadtest/CMakeLists.txt').read_text()
 assert 'FrontendHooks.cpp Intake.cpp' in cmake and '-framework UniformTypeIdentifiers' in cmake
 assert 'Emu.BootGame(' not in intake and 'Emu.Run(' not in intake # inspection does not launch uncontrolled guest workers
 info=plistlib.loads((here.parent/'core/loadtest/Info.plist.in').read_bytes())
-assert info['CFBundleVersion']=='113' and info['MinimumOSVersion']=='16.0'
+assert info['CFBundleVersion']=='114' and info['MinimumOSVersion']=='16.0'
 workflow=(here.parent.parent/'.github/workflows/build-armsx3-ios16-core.yml').read_text()
 assert 'needs: [synchronization-host, intake-host]' in workflow
 assert len(re.findall(r'^\s+- script: test_p\d+_pair.py$',workflow,re.M))==34
@@ -44,4 +44,8 @@ assert 'armsx3_core_check_runtime' in app and 'self.runtimeButton.enabled = inta
 assert 'self.failed = result == -2' in app and 'Runtime load check' in app
 assert 'python3 armsx3-ios16/tests/test_runtime.py upstream-armsx3' in workflow
 assert 'python3 armsx3-ios16/tests/test_jit_lifecycle.py upstream-armsx3' in workflow
-print('PASS: prior bridge freeze;120 ordered stages; native intake and load-only BootGame configuration/cleanup gates; scoped UIKit actions; Build113/iOS16;34+1 host dependencies')
+assert 'python3 armsx3-ios16/tests/test_game_import.py upstream-armsx3' in workflow
+for token in ['UTTypeFolder] asCopy:NO', 'NSFileCoordinator', 'armsx3_core_import_game', 'armsx3_core_check_game']:
+ assert token in app,token
+assert 'GameImport.cpp' in cmake
+print('PASS: prior bridge freeze;120 ordered stages; native intake and load-only BootGame configuration/cleanup gates; scoped UIKit actions; Build114/iOS16;34+1 host dependencies')

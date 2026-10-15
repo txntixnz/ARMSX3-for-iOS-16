@@ -204,7 +204,7 @@ std::string install(const char* selected)
     return "PS3 firmware " + clean_version + " installed. Next: inspect your EBOOT.BIN or ELF.";
 }
 
-std::string inspect(const char* selected, bool persist)
+fs::file read_executable(const char* selected)
 {
     idle(); require(selected && *selected, "No executable selected");
     fs::file input(selected, fs::read); require(bool(input) && input.size() > 0 && input.size() <= 0x40000000ull, "Executable is empty, unavailable or too large");
@@ -225,6 +225,12 @@ std::string inspect(const char* selected, bool persist)
         executable = std::move(input);
     }
     executable.seek(0);
+    return executable;
+}
+
+std::string inspect(const char* selected, bool persist)
+{
+    auto executable = read_executable(selected);
     log("INTAKE executable BEFORE native PPU ELF parsing");
     ppu_exec_object elf(executable); require(elf.get_error() == elf_error::ok, "This file is not a supported PS3 PPU executable");
     unsigned loadable = 0;

@@ -7149,3 +7149,101 @@ UI PASS. No guest entry is started. Preserve the missing-API failure for any
 nonempty mutable arena. No LLVM/Vulkan/gameplay claim. Complete game-folder/
 PARAM.SFO/assets import and execution/rendering remain later work. Keep replies
 short and do not monitor Actions after publishing; user reports the result.
+
+
+## Build114 — Build113 device cleanup PASS; full disc-folder import (2026-10-15)
+
+New user log ARMSX3-startup-20261015-005505-758-28700.txt is Build113/PID28700.
+All120 ordered P2-P121 diagnostics PASS. Firmware4.93 installed with23 native
+packages; real EBOOT parsed with5 LOAD headers, entry11963416. Native BootGame
+returned0/state6, mapped2 nonempty segments, registered real liblv2.sprx
+id587203072 with2segments/3635functions and one stopped PPU context. Kill stopped
+all threads, cleared FXO, logged 'iOS JIT finalize: unused mutable arena;
+immutable functions retained', completed the stop callback, reached fully-stopped
+with zero live CPU threads and RUNTIME UI PASS. Build111's cleanup abort is
+confirmed fixed on the phone. Guest entry remained stopped; no gameplay claim.
+Build113's workflow necessarily produced this installed IPA; no Actions polling.
+
+Build114 advances actual functionality instead of extending the120-stage table.
+New GameImport.cpp/.h implements armsx3_core_import_game. Select the complete
+PS3 disc root containing PS3_DISC.SFB and PS3_GAME, including PARAM.SFO,
+USRDIR/EBOOT.BIN and assets. Only DG disc folders are supported; no ISO/PKG,
+update-only or installed HG folder support is claimed. One active imported disc
+is kept under the configured dev_flash sibling ios-games/active-disc. The title
+identity is read from the selected native PSF, never assumed to be Midnight Club.
+
+Importer checks fully-stopped/zeroCPU state, required regular files/directories,
+native Emulator::IsValidSfb and native psf::load/get_string. A bounded PSF preflight
+protects native key-NUL reads/table allocation and invalid entry sizes. Requires
+four uppercase ASCII letters plus five digits in TITLE_ID, a nonempty bounded
+control-free title and CATEGORY=DG. Directory inventory rejects links/special
+nodes/overlapping storage roots, bounds entry count and total-byte overflow,
+checks free space for all new files plus256MiB, and validates EBOOT through the
+existing native intake route before copying. It copies every selected file and
+empty directory once with std::filesystem::copy_file, checks size/mtime, rechecks
+the complete source inventory, staged identity and EBOOT, then uses the existing
+same-volume rename/rollback publisher. Invalid imports preserve the prior game,
+firmware and independent prepared-ELF cache. Unique staging trees are removed on
+caught failures; superseded backup removed after successful publication. Progress
+files/bytes logged every256MiB or at completion. Does not prove a source dump has
+all title-required assets; it faithfully copies the selected stable tree.
+
+Intake.cpp factors its unchanged raw-ELF/native-SELF routing into exported C++
+ios_intake::read_executable; inspect still parses/bounds segments and persists
+only when requested. Runtime preflight uses the same reader, supporting original
+EBOOT SELF instead of only an already decrypted cache. Production tests retain
+actual native CheckDebugSelf/decrypt_self bodies and all8 intake probes.
+
+New armsx3_core_check_game shares runtime check/configuration/frontend/teardown.
+It loads original active-disc/PS3_GAME/USRDIR/EBOOT.BIN through native BootGame
+with direct=true, static decoders, real liblv2, null video/audio, autostart=false.
+The original path is deliberate: native Load discovers PARAM.SFO and SFB up the
+USRDIR/PS3_GAME ancestors, decrypts original SELF and mounts /dev_bdvd. It avoids
+the native directory-scan mode that would force LLVM/precompilation. After ready,
+require actual Emu title/ID/category match the imported PSF, canonical boot path
+match selected EBOOT, canonical VFS /dev_bdvd and PS3_GAME roots/SFO/EBOOT match,
+and representative USRDIR asset path resolves when present. Then require actual
+ELF entry and nonempty mapped segment count/readability, real started liblv2,
+stopped PPU context(s), clean frontend and fully stopped/zeroCPU/mainqueue-drained
+Kill completion. Restores config and backup exactly as cached check. A load/mount
+mismatch fails after cleanup; incomplete cleanup retains the existing -2/reopen
+policy. No Run/Resume, guest execution, renderer/audio/controller integration.
+
+UIKit adds Import game folder and Check game load alongside existing controls.
+Folder picker uses UTTypeFolder with asCopy:NO and NSFileCoordinator reading
+under a security-scoped resource. Native code creates the single staged copy;
+no temporary duplicate of a multi-GB game. Files remain app-owned after scope
+release. Both actions run on a background queue, preserve the pending-operation
+marker/idle timer and serialize with diagnostics/import/runtime buttons. Existing
+firmware/ELF file pickers retain their original asCopy:YES route. No firmware
+reinstall or standalone executable inspection is needed if firmware remains and
+the full disc is being imported. Keep app open during copy/load.
+
+Host validation: production game importer compiled with pinned native PSF
+entry/load/get_string code and native SFB validator, independent binary SFO
+fixture and actual disk operations. Full tree/empty dirs/assets byte equality,
+replacement, rejection of bad size/count/key/table/format/identity/category,
+insufficient-space sparse input, links/overlapping roots/idle/C ABI boundaries,
+removed/added source files and corrupted staged EBOOT all preserve old import
+and remove staging. Executable decoding is an interface model in this new
+harness, separately covered by native intake/phone evidence. Existing runtime
+harness additionally covers success and wrong title/category/title ID/boot path,
+disc mapping and missing asset mapping, with cleanup/config restoration for each.
+Native BootGame, all49 callback signatures and actual patched JIT finalizer
+remain in that harness; native Load/VM/FXO/devices/config/VFS are host models.
+NSFileCoordinator/file-provider behavior and full-disc native loading await phone.
+
+The workflow intake-host gate now includes test_game_import.py with unchanged
+34 synchronization profiles. New CMake source GameImport.cpp and bundle114.
+All50 production patches, CoreBridge, frontend/dispatch and120 stages unchanged.
+Local g++ C++23 Wall/Wextra/Werror ASAN+UBSAN checks use detect_leaks=0 because
+this host prevents LeakSanitizer /proc inspection. Exact clean-checkout host and
+core-preparation workflow steps are checked before publication. iOS compilation
+and new game-folder device result remain pending; do not claim they passed.
+
+Next: install Build114 ARMSX3_iOS16_INSTALL_THIS_IPA through TrollStore, reopen,
+Run all120 tests, reuse installed firmware, Import game folder (select parent
+containing both PS3_GAME and PS3_DISC.SFB), keep open, Check game load, share log.
+Do not request or fabricate the user's game dump. Real title/ID, source copy and
+mount/cleanup result from that run determine the next execution/render work.
+Keep replies short; user reports Actions success/failure; do not monitor Actions.

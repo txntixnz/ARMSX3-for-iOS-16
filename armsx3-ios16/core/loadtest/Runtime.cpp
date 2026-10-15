@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: GPL-2.0-only
 #include "Runtime.h"
+#include "Intake.h"
+#include "GameImport.h"
 #include "StartupLog.h"
 #include "Emu/System.h"
 #include "Emu/system_config.h"
 #include "Emu/vfs_config.h"
 #include "Emu/IdManager.h"
+#include "Emu/VFS.h"
 #include "Emu/Cell/PPUAnalyser.h"
 #include "Emu/Cell/PPUThread.h"
 #include "Emu/Cell/lv2/sys_prx.h"
@@ -56,14 +59,16 @@ bool teardown()
 }
 }
 
-int check(std::string& detail)
+int check(std::string& detail, bool game = false)
 {
     require(!is_main_thread(), "Runtime loading must run off the UIKit main thread");
     require(stopped(), "Stop emulator activity before checking runtime loading");
-    const auto prepared = std::filesystem::path(fs::get_cache_dir()) / "ARMSX3-prepared-executable.elf";
+    const auto disc = game ? ios_game::installed() : ios_game::Disc{};
+    const auto prepared = game ? disc.root / "PS3_GAME/USRDIR/EBOOT.BIN" :
+        std::filesystem::path(fs::get_cache_dir()) / "ARMSX3-prepared-executable.elf";
     require(fs::is_file(prepared.string()), "Inspect your EBOOT / ELF first to prepare its executable");
     require(fs::is_file(g_cfg_vfs.get_dev_flash() + "sys/external/liblv2.sprx"), "Install PS3 firmware first");
-    fs::file file(prepared.string(), fs::read);
+    auto file = ios_intake::read_executable(prepared.c_str());
     require(bool(file) && file.size() > 0 && file.size() <= 0x40000000ull, "Prepared executable is unavailable or too large");
     ppu_exec_object elf(file);
     require(elf.get_error() == elf_error::ok, "Prepared executable is not a valid PPU ELF; inspect your EBOOT again");
@@ -105,7 +110,9 @@ int check(std::string& detail)
     bool attempted = false;
     try
     {
-        log("RUNTIME BEFORE native BootGame: prepared ELF, static decoders, null video/audio, autostart OFF");
+        log(game ? "RUNTIME BEFORE native BootGame: imported game EBOOT, static decoders, null video/audio, autostart OFF" :
+            "RUNTIME BEFORE native BootGame: prepared ELF, static decoders, null video/audio, autostart OFF");
+        if (game) log("GAME runtime BEFORE BootGame title=" + disc.title + " id=" + disc.id + " original EBOOT and full disc folder");
         attempted = true;
         const auto result = Emu.BootGame(prepared.string(), "", true, cfg_mode::config_override, temporary.path.string());
         log("RUNTIME AFTER BootGame: result=" + std::to_string(static_cast<unsigned>(result)) +
@@ -114,6 +121,25 @@ int check(std::string& detail)
         require(!g_cfg.misc.autostart.get() && g_cfg.core.ppu_decoder.get() == ppu_decoder_type::_static &&
             g_cfg.core.spu_decoder.get() == spu_decoder_type::_static && g_cfg.video.renderer.get() == video_renderer::null &&
             g_cfg.audio.renderer.get() == audio_renderer::null, "Runtime configuration differs from the load-only request");
+        if (game)
+        {
+            require(Emu.GetTitleID() == disc.id && Emu.GetTitle() == disc.title && Emu.GetCat() == disc.category,
+                "Native game identity differs from the imported PARAM.SFO");
+            const auto same = [](const std::string& actual, const std::filesystem::path& expected)
+            {
+                return !actual.empty() && std::filesystem::canonical(actual) == std::filesystem::canonical(expected);
+            };
+            require(same(Emu.GetBoot(), prepared), "Native loader selected a different executable");
+            require(same(vfs::get("/dev_bdvd"), disc.root) &&
+                same(vfs::get("/dev_bdvd/PS3_GAME"), disc.root / "PS3_GAME") &&
+                same(vfs::get("/dev_bdvd/PS3_GAME/PARAM.SFO"), disc.root / "PS3_GAME/PARAM.SFO") &&
+                same(vfs::get("/dev_bdvd/PS3_GAME/USRDIR/EBOOT.BIN"), prepared),
+                "Native disc mounts differ from the imported game folder");
+            if (!disc.asset.empty()) require(same(vfs::get("/dev_bdvd/PS3_GAME/USRDIR/" + disc.asset.generic_string()),
+                disc.root / "PS3_GAME/USRDIR" / disc.asset), "Native disc asset path is unavailable");
+            log("GAME runtime PASS title=" + Emu.GetTitle() + " id=" + Emu.GetTitleID() + " category=" + Emu.GetCat() +
+                " native disc, SFO, executable and asset mounts verified; asset=" + disc.asset.generic_string());
+        }
         const auto* main = g_fxo->try_get<main_ppu_module<lv2_obj>>();
         require(main && main->elf_entry == elf.header.e_entry, "Native main executable registration differs");
         for (const auto& segment : main->segs) if (segment.type == 1 && segment.size)
@@ -162,10 +188,22 @@ int check(std::string& detail)
         catch (...) { detail = "Runtime cleanup threw an unknown exception. Reopen the app."; return -2; }
     }
     if (!error.empty()) { detail = error + ". Cleanup completed; share the log."; return -1; }
-    detail = "Native runtime load passed: " + std::to_string(loaded_segments) + " executable segments and " +
+    detail = (game ? "Game load passed: " + disc.title + " [" + disc.id + "]. " : std::string("Native runtime load passed: ")) +
+        std::to_string(loaded_segments) + " executable segments and " +
         std::to_string(firmware_modules) + " firmware modules. Cleanup completed. Game execution and display are next.";
     return 0;
 }
+}
+
+extern "C" __attribute__((visibility("default"))) int armsx3_core_check_game(char* detail, std::size_t capacity)
+{
+    if (!detail || capacity < 2) return -1;
+    std::string text; int result = -1;
+    try { result = ios_runtime::check(text, true); }
+    catch (const std::exception& error) { text = error.what(); ARMSX3StartupLog(text.c_str()); }
+    catch (...) { text = "Game load check threw an unknown exception"; ARMSX3StartupLog(text.c_str()); }
+    const auto length = std::min(capacity - 1, text.size());
+    std::memcpy(detail, text.data(), length); detail[length] = '\0'; return result;
 }
 
 extern "C" __attribute__((visibility("default"))) int armsx3_core_check_runtime(char* detail, std::size_t capacity)
