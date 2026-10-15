@@ -1,6 +1,22 @@
-# ARMSX3 iOS 16 core — Build 120
+# ARMSX3 iOS 16 core — Build 121
 
 Target: iPhone 13 Pro Max/A15, iOS 16.0, Dopamine and TrollStore.
+
+Build120 passed all 36 host jobs but failed the native iOS archive compile.
+The renderer referenced five frame-generation settings that upstream declared
+only under __ANDROID__. This caused 83 missing-member errors across swapchain,
+presentation and frame-generation translation units. Build121 adds patch0055:
+explicit Apple platform detection and iOS visibility for that exact settings
+block. The production render action still forces frame generation off. Native
+Vulkan rendering remains enabled; the full iOS compile/link and phone presentation
+are pending. Use Build121 for the next Render game (10 seconds) test.
+
+The regression compiles the complete native system_config.h and
+system_config_types.h plus actual FrameGenConfig helpers against modeled config
+storage interfaces. It reproduces the old iOS failure, verifies all five settings
+and off/default helper behavior after patch0055, preserves Android visibility and
+verifies the existing macOS/Linux field absence and adjacent Android-only shader
+preset. The original first54 patches remain unchanged;55 patches total.
 Build119 passed all 120 diagnostics, native firmware/disc loading and another
 three-second Midnight Club: Los Angeles [BLUS30442] execution/clean stop.
 Its graphics check reached **Apple A15 GPU** and passed both 1,024-pixel offscreen
@@ -122,13 +138,14 @@ plus patch0050 for unused JIT-arena finalization and patch0051 for joined-contex
 observation and the iOS RSX startup/stop guard, plus patch0052 for static SPU
 startup and patch0053 for static SPU thread entry, plus patch0054 for the native
 Vulkan importer, optional Apple portability policy, borrowed iOS layer and present
-observer (54 patches total).
+observer plus patch0055 for iOS visibility of shared Vulkan configuration settings
+(55 patches total).
 34 synchronization host profiles plus the intake and graphics host checks gate the iOS
 compile, full link, signed bundle validation and one installable IPA. Matching
 core symbols and build logs remain available as separate artifacts.
 Build113's workflow produced the tested installable IPA. The historical patch
 validator remains scoped to its exact first 49 patches while preparation applies
-all 54. The host job also checks native PSF parsing and complete game
+all 55. The host job also checks native PSF parsing and complete game
 import. Local sanitizer
 checks use `ASAN_OPTIONS=detect_leaks=0` because LeakSanitizer cannot inspect
 processes in this environment.

@@ -10,7 +10,7 @@ native=Path(sys.argv[1]).resolve()
 PIN='92b931b9fb5eef7f1317cb482917dfc19aceebd9'
 paths=['3rdparty/CMakeLists.txt','rpcs3/Emu/RSX/VK/vkutils/instance.cpp',
  'rpcs3/Emu/RSX/VK/vkutils/metal_layer.mm','rpcs3/Emu/RSX/display.h','rpcs3/Emu/RSX/VK/vkutils/swapchain.cpp']
-patches=sorted((root/'patches').glob('*.patch'))
+patches=sorted(p for p in (root/'patches').glob('*.patch') if int(p.name[:4])<=54)
 assert [p.name[:4] for p in patches]==[f'{n:04d}' for n in range(1,55)]
 with tempfile.TemporaryDirectory(prefix='armsx3-native-renderer-') as temp:
  temp=Path(temp)

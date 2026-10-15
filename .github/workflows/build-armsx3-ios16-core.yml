@@ -151,6 +151,7 @@ jobs:
           python3 armsx3-ios16/tests/test_p114_intake.py upstream-armsx3
           python3 armsx3-ios16/tests/test_runtime.py upstream-armsx3
           python3 armsx3-ios16/tests/test_native_renderer.py upstream-armsx3
+          python3 armsx3-ios16/tests/test_vulkan_config.py upstream-armsx3
           python3 armsx3-ios16/tests/test_jit_lifecycle.py upstream-armsx3
           python3 armsx3-ios16/tests/test_spu_cache_startup.py upstream-armsx3
           python3 armsx3-ios16/tests/test_spu_thread_entry.py upstream-armsx3

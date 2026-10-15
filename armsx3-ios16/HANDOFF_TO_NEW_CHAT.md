@@ -3826,3 +3826,60 @@ workflow install ARMSX3_iOS16_INSTALL_THIS_IPA through TrollStore, run120 tests,
 tap Render game (10 seconds), keep app open, share log and describe screen. On
 crash request unfinished log + matching .ips. Do not claim visible rendering,
 performance or playability yet. No images; keep replies concise English.
+
+
+## Build121 — 2026-10-15: fix native Vulkan settings visibility on iOS
+
+User reported Build120 workflow failure. Actions38724925004 / native job116388791080:
+all36 host prerequisites passed. Native archive compilation failed with83 errors,
+all missing cfg_root::node_video members from the Android-only frame-generation
+block: frame_generation, frame_generation_flow_scale, frame_generation_target_rate,
+frame_generation_performance, frame_generation_dll_path. Consumers include native
+swapchain.cpp, VKGSRender.cpp, VKPresent.cpp and FrameGen helpers/LosslessDll.cpp.
+No IPA or iOS runtime renderer test occurred. Fetch decoded logs via GitHub
+fetch_workflow_job_logs(repo_full_name,job_id), not generic fetch of /logs.
+
+Build121 patch0055 changes only rpcs3/Emu/system_config.h: explicitly includes
+TargetConditionals.h on Apple, and exposes that exact configuration block on
+Android OR (Apple AND TARGET_OS_IOS). ARMSX3_IOS is only a CMake variable for the
+native archive, so do not assume it is a native preprocessor definition. Other
+Android-only settings (shader preset/audio defaults) and macOS/Linux availability
+remain unchanged. Native enum frame_generation_mode is already unconditional.
+The production iOS render request still sets frame_generation_mode::off. First54
+patches, native Vulkan backend selection, frame adapter, UIKit ownership, actions,
+GPU library pin/digest and full-link policy are unchanged.55 patches total.
+
+New tests/test_vulkan_config.py reconstructs pinned config/types/FrameGenConfig
+headers through exact first54+55 patches and checks reverse applicability. It
+compiles complete actual native cfg_root and enums with explicit host cfg storage
+interfaces / TargetConditionals macros. Reinstating Build120's config header
+reproduces missing-field compilation; fixed iOS and original Android compile and
+run actual native FrameGen helper defaults/mode/flow/target/performance access;
+macOS/Linux compile and verify existing field absence. Covers allfive fields
+referenced by allsix native consumer files, empty DLL path/defaultoff and adjacent
+Android-only shader preset visibility. No full native GPU or serialization claim.
+Added to intake-host. test_native_renderer.py now explicitly scopes its historical
+patch54 fixture to first54, so additive patch55 cannot shift the target.
+
+Validation: exact workflow intake-host step passes, including actual-header
+regression and existing ASAN+UBSAN lifecycle/JIT/SPU/import checks. Fresh
+build121-validation at92b931b runs exact core preparation/audits/registries and
+all55 patches plus overlays. AST/YAML/plist checks and frozen first54/renderer/
+frontend/diagnostic-core verification pass. Local environment has no iOS SDK;
+full compile/link and actual native renderer presentation remain pending CI/phone.
+34 synchronization profiles and graphics implementation unchanged; all36 host
+jobs passed Build120. Do not imply this local config test proves full iOS linking.
+
+The additional attached ARMSX3-startup-20261015-112725-269-30756.txt is explicitly
+Build119 again:120 diagnostics, imported-game checks/three-second execution,
+50,516 joined completed HLE/LV2 calls,20PPU/sixSPUs, clean stop and both A15 graphics
+readbacks passed. It has no RENDER action and is no evidence of Build120 rendering.
+User was directed to the new Render game (10 seconds) action once an IPA builds.
+
+Repo main parentdd6bc81d9cb11193e7cf5de98c371ef82220eca3 (Build120), parent tree
+1e4ce2316cbd130406c6c10d0d1d48d18f8ef573. Build121 metadata/plist/docs updated.
+Publish with Git data API expected-head lease, verify tree, sync local branch.
+One queued check permitted; do not monitor new Actions run after publication.
+After successful CI install ARMSX3_iOS16_INSTALL_THIS_IPA, run120 tests, tap Render
+game (10 seconds), keep app open and share log + what appeared. No images and
+concise English replies. Audio/controls pending; meaningful pixels/FPS unverified.

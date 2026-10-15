@@ -1,0 +1,22 @@
+--- a/rpcs3/Emu/system_config.h
++++ b/rpcs3/Emu/system_config.h
+@@ -2,6 +2,9 @@
+ 
+ #include "system_config_types.h"
+ #include "Utilities/Config.h"
++#ifdef __APPLE__
++#include <TargetConditionals.h>
++#endif
+ 
+ enum CellNetCtlState : s32;
+ enum CellSysutilLicenseArea : s32;
+@@ -187,7 +190,8 @@
+ 		cfg::_bool disable_msl_fast_math{ this, "Disable MSL Fast Math", false };
+ 		cfg::_bool disable_async_host_memory_manager{ this, "Disable Asynchronous Memory Manager", false, true };
+ 		cfg::_enum<output_scaling_mode> output_scaling{ this, "Output Scaling Mode", output_scaling_mode::bilinear, true };
+-#ifdef __ANDROID__
++#if defined(__ANDROID__) || (defined(__APPLE__) && TARGET_OS_IOS)
++		// Shared Vulkan sources read these settings on iOS; the iOS run keeps them off.
+ 		// ARMSX3: Lossless Scaling frame generation.
+ 		//
+ 		// Default off and it stays off unless the user supplies shaders from their own copy of
