@@ -88,9 +88,11 @@ Result check_device(void (*log)(const char*))
         const auto instance_extensions = enumerate<VkExtensionProperties>([](auto* count, auto* data) { return vkEnumerateInstanceExtensionProperties(nullptr, count, data); }, "Enumerate instance extensions");
         std::vector<const char*> enabled;
         VkInstanceCreateFlags flags = 0;
-#ifdef __APPLE__
-        if (!extension(instance_extensions, VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME)) throw std::runtime_error("MoltenVK portability enumeration is absent");
-#endif
+        // The Vulkan loader supplies portability enumeration. Directly linked
+        // MoltenVK enumerates its devices without advertising that extension.
+        // Enable the extension/flag pair only when it is actually advertised.
+        emit("GRAPHICS instance extensions=" + std::to_string(instance_extensions.size()) +
+            " portability enumeration=" + (extension(instance_extensions, VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME) ? "advertised" : "not advertised; flags=0"));
         if (extension(instance_extensions, VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME))
         {
             enabled.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);

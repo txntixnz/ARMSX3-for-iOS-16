@@ -1,4 +1,4 @@
-# ARMSX3 iOS 16 core — Build 118
+# ARMSX3 iOS 16 core — Build 119
 
 Target: iPhone 13 Pro Max/A15, iOS 16.0, Dopamine and TrollStore.
 The installable app links the actual pinned rpcs3_emu core. Build117 passed all
@@ -10,7 +10,14 @@ created render/streamer/audio threads and performed SPU DMA. Static SPU block
 counters remained zero, as expected for this backend. Native exec_bytes/4 is a
 backend counter estimate, not a measured instruction rate or FPS.
 
-Build118 adds **Check graphics device** using a pinned iOS MoltenVK static library.
+Build118 retained the complete guest-run/cleanup success on the phone. Its new
+**Check graphics device** stopped before creating an instance because it required
+VK_KHR_portability_enumeration, an extension supplied by the Vulkan loader.
+The app links MoltenVK directly, whose extension catalog omits that loader feature.
+Build119 removes that Apple-only precondition. It still enables the extension and
+its paired flag whenever advertised, and retains portability_subset device setup.
+
+The graphics check uses the same pinned iOS MoltenVK static library.
 It creates a real Vulkan/Metal graphics device and queue, clears an offscreen
 RGBA8 image red then blue, copies each result to host-visible memory, waits on
 GPU fences and verifies all 1,024 pixels per pass. It logs device/API/driver and
@@ -208,5 +215,13 @@ failures. Failure return values and core-idle interfaces are modeled; Vulkan
 commands execute through the real software driver. A timeout preserves the whole
 owner and blocks reuse, avoiding destruction while work might still be queued.
 Linux results do not verify Apple's driver or iOS linking. The existing 35 host
-jobs plus this graphics job gate the IPA build. Phone graphics success remains
-pending. Native RSX rendering and UIKit presentation are the next integration.
+jobs plus this graphics job gate the IPA build. Build118 did not reach graphics device creation; Build119 retries it. Phone
+graphics success remains pending. Native RSX rendering and UIKit presentation are the next integration.
+
+The graphics regression now also compiles the production Apple preprocessor path.
+A filtered instance-extension list models directly linked MoltenVK while keeping
+actual lavapipe GPU commands. Reinstating Build118's exact Apple-only rejection
+reproduces its failure before instance creation. Build119 passes both advertised
+loader-extension and absent direct-driver-extension cases, preserving correct
+flag/extension pairing. The original cleanup/concurrency/failure cases remain.
+This is a host regression for instance setup, not an Apple GPU success claim.

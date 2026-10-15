@@ -3674,3 +3674,78 @@ configure/generate passed. Python/YAML/plist118/shell syntax and git diff --chec
 passed. License files are checked before IPA packaging. Actual Xcode16.4/iOS16
 compile/link and phone graphics result remain pending. No Actions monitoring
 after the single queued check.
+
+
+## Build119 — direct MoltenVK instance setup fix (2026-10-15)
+
+Device evidence: ARMSX3-startup-20261015-102235-835-30258.txt, Build118/PID30258.
+All120diagnostics passed. The game completed its3second run again with20joined
+PPUs/6SPUs,51,171completed HLE/LV2calls and full native cleanup. The aggregate
+native exec_bytes/4=1,528,671,915 stays labeled an estimate; not a benchmark.
+The following Check graphics device returned ordinary-1 before instance creation:
+GRAPHICS BEFORE1792059753.239343 -> MoltenVK portability enumeration is absent
+1792059753.243114 -> GRAPHICS UI FAIL1792059753.253068. No app crash, no GPU work,
+no owner quarantine. Guest execution remains device-verified on117and118.
+
+Cause is our Apple-only precondition in GraphicsDevice.cpp, not hardware support
+or firmware/game data. This app links the MoltenVK static driver directly and does
+not use the Vulkan loader. Pinned MoltenVK v1.4.2's actual extension catalog
+MoltenVK/MoltenVK/Layers/MVKExtensions.def includes KHR_portability_subset as a
+DEVICE extension but does not contain KHR_portability_enumeration. Its runtime
+guide explicitly describes the enumeration flag as needed when the Vulkan loader
+enumerates MoltenVK. The pinned GPUObjects/MVKInstance.mm constructor validates
+only requested/advertised extensions and getPhysicalDevices enumerates directly.
+Primary source paths were read at the exact v1.4.2 tag through GitHub; runtime
+guide is also in the downloaded, digest-verified package from118.
+
+Build119 removes only that Apple precondition and adds one instance-extension/
+flag log. If KHR_portability_enumeration is advertised, still enable the extension
+AND VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR. Otherwise request neither
+and proceed to vkCreateInstance/direct physical-device enumeration. Device-level
+portability_subset enabling is unchanged. All queue/memory/clear/barrier/copy/
+fence/readback, resource cleanup and uncertain-work retention are unchanged.
+MoltenVKv1.4.2 archive/SHA/headers/frameworks/CMake/package/license scripts are
+unchanged. All53native patches,120diagnostics, production guest runtime/capture/
+frontend/dispatch/intake/import/bridge and UIKit actions remain unchanged from118.
+Bundle version/metadata fixture/README and both independent handoffs now119.
+
+Expanded test_graphics_device.py filters only the loader portability extension
+from actual Linux instance-extension enumeration to model the direct-driver list.
+GPU commands still execute through real lavapipe and Khronos synchronization
+validation; no synthetic GPU/readback backend. vkCreateInstance wrapper asserts
+that extension and flag are paired, and direct-list input has flags0. Ten existing/
+new standard scenarios cover loader-present/direct-absent success and all prior
+failure/concurrency/timeout cases. Production sources are additionally compiled
+with __APPLE__=1, passing loader-present AND direct-absent GPU/readback cycles.
+A third binary reinstates Build118's exact Apple-only rejection before the same
+GPU code: loader-present passes and direct-absent reproduces the same error with
+zero created instances/devices. This is a scoped reconstruction of the original
+precondition, not an actual Apple driver test.14process scenarios passed with
+ASAN+UBSAN/Wall/Wextra/Werror and zero validation VUID/errors. The Apple branch
+that escaped118's Linux host tests is now covered. Full iOS compile/phone device
+creation/readback remain pending119; no rendering/surface/shader success claimed.
+
+Workflow jobs/36host dependencies unchanged; the existing graphics-host invokes
+the expanded regression. Exact clean pinned intake-host and53patch preparation
+must pass before publishing. Don't rerun unchanged34synchronization profiles
+locally just for this frontend fix. Native VKGSRender remains disabled, so audit
+its separate instance-extension setup against direct MoltenVK when enabling it
+later; don't assume loader-only setup will work unchanged.
+
+Next phone step: install Build119 ARMSX3_iOS16_INSTALL_THIS_IPA when workflow
+succeeds, Run all120tests, then Check graphics device and share startup log.
+No firmware/game reimport needed. Optional existing Run game3seconds regression
+can reuse retained data. Keep replies concise English, no images, and verify
+workflow queued only once after publication; do not monitor Actions afterward.
+
+Build119 prepublication validation PASSED in fresh pinned build119-validation:
+exact YAML intake-host and all53patch core-preparation commands both exited0;
+all final core/ios overlay byte comparisons passed. Graphics regression14processes
+passed with real lavapipe/synchronization validation and ASAN+UBSAN, including
+old Apple guard failure and corrected Apple direct-driver success. Source
+comparison proves GPU work/cleanup unchanged outside the instance precondition/
+log; all guest/native patches/UI/dependency/workflow sources unchanged. Python/
+YAML/plist119/shell syntax and git diff --check passed. Build118 already proved
+Xcode16.4 static driver linking/core load/iOS16compatibility; first actual Apple
+VkInstance/device/readback still awaits119phone test. Do not monitor Actions
+after the single queued check at publication.

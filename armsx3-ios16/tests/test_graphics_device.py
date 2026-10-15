@@ -9,6 +9,7 @@ host=r'''
 #include "GraphicsDevice.h"
 #include "Runtime.h"
 #include <vulkan/vulkan.h>
+#include <algorithm>
 #include <atomic>
 #include <cassert>
 #include <condition_variable>
@@ -29,7 +30,19 @@ extern "C" std::uint64_t armsx3_ios_live_cpu_threads(){return host_cpus;}
 void ARMSX3StartupLog(const char*s){std::puts(s);}
 std::mutex waiter_mutex;std::condition_variable waiter;bool entered=false,released=false;
 template<class T>T real(const char*name){auto p=dlsym(RTLD_NEXT,name);assert(p);return reinterpret_cast<T>(p);}
+extern "C" VkResult vkEnumerateInstanceExtensionProperties(const char*layer,uint32_t*count,VkExtensionProperties*data){
+ auto fetch=real<PFN_vkEnumerateInstanceExtensionProperties>("vkEnumerateInstanceExtensionProperties");
+ if(fault!="direct"||layer)return fetch(layer,count,data);
+ uint32_t total=0;auto result=fetch(nullptr,&total,nullptr);if(result!=VK_SUCCESS)return result;
+ std::vector<VkExtensionProperties>extensions(total);result=fetch(nullptr,&total,extensions.data());if(result!=VK_SUCCESS)return result;extensions.resize(total);
+ extensions.erase(std::remove_if(extensions.begin(),extensions.end(),[](const auto&e){return !std::strcmp(e.extensionName,VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);}),extensions.end());
+ if(!data){*count=extensions.size();return VK_SUCCESS;}
+ const auto copied=std::min<uint32_t>(*count,extensions.size());std::copy_n(extensions.data(),copied,data);const bool incomplete=copied<extensions.size();*count=copied;return incomplete?VK_INCOMPLETE:VK_SUCCESS;
+}
 extern "C" VkResult vkCreateInstance(const VkInstanceCreateInfo*a,const VkAllocationCallbacks*b,VkInstance*c){
+ bool portability=false;for(uint32_t i=0;i<a->enabledExtensionCount;++i)portability|=!std::strcmp(a->ppEnabledExtensionNames[i],VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+ assert(portability==bool(a->flags&VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR));
+ if(fault=="direct")assert(!portability&&a->flags==0);
  if(fault=="instance")return VK_ERROR_INITIALIZATION_FAILED;
  VkInstanceCreateInfo info=*a;
  std::vector<const char*>extensions;
@@ -72,12 +85,19 @@ int main(int argc,char**argv){
  host_stopped=false;assert(armsx3_core_check_graphics(detail,sizeof(detail))==-1);host_stopped=true;
  host_cpus=1;assert(armsx3_core_check_graphics(detail,sizeof(detail))==-1);host_cpus=std::uint64_t{1}<<32;assert(armsx3_core_check_graphics(detail,sizeof(detail))==-1);host_cpus=0;
  assert(!instances&&!devices);
+#ifdef EXPECT_LEGACY
+ if(fault=="direct"){
+  assert(armsx3_core_check_graphics(detail,sizeof(detail))==-1&&std::strstr(detail,"MoltenVK portability enumeration is absent"));
+  assert(!instances&&!devices&&!destroyed_instances&&!destroyed_devices);
+  std::puts("PASS: Build118 Apple-only guard rejects direct-driver extension list before creating an instance");return 0;
+ }
+#endif
  if(fault=="busy"){
   int result=-99;std::thread worker([&]{result=armsx3_core_check_graphics(detail,sizeof(detail));});
   {std::unique_lock lock(waiter_mutex);waiter.wait(lock,[]{return entered;});}
   auto other=ios_graphics::check_device(nullptr);assert(other.status==-1&&other.detail.find("already active")!=std::string::npos);
   {std::lock_guard lock(waiter_mutex);released=true;}waiter.notify_all();worker.join();assert(result==0);
- }else if(fault=="success"){
+ }else if(fault=="success"||fault=="direct"){
   for(int i=0;i<4;++i)assert(armsx3_core_check_graphics(detail,sizeof(detail))==0);
   assert(instances==4&&devices==4&&readbacks==8);
  }else{
@@ -105,12 +125,30 @@ def main():
   tmp=Path(tmp);(tmp/'Emu').mkdir()
   (tmp/'Emu/System.h').write_text('#pragma once\nextern bool host_stopped;struct{bool IsStopped(bool full){return full&&host_stopped;}}Emu;\n')
   (tmp/'host.cpp').write_text(host)
-  binary=tmp/'graphics'
-  subprocess.run(['g++','-std=c++23','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-omit-frame-pointer','-pthread','-I',str(tmp),'-I',str(root/'core/loadtest'),'-I',str(root/'ios/src'),'-I',include,str(root/'core/loadtest/GraphicsDevice.cpp'),str(root/'core/loadtest/GraphicsCheck.cpp'),str(tmp/'host.cpp'),'-l:libvulkan.so.1','-ldl','-o',str(binary)],check=True,timeout=180)
-  for scenario in ['success','instance','device','map','pixels','lost','busy','submit','timeout']:
+  source=(root/'core/loadtest/GraphicsDevice.cpp').read_text()
+  legacy_guard='''#ifdef __APPLE__
+        if (!extension(instance_extensions, VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME)) throw std::runtime_error("MoltenVK portability enumeration is absent");
+#endif
+'''
+  marker='        // The Vulkan loader supplies portability enumeration.'
+  assert source.count(marker)==1
+  # Reinsert the exact prior Apple-only rejection while keeping GPU commands
+  # unchanged. This specifically covers the branch absent from Build118's CI.
+  (tmp/'legacy.cpp').write_text(source.replace(marker,legacy_guard+marker,1))
+  def build(name,path,defines=()):
+   binary=tmp/name
+   subprocess.run(['g++','-std=c++23','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-omit-frame-pointer','-pthread',*defines,'-I',str(tmp),'-I',str(root/'core/loadtest'),'-I',str(root/'ios/src'),'-I',include,str(path),str(root/'core/loadtest/GraphicsCheck.cpp'),str(tmp/'host.cpp'),'-l:libvulkan.so.1','-ldl','-o',str(binary)],check=True,timeout=180)
+   return binary
+  def run(binary,scenario):
    result=subprocess.run([str(binary),scenario],capture_output=True,text=True,timeout=60)
    assert result.returncode==0,(scenario,result.stdout,result.stderr)
    assert 'Validation Error' not in result.stdout+result.stderr and 'VUID-' not in result.stdout+result.stderr,(result.stdout,result.stderr)
-   print(scenario,':',result.stdout.splitlines()[-1])
- print('PASS: graphics GPU work uses actual Linux Vulkan/lavapipe; iOS MoltenVK/Metal and native RSX rendering/presentation still require device validation')
+   print(binary.name,scenario,':',result.stdout.splitlines()[-1])
+  binary=build('graphics',root/'core/loadtest/GraphicsDevice.cpp')
+  for scenario in ['success','direct','instance','device','map','pixels','lost','busy','submit','timeout']:run(binary,scenario)
+  apple=build('apple',root/'core/loadtest/GraphicsDevice.cpp',['-D__APPLE__=1'])
+  for scenario in ['success','direct']:run(apple,scenario)
+  before=build('before',tmp/'legacy.cpp',['-D__APPLE__=1','-DEXPECT_LEGACY=1'])
+  for scenario in ['success','direct']:run(before,scenario)
+ print('PASS: Build118 Apple rejection reproduced; advertised loader extension/flag pairing and absent direct-driver enumeration covered, with real Vulkan/lavapipe GPU commands and modeled extension filtering; iOS MoltenVK/Metal and native RSX rendering/presentation still require device validation')
 if __name__=='__main__':main()
