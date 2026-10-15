@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: GPL-2.0-only
 #include "Runtime.h"
+#include "RuntimeFrame.h"
 #include "StartupLog.h"
 #include "Emu/System.h"
+#include "Emu/system_config.h"
 #include "Emu/emu_callbacks.h"
 #include "Emu/IdManager.h"
 #include "Utilities/Thread.h"
 #include "Emu/RSX/Null/NullGSRender.h"
+#include "Emu/RSX/VK/VKGSRender.h"
 #include "Emu/Audio/Null/NullAudioBackend.h"
 #include "Emu/Audio/Null/null_enumerator.h"
 #include "Emu/Io/Null/NullKeyboardHandler.h"
@@ -99,10 +102,20 @@ void install_frontend()
     g_emu_callbacks.update_emu_settings = [] {};
     g_emu_callbacks.save_emu_settings = [] { log("RUNTIME settings retained in the temporary load configuration"); };
     g_emu_callbacks.close_gs_frame = [] {};
-    g_emu_callbacks.get_gs_frame = [] { return std::unique_ptr<GSFrameBase>{}; };
+    g_emu_callbacks.get_gs_frame = [] {
+        return g_cfg.video.renderer == video_renderer::vulkan ? take_renderer_frame() : std::unique_ptr<GSFrameBase>{};
+    };
     g_emu_callbacks.get_camera_handler = [] { return std::make_shared<null_camera_handler>(); };
     g_emu_callbacks.get_music_handler = [] { return std::make_shared<null_music_handler>(); };
     g_emu_callbacks.init_gs_render = [](utils::serial* ar) {
+        if (g_cfg.video.renderer == video_renderer::vulkan)
+        {
+            if (!renderer_frame_ready()) throw std::runtime_error("Native Vulkan startup requires a prepared Metal layer");
+            log("RENDER BEFORE native Vulkan renderer and Metal swapchain");
+            ensure(g_fxo->init<rsx::thread, named_thread<VKGSRender>>(ar));
+            log("RENDER AFTER native Vulkan renderer construction");
+            return;
+        }
         log("RUNTIME frontend BEFORE native null RSX thread");
         ensure(g_fxo->init<rsx::thread, named_thread<NullGSRender>>(ar));
         log("RUNTIME frontend AFTER native null RSX thread");

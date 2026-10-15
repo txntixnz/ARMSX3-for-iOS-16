@@ -7718,3 +7718,80 @@ YAML/plist119/shell syntax and git diff --check passed. Build118 already proved
 Xcode16.4 static driver linking/core load/iOS16compatibility; first actual Apple
 VkInstance/device/readback still awaits119phone test. Do not monitor Actions
 after the single queued check at publication.
+
+
+## Build120 — 2026-10-15: native Vulkan renderer / retained UIKit surface
+
+Latest device evidence: attached ARMSX3-startup-20261015-104445-008-30463.txt,
+Build119. All120 diagnostics, native Midnight Club: Los Angeles BLUS30442 DG
+load/identity/disc checks and three-second real guest execution/clean teardown
+passed. Joined snapshot:20 PPU contexts/six SPUs,49,092 completed HLE/LV2 calls;
+exec_bytes/4=1,514,516,280 is a backend estimate, not independent throughput/FPS.
+Graphics:18 instance extensions, portability enumeration absent/flags0; Apple A15
+GPU, probe API1.1/driver10402; maxTexture2D16384/maxStorageBuffer1474871296,
+geometry0/tessellation1/fragmentStores1. Both1024-pixel RGBA8 clear/copy/fence/
+readback passes and GRAPHICS UI PASS. Probe API1.1 is the request used by that
+check, not proof native renderer's negotiated <=1.2 request is unsupported.
+
+Build120 now enables USE_VULKAN=ON, LLVM remains OFF. Native patch0054 imports
+the same verified MoltenVK1.4.2 arm64 iOS archive (no macOS build/submodule fetch),
+uses advertised-only Apple loader extension/flag policy in normal/fast instance
+creation, passes an already-captured CAMetalLayer directly through the iOS bridge,
+and observes actual swapchain_WSI::present return values after vkQueuePresentKHR.
+All first53 patches are unchanged;54 total. MoltenVK importer is include_guard
+GLOBAL with GLOBAL imported target for sibling3rdparty/loadtest scopes. Digest,
+platform/minOS/license checks and full undefined-error/-force_load link stay intact.
+
+New separate UI action: Render game (10 seconds). UIKit creates/retains a modal
+RenderController/RenderSurface(CAMetalLayer), with1280x720 drawable letterboxed to
+viewport. The C ABI armsx3_core_render_game borrows this layer+fixed dimensions.
+RuntimeFrame implements actual GSFrameBase; native GSRender consumes the unique
+frame then close() deletes it after the native Vulkan destructor. No RSX UIKit
+reads or dispatch_sync/main geometry calls. Finish rejects a live native frame.
+On -2 incomplete cleanup the view/layer remains retained AND attached; UI says to
+close/reopen and share the previous unfinished log. Normal returns dismiss only
+after native GPU/CPU stop and frame release. Pending markers/log sharing retained.
+
+Render mode uses native BootGame/Run(false)/RSX-started RunPPU, original disc and
+firmware validation, static PPU/SPU, null audio, MSAA none, async_recompiler/two
+shader compiler threads, framegen off and1024MiB native VRAM allocation limit.
+15sec startup budget,10sec running window, native Kill(false) and fully-stopped
+cleanup/drain/config restoration. The original3sec null video/audio action and
+load/device checks remain. Render PASS additionally requires accepted native
+VK_SUCCESS/VK_SUBOPTIMAL_KHR presents>0 andzero present errors, plus joined CPU
+progress andclean stop. Present acceptance is NOT evidence of meaningful game
+pixels/FPS. First accepted native present is explicitly logged. Audio/controls
+pending. Full backend compile, Metal surface/device presentation and actual game
+content remain unverified until CI/phone. No fabricated game frames or GPU passes.
+
+Validation completed locally:
+- Exact workflow intake-host step including fixture/intake/runtime/native JIT/
+  SPU cache/SPU entry/game import; ASAN+UBSAN detect_leaks=0.
+- Runtime regression now compiles actual GSFrameBase/GSRender constructor/dtor/
+  context/exit methods with production RuntimeFrame;64 ownership cycles, pending/
+  duplicate/invalid-size/take-once/live-frame guards, counts reset/unarmed cases,
+  modeled render success/no-present/device-error/suboptimal, cleanup/config restore.
+  Guest/VM/FXO/native Vulkan subclass/queue outcomes are explicit host models.
+- New test_native_renderer.py reconstructs exact first53+54 sources, reverse
+  checks54; compiles actual native queue-present method + both Apple extension
+  selection paths/flag policy with host Vulkan interfaces; hook order/returns;
+  actual iOS CMake branch/importer across sibling scopes/repeated includes; UIKit
+  lifetime source contracts. Included in existing intake-host job.
+- Fresh build120-validation at pinned92b931b: exact workflow core Apply iOS core
+  patches step passed, all54 patches/overlays. Original first49 historical validator
+  and registry checks retained;34 synchronization + intake + graphics prerequisites.
+- Production graphics-device/check regression passed real Vulkan/lavapipe with
+  Khronos synchronization validation,14 process cases including direct-driver
+  policy and old Build118 guard reproduction. No Apple/Metal claim from Linux.
+- Full iOS SDK/toolchain unavailable locally; Actions compiles/links real native
+  renderer and app. Build120 device result remains pending.
+
+Repo txntixnz/ARMSX3-for-iOS-16 main; pinned upstream92b931b9fb5eef7f1317cb482917dfc19aceebd9.
+Build119 parent74ebbb84e2d89fcb3074def844532207f6b6c60f. Source/tests/plist/docs120.
+Publish via Git data API with expected-head lease (CLI push has no token), verify
+identical local/remote tree and sync local tracking. One queued Actions check is
+permitted; DO NOT monitor afterwards. User will report results. After successful
+workflow install ARMSX3_iOS16_INSTALL_THIS_IPA through TrollStore, run120 tests,
+tap Render game (10 seconds), keep app open, share log and describe screen. On
+crash request unfinished log + matching .ips. Do not claim visible rendering,
+performance or playability yet. No images; keep replies concise English.

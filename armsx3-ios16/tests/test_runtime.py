@@ -54,12 +54,13 @@ prelude=r'''
 #include <utility>
 #include <vector>
 using usz=std::size_t;constexpr usz umax=~usz{0};
-using u8=std::uint8_t;using u32=std::uint32_t;using s32=std::int32_t;using u64=std::uint64_t;using f32=float;
+using u8=std::uint8_t;using u32=std::uint32_t;using s32=std::int32_t;using u64=std::uint64_t;using f32=float;using f64=double;using draw_context_t=void*;using display_handle_t=void*;
+enum class vsync_mode{off};
 template<class T>struct atomic_t{std::atomic<T>value;atomic_t(T v={}):value(v){}operator T()const{return value.load();}atomic_t&operator=(T v){value.store(v);return *this;}void notify_one(){value.notify_one();}};
 namespace utils{struct serial{};}namespace stx{template<class T>using shared_ptr=std::shared_ptr<T>;template<class T>struct atomic_ptr{};}
 namespace cfg{struct _base{};}
 enum class localized_string_id{placeholder};
-struct GSFrameBase{virtual~GSFrameBase()=default;};
+/* ACTUAL_GS_FRAME_BASE */
 struct camera_handler_base{virtual~camera_handler_base()=default;};struct null_camera_handler:camera_handler_base{};
 struct music_handler_base{virtual~music_handler_base()=default;};struct null_music_handler:music_handler_base{};
 struct AudioBackend{virtual~AudioBackend()=default;};struct NullAudioBackend:AudioBackend{};
@@ -79,7 +80,10 @@ struct ppu_thread{
  struct History{struct Entry{u64 cia=0;const char*func_name="host_call";u64 error=0;};u64 index=0;std::vector<Entry>data=std::vector<Entry>(8);}syscall_history;
 };
 struct spu_thread{u32 pc=0x100;u64 block_counter=0;};
-namespace rsx{struct thread{virtual~thread()=default;};struct rsx_replay_thread{CpuState state;};}struct NullGSRender:rsx::thread{explicit NullGSRender(utils::serial*){}};
+namespace rsx{struct display_flip_info_t{};struct thread{explicit thread(utils::serial* = nullptr){}virtual~thread()=default;virtual void on_init_thread(){}virtual void on_exit(){}virtual void flip(const display_flip_info_t&){}virtual f64 get_display_refresh_rate()const{return 60.;}};struct rsx_replay_thread{CpuState state;};}
+/* ACTUAL_GS_RENDER_HEADER */
+struct VKGSRender:GSRender{explicit VKGSRender(utils::serial* ar):GSRender(ar){}~VKGSRender()override{on_exit();}};
+struct NullGSRender:rsx::thread{explicit NullGSRender(utils::serial*){}};
 template<class T>struct named_thread:T{template<class...A>named_thread(A&&...a):T(std::forward<A>(a)...){}};
 enum class MsgDialogState{Open,Close};
 struct MsgDialogBase{
@@ -90,6 +94,7 @@ struct MsgDialogBase{
 };
 struct OskDialogBase{};struct SaveDialogBase{};struct SendMessageDialogBase{};struct RecvMessageDialogBase{};struct TrophyNotificationBase{};struct video_source{};
 enum class ppu_decoder_type{_static,llvm};enum class spu_decoder_type{_static,dynamic,asmjit,llvm};enum class video_renderer{null,vulkan};enum class audio_renderer{null,cubeb};
+enum class msaa_level{none,_auto};enum class shader_mode{async_recompiler,async_with_interpreter};enum class frame_generation_mode{off,on};
 enum class keyboard_handler{null,basic};enum class mouse_handler{null,basic};enum class np_internet_status{disabled,enabled};enum class np_psn_status{disabled,enabled};
 enum class cfg_mode{custom,config_override};enum class game_boot_result{no_errors,invalid_file_or_folder,nothing_to_boot,currently_restricted};
 enum class system_state{stopped,stopping,ready,starting,running,frozen,paused};
@@ -100,7 +105,7 @@ template<class T>struct Setting{T value{};void set(T v){value=v;}T get()const{re
 struct LibrarySet{std::set<std::string>value;void set_set(std::set<std::string>&&v){value=std::move(v);}};
 struct cfg_root{
  struct{Setting<ppu_decoder_type>ppu_decoder;Setting<spu_decoder_type>spu_decoder;Setting<bool>llvm_precompilation,ppu_call_history;LibrarySet libraries_control;}core;
- struct{Setting<video_renderer>renderer;}video;struct{Setting<audio_renderer>renderer;}audio;
+ struct{Setting<video_renderer>renderer;Setting<vsync_mode>vsync;Setting<msaa_level>antialiasing_level;Setting<shader_mode>shadermode;Setting<int>shader_compiler_threads_count;Setting<frame_generation_mode>frame_generation;struct{Setting<unsigned>vram_allocation_limit;}vk;}video;struct{Setting<audio_renderer>renderer;}audio;
  struct{Setting<keyboard_handler>keyboard;Setting<mouse_handler>mouse;}io;
  struct{Setting<bool>autostart,autoexit,start_big_picture_mode,enable_gamemode,prevent_display_sleep;}misc;
  LogSetting log;
@@ -108,10 +113,11 @@ struct cfg_root{
  std::string to_string()const{std::ostringstream s;s<<int(core.ppu_decoder.value)<<' '<<int(core.spu_decoder.value)<<' '<<core.llvm_precompilation.value<<' '
  <<core.libraries_control.value.count("liblv2.sprx:lle")<<' '<<int(video.renderer.value)<<' '<<int(audio.renderer.value)<<' '<<int(io.keyboard.value)<<' '<<int(io.mouse.value)<<' '
  <<misc.autostart.value<<' '<<misc.autoexit.value<<' '<<misc.start_big_picture_mode.value<<' '<<misc.enable_gamemode.value<<' '<<misc.prevent_display_sleep.value<<' '
- <<int(net.net_active.value)<<' '<<int(net.psn_status.value)<<' '<<core.ppu_call_history.value<<' '<<(log.value.empty()?0:int(log.value.at(".*")));return s.str();}
+ <<int(net.net_active.value)<<' '<<int(net.psn_status.value)<<' '<<core.ppu_call_history.value<<' '<<(log.value.empty()?0:int(log.value.at(".*")));s<<' '<<int(video.antialiasing_level.value)<<' '<<int(video.shadermode.value)<<' '<<video.shader_compiler_threads_count.value<<' '<<int(video.frame_generation.value)<<' '<<video.vk.vram_allocation_limit.value;return s.str();}
  bool from_string(const std::string&s){std::istringstream i(s);int p,sp,l,v,a,k,m,n,ps;i>>p>>sp>>core.llvm_precompilation.value>>l>>v>>a>>k>>m
  >>misc.autostart.value>>misc.autoexit.value>>misc.start_big_picture_mode.value>>misc.enable_gamemode.value>>misc.prevent_display_sleep.value>>n>>ps;
  int logging=0;i>>core.ppu_call_history.value>>logging;log.value.clear();if(logging)log.value.emplace(".*",logs::level(logging));
+ int aa,sm,fg;i>>aa>>sm>>video.shader_compiler_threads_count.value>>fg>>video.vk.vram_allocation_limit.value;video.antialiasing_level.set(msaa_level(aa));video.shadermode.set(shader_mode(sm));video.frame_generation.set(frame_generation_mode(fg));
  core.ppu_decoder.set(ppu_decoder_type(p));core.spu_decoder.set(spu_decoder_type(sp));core.libraries_control.set_set(l?std::set<std::string>{"liblv2.sprx:lle"}:std::set<std::string>{});
  video.renderer.set(video_renderer(v));audio.renderer.set(audio_renderer(a));io.keyboard.set(keyboard_handler(k));io.mouse.set(mouse_handler(m));net.net_active.set(np_internet_status(n));net.psn_status.set(np_psn_status(ps));return !i.fail();}
 }g_cfg,g_backup_cfg;
@@ -198,6 +204,7 @@ public:
 '''
 backend=r'''
 emu_callbacks g_emu_callbacks;
+/* ACTUAL_GS_RENDER_IMPLEMENTATION */
 namespace ios_runtime{
 bool is_main_thread(){return on_main;}
 void dispatch_main(std::function<void()>f,atomic_t<u32>*wake){main_queue.push_back([f=std::move(f),wake]{f();if(wake){*wake=1;wake->notify_one();}});}
@@ -214,11 +221,12 @@ bool Emulator::IsRunning(){
 namespace ios_runtime{void invoke_main(std::function<void()>f){drain_main_queue();on_main=true;try{f();}catch(...){on_main=false;throw;}on_main=false;}}
 game_boot_result Emulator::Load(const std::string&){
  host_ppu={};host_spu={};host_guest_active=false;host_threads_joined=false;
- guest_notified=[] {++ppu_starts;spu_cache::initialize();host_guest_active=true;Emu.FinalizeRunRequest();if(mode!=21){host_ppu.exec_bytes=2400;host_ppu.syscall_history.index=3;host_spu.block_counter=7;}};
+ guest_notified=[] {++ppu_starts;spu_cache::initialize();host_guest_active=true;Emu.FinalizeRunRequest();if(g_cfg.video.renderer.get()==video_renderer::vulkan&&mode!=26)armsx3_ios_runtime_note_present(mode==27?-4:mode==28?1000001003:0);if(mode!=21){host_ppu.exec_bytes=2400;host_ppu.syscall_history.index=3;host_spu.block_counter=7;}};
  ++loads;assert(m_config_mode==cfg_mode::config_override);assert(!m_force_boot);fs::file c(m_config_path,fs::read);assert(g_cfg.from_string(c.to_string()));
  assert(!g_cfg.misc.autostart.get()&&!g_cfg.misc.autoexit.get());assert(g_cfg.core.libraries_control.value==std::set<std::string>{"liblv2.sprx:lle"});
  assert(g_cfg.core.ppu_decoder.get()==ppu_decoder_type::_static&&g_cfg.core.spu_decoder.get()==spu_decoder_type::_static);
- assert(g_cfg.video.renderer.get()==video_renderer::null&&g_cfg.audio.renderer.get()==audio_renderer::null);
+ assert(g_cfg.audio.renderer.get()==audio_renderer::null);
+ if(g_cfg.video.renderer.get()==video_renderer::vulkan){assert(g_cfg.video.antialiasing_level.get()==msaa_level::none&&g_cfg.video.shadermode.get()==shader_mode::async_recompiler&&g_cfg.video.shader_compiler_threads_count.get()==2&&g_cfg.video.frame_generation.get()==frame_generation_mode::off&&g_cfg.video.vk.vram_allocation_limit.get()==1024);}
  if(mode==1){m_state=system_state::stopped;return game_boot_result::invalid_file_or_folder;}
  m_state=system_state::ready;workers=2;g_emu_callbacks.on_ready();
  g_emu_callbacks.init_gs_render(nullptr);g_emu_callbacks.init_kb_handler();g_emu_callbacks.init_mouse_handler();g_emu_callbacks.init_pad_handler("");
@@ -299,6 +307,40 @@ int main(int argc,char**argv){
 
  }
  assert(starts==old_starts+8&&ppu_starts>=6&&log_restores>0);
+ // Real GSRender consumes/releases the production adapter, with a host Vulkan
+ // subclass. Queue-present outcomes here are injected; this is no GPU test.
+ int layer=42;
+ assert(armsx3_core_render_game(nullptr,1280,720,detail,sizeof(detail))==-1);
+ for(int scenario:{0,1,2,20,21,26,27,28,0}){
+  mode=scenario;g_fxo->main={};
+  const int result=armsx3_core_render_game(&layer,1280,720,detail,sizeof(detail));
+  if(result!=((scenario==0||scenario==28)?0:-1))std::fprintf(stderr,"render scenario=%d result=%d detail=%s\n",scenario,result,detail);
+  assert(result==((scenario==0||scenario==28)?0:-1));
+  assert(Emu.IsStopped(true)&&workers==0&&g_fxo->objects.empty()&&!ios_runtime::renderer_frame_ready());
+  assert(g_cfg.to_string()==prior&&g_backup_cfg.to_string()==backup);
+ }
+ // Incomplete native teardown must retain the live frame and refuse release.
+ mode=7;g_fxo->main={};assert(armsx3_core_render_game(&layer,1280,720,detail,sizeof(detail))==-2);
+ assert(!Emu.IsStopped(true)&&!g_fxo->objects.empty());
+ bool retained=false;try{ios_runtime::finish_renderer_frame();}catch(...){retained=true;}assert(retained);
+ // Host-only recovery stands in for process exit before the remaining tests.
+ mode=0;Emu.m_state=system_state::stopped;workers=0;ios_runtime::drain_main_queue();
+ ios_runtime::finish_renderer_frame();g_cfg.from_string(prior);g_backup_cfg.from_string(backup);
+ for(unsigned cycle=0;cycle<64;++cycle){
+  ios_runtime::prepare_renderer_frame(&layer,1280,720);assert(ios_runtime::renderer_frame_ready());
+  bool rejected=false;try{ios_runtime::prepare_renderer_frame(&layer,1280,720);}catch(...){rejected=true;}assert(rejected);
+  {GSRender gs(nullptr);auto*f=gs.get_frame();assert(f&&f->handle()==&layer&&f->client_width()==1280&&f->client_height()==720&&f->client_display_rate()==60.);
+   assert(!ios_runtime::take_renderer_frame());assert(f->shown()&&!f->has_alpha()&&!f->can_consume_frame());
+   gs.on_init_thread();gs.flip({});gs.on_exit();assert(!f->shown());
+   rejected=false;try{ios_runtime::finish_renderer_frame();}catch(...){rejected=true;}assert(rejected);
+   armsx3_ios_runtime_note_present(0);armsx3_ios_runtime_note_present(1000001003);armsx3_ios_runtime_note_present(-4);
+   const auto counts=ios_runtime::presentation_progress();assert(counts.accepted==2&&counts.errors==1&&counts.last_result==-4);
+  }
+  ios_runtime::finish_renderer_frame();armsx3_ios_runtime_note_present(0);assert(ios_runtime::presentation_progress().accepted==2);
+ }
+ ios_runtime::prepare_renderer_frame(&layer,1,1);assert(!ios_runtime::presentation_progress().accepted);ios_runtime::finish_renderer_frame();
+ for(auto size: {std::pair{0u,720u},{1281u,720u},{1280u,721u}}){bool rejected=false;try{ios_runtime::prepare_renderer_frame(&layer,size.first,size.second);}catch(...){rejected=true;}assert(rejected);}
+
  // A native RSX start callback queued after stop must be ignored on main.
  const auto previous_ppu_starts=ppu_starts;on_main=true;
  auto late_start=[] { /* LATE_NATIVE_RSX_START_CALLBACK */ };late_start();on_main=false;
@@ -313,19 +355,23 @@ int main(int argc,char**argv){
  std::ofstream(host_root+"/cache/ARMSX3-prepared-executable.elf",std::ios::trunc)<<"BAD";
  const auto count=loads;assert(armsx3_core_check_runtime(detail,sizeof(detail))==-1);assert(loads==count);
  assert(jit_metrics.reserves==0&&jit_metrics.allocations==0&&jit_metrics.decommits==0&&jit_metrics.resets==0&&jit_metrics.write_protection.empty());
- std::puts("PASS: production runtime/frontend plus native JIT finalizer,49 callback signatures and native BootGame; load-only override, mapped segments/firmware identity, missing inputs/idle/main-thread/C ABI guards, partial failures, delayed cleanup, timeout, queue/wake protocol and config restoration. Native Load/VM/FXO/devices/config and UIKit are host models/source contracts; game identity/category/executable/disc/asset mapping checks; complete cached-ELF cleanup verified on Build113 phone; Build114 game identity/disc/assets/cleanup verified on phone; native Run/RunPPU and authorized start, startup timeout, zero-progress/paused outcomes and joined execution capture covered with modeled guest work; actual native SPU-cache startup prefix/guard included in modeled PPU initialization; Build115 guard abort is separately reproduced; device guest execution pending.");
+ std::puts("PASS: production runtime/frontend plus native JIT finalizer,49 callback signatures and native BootGame; load-only override, mapped segments/firmware identity, missing inputs/idle/main-thread/C ABI guards, partial failures, delayed cleanup, timeout, queue/wake protocol and config restoration. Native Load/VM/FXO/devices/config and UIKit are host models/source contracts; game identity/category/executable/disc/asset mapping checks; complete cached-ELF cleanup verified on Build113 phone; Build114 game identity/disc/assets/cleanup verified on phone; native Run/RunPPU and authorized start, startup timeout, zero-progress/paused outcomes and joined execution capture covered with modeled guest work; actual native SPU-cache startup prefix/guard included in modeled PPU initialization; Build115 guard abort is separately reproduced; native GSRender frame ownership with production adapter covered for 64 cycles; render success/no-present/present-error/suboptimal and cleanup/config restore covered with injected queue outcomes. Native Vulkan compile/device presentation pending.");
 }
 '''
 # Accelerate the timeout scenario only. The native app retains its 30-second
 # budget; all other production logic and the native BootGame body are unchanged.
-runtime=runtime.replace('std::chrono::seconds(30)','std::chrono::milliseconds(30)').replace('std::chrono::seconds(15)','std::chrono::milliseconds(40)').replace('std::chrono::seconds(3)','std::chrono::milliseconds(30)')
+runtime=runtime.replace('std::chrono::seconds(30)','std::chrono::milliseconds(30)').replace('std::chrono::seconds(15)','std::chrono::milliseconds(40)').replace('std::chrono::seconds(3)','std::chrono::milliseconds(30)').replace('std::chrono::seconds(10)','std::chrono::milliseconds(40)')
 prelude=prelude.replace('enum class cfg_mode{custom,config_override};',strip(read('rpcs3/Emu/config_mode.h')))
 backend=backend.replace('// NATIVE_JOINED_CAPTURE_HOOK',HOOK).replace('/* NATIVE_RSX_START_CALLBACK */','\n'+rsx_callback+'\n')
 tests=tests.replace('/* LATE_NATIVE_RSX_START_CALLBACK */','\n'+rsx_callback+'\n')
 capture=strip((root/'core/loadtest/RuntimeCapture.cpp').read_text())
-source='#include "GameImport.h"\nextern "C" void armsx3_ios_runtime_capture_stopped() noexcept;\n'+prelude+'\n#define __APPLE__ 1\n'+arena_cpp+'\n'+patched_bodies(native)+'\n'+spu_startup_model+'\n'+spu_guard+'\n'+spu_prefix+'\n'+strip(callbacks)+'\n'+backend+'\n'+boot+'\n'+run+'\n'+strip(frontend)+'\n'+capture+'\n'+strip(runtime)+'\n'+tests
+frame=strip((root/'core/loadtest/RuntimeFrame.cpp').read_text())
+prelude=prelude.replace('/* ACTUAL_GS_FRAME_BASE */',strip(read('rpcs3/Emu/RSX/GSFrameBase.h')))
+prelude=prelude.replace('/* ACTUAL_GS_RENDER_HEADER */',strip(read('rpcs3/Emu/RSX/GSRender.h')))
+backend=backend.replace('/* ACTUAL_GS_RENDER_IMPLEMENTATION */',strip(read('rpcs3/Emu/RSX/GSRender.cpp')))
+source='#include "GameImport.h"\nextern "C" void armsx3_ios_runtime_capture_stopped() noexcept;\n'+prelude+'\n#define __APPLE__ 1\n'+arena_cpp+'\n'+patched_bodies(native)+'\n'+spu_startup_model+'\n'+spu_guard+'\n'+spu_prefix+'\n'+strip(callbacks)+'\n'+backend+'\n'+boot+'\n'+run+'\n'+frame+'\n'+strip(frontend)+'\n'+capture+'\n'+strip(runtime)+'\n'+tests
 source=source.replace('std::string&=""','std::string& = ""').replace('std::string>&=std::nullopt','std::string>& = std::nullopt')
 with tempfile.TemporaryDirectory(prefix='armsx3-runtime-') as temp:
  temp=Path(temp);(temp/'host.cpp').write_text(source);(temp/'TargetConditionals.h').write_text(target_header(True))
- subprocess.run(['g++','-std=c++23','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-omit-frame-pointer','-I',str(temp),'-I',str(root/'core'),'-I',str(root/'core/loadtest'),'-include',str(root/'core/loadtest/Runtime.h'),str(temp/'host.cpp'),'-o',str(temp/'host')],check=True,timeout=180)
+ subprocess.run(['g++','-std=c++23','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-omit-frame-pointer','-I',str(temp),'-I',str(root/'core'),'-I',str(root/'core/loadtest'),'-include',str(root/'core/loadtest/Runtime.h'),'-include',str(root/'core/loadtest/RuntimeFrame.h'),str(temp/'host.cpp'),'-o',str(temp/'host')],check=True,timeout=180)
  subprocess.run([str(temp/'host'),str(temp/'data')],check=True,timeout=60)

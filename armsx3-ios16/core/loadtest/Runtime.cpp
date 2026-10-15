@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 #include "Runtime.h"
+#include "RuntimeFrame.h"
 #include "Intake.h"
 #include "GameImport.h"
 #include "StartupLog.h"
@@ -58,7 +59,7 @@ bool teardown()
     log("RUNTIME AFTER cleanup: fully stopped, zero live CPU threads");
     return true;
 }
-void run_window()
+void run_window(bool render)
 {
     begin_execution_observation();
     permit_guest_start(true);
@@ -74,8 +75,9 @@ void run_window()
         require(std::chrono::steady_clock::now() < startup_deadline, "Guest startup did not reach running state within 15 seconds");
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
-    log("EXECUTION native running state reached; three-second guest window started");
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    log(render ? "RENDER native running state reached; ten-second rendering window started" :
+        "EXECUTION native running state reached; three-second guest window started");
+    const auto deadline = std::chrono::steady_clock::now() + (render ? std::chrono::seconds(10) : std::chrono::seconds(3));
     auto heartbeat = std::chrono::steady_clock::now();
     while (std::chrono::steady_clock::now() < deadline)
     {
@@ -93,8 +95,9 @@ void run_window()
 }
 }
 
-int check(std::string& detail, bool game = false, bool execute = false)
+int check(std::string& detail, bool game = false, bool execute = false, bool render = false)
 {
+    require(!render || (execute && renderer_frame_ready()), "Rendering requires an owned frame and imported-game execution");
     require(!execute || game, "Guest execution requires an imported game folder");
     require(!is_main_thread(), "Runtime loading must run off the UIKit main thread");
     require(stopped(), "Stop emulator activity before checking runtime loading");
@@ -126,7 +129,15 @@ int check(std::string& detail, bool game = false, bool execute = false)
         configuration.log.set_map({{".*", logs::level::warning}});
     }
     configuration.core.libraries_control.set_set({"liblv2.sprx:lle"});
-    configuration.video.renderer.set(video_renderer::null);
+    configuration.video.renderer.set(render ? video_renderer::vulkan : video_renderer::null);
+    if (render)
+    {
+        configuration.video.antialiasing_level.set(msaa_level::none);
+        configuration.video.shadermode.set(shader_mode::async_recompiler);
+        configuration.video.shader_compiler_threads_count.set(2);
+        configuration.video.frame_generation.set(frame_generation_mode::off);
+        configuration.video.vk.vram_allocation_limit.set(1024);
+    }
     configuration.audio.renderer.set(audio_renderer::null);
     configuration.io.keyboard.set(keyboard_handler::null);
     configuration.io.mouse.set(mouse_handler::null);
@@ -152,7 +163,8 @@ int check(std::string& detail, bool game = false, bool execute = false)
     bool attempted = false;
     try
     {
-        log(game ? "RUNTIME BEFORE native BootGame: imported game EBOOT, static decoders, null video/audio, autostart OFF" :
+        log(render ? "RENDER BEFORE native BootGame: imported game, static decoders, native Vulkan, null audio, 1280x720 surface" :
+            game ? "RUNTIME BEFORE native BootGame: imported game EBOOT, static decoders, null video/audio, autostart OFF" :
             "RUNTIME BEFORE native BootGame: prepared ELF, static decoders, null video/audio, autostart OFF");
         if (game) log("GAME runtime BEFORE BootGame title=" + disc.title + " id=" + disc.id + " original EBOOT and full disc folder");
         attempted = true;
@@ -161,8 +173,8 @@ int check(std::string& detail, bool game = false, bool execute = false)
             " state=" + std::to_string(static_cast<unsigned>(Emu.GetStatus(false))));
         require(result == game_boot_result::no_errors && Emu.IsReady(), "Native runtime loader did not reach the ready state; inspect the log");
         require(!g_cfg.misc.autostart.get() && g_cfg.core.ppu_decoder.get() == ppu_decoder_type::_static &&
-            g_cfg.core.spu_decoder.get() == spu_decoder_type::_static && g_cfg.video.renderer.get() == video_renderer::null &&
-            g_cfg.audio.renderer.get() == audio_renderer::null, "Runtime configuration differs from the load-only request");
+            g_cfg.core.spu_decoder.get() == spu_decoder_type::_static && g_cfg.video.renderer.get() == (render ? video_renderer::vulkan : video_renderer::null) &&
+            g_cfg.audio.renderer.get() == audio_renderer::null, "Runtime configuration differs from the requested mode");
         if (game)
         {
             require(Emu.GetTitleID() == disc.id && Emu.GetTitle() == disc.title && Emu.GetCat() == disc.category,
@@ -211,7 +223,7 @@ int check(std::string& detail, bool game = false, bool execute = false)
         log("RUNTIME PASS native ready state: mapped segments=" + std::to_string(loaded_segments) +
             " firmware modules=" + std::to_string(firmware_modules) + " stopped PPU contexts=" + std::to_string(ppu_workers) +
             "; guest entry has not been started");
-        if (execute) run_window();
+        if (execute) run_window(render);
     }
     catch (const std::exception& failure) { error = failure.what(); log("RUNTIME load failed: " + error); }
     catch (...) { error = "Native runtime loader threw an unknown exception"; log(error); }
@@ -221,6 +233,7 @@ int check(std::string& detail, bool game = false, bool execute = false)
         try
         {
             if (!teardown()) { detail = "Runtime cleanup is incomplete. Reopen the app and share the log."; return -2; }
+            if (render) finish_renderer_frame();
             require(g_cfg.from_string(previous) && g_backup_cfg.from_string(previous_backup), "Could not restore runtime configuration");
             if (execute) rpcs3::utils::configure_logs();
             require(!frontend_failed(), "Runtime frontend reported an error during cleanup");
@@ -236,12 +249,19 @@ int check(std::string& detail, bool game = false, bool execute = false)
         const auto progress = execution_progress();
         if (!progress.captured || progress.failed || !(progress.instructions || progress.calls))
             error = "Joined CPU counters did not confirm guest execution; inspect the startup log";
+        else if (render && (!presentation_progress().accepted || presentation_progress().errors))
+            error = "Native Vulkan did not complete error-free presentation: accepted=" +
+                std::to_string(presentation_progress().accepted) + ", errors=" +
+                std::to_string(presentation_progress().errors) + ", last VkResult=" +
+                std::to_string(presentation_progress().last_result);
         else
         {
             detail = "Guest run completed: " + disc.title + " [" + disc.id + "]. Native PPU instruction estimate=" +
                 std::to_string(progress.instructions) + ", completed HLE/LV2 calls=" + std::to_string(progress.calls) +
-                ", SPU blocks=" + std::to_string(progress.spu_blocks) + ". Clean stop completed. Display and audio are pending.";
-            log("EXECUTION PASS: " + detail);
+                ", SPU blocks=" + std::to_string(progress.spu_blocks) + (render ? ". Native Vulkan accepted presents=" + std::to_string(presentation_progress().accepted) +
+                    ". Clean GPU/CPU stop completed. Check the screen for game content; audio and controls are pending." :
+                    ". Clean stop completed. Display and audio are pending.");
+            log((render ? "RENDER PASS: " : "EXECUTION PASS: ") + detail);
             return 0;
         }
     }
@@ -282,6 +302,32 @@ extern "C" __attribute__((visibility("default"))) int armsx3_core_check_runtime(
     try { result = ios_runtime::check(text); }
     catch (const std::exception& error) { text = error.what(); ARMSX3StartupLog(text.c_str()); }
     catch (...) { text = "Runtime check threw an unknown exception"; ARMSX3StartupLog(text.c_str()); }
+    const auto length = std::min(capacity - 1, text.size());
+    std::memcpy(detail, text.data(), length); detail[length] = '\0'; return result;
+}
+
+extern "C" __attribute__((visibility("default"))) int armsx3_core_render_game(
+    void* layer, unsigned width, unsigned height, char* detail, std::size_t capacity)
+{
+    if (!detail || capacity < 2) return -1;
+    std::string text; int result = -1; bool prepared = false;
+    try
+    {
+        // The caller retains its UIView/layer until this returns, including -2.
+        if (!ios_runtime::is_main_thread() && Emu.IsStopped(true) && !armsx3_ios_live_cpu_threads())
+        {
+            ios_runtime::prepare_renderer_frame(layer, width, height); prepared = true;
+            result = ios_runtime::check(text, true, true, true);
+        }
+        else throw std::runtime_error("Rendering requires an idle core and a background caller");
+    }
+    catch (const std::exception& error) { text = error.what(); ARMSX3StartupLog(text.c_str()); }
+    catch (...) { text = "Native rendering threw an unknown exception"; ARMSX3StartupLog(text.c_str()); }
+    if (prepared && result != -2)
+    {
+        try { ios_runtime::finish_renderer_frame(); }
+        catch (...) { result = -2; text = "Native renderer frame is still owned. Reopen the app and share the log."; }
+    }
     const auto length = std::min(capacity - 1, text.size());
     std::memcpy(detail, text.data(), length); detail[length] = '\0'; return result;
 }

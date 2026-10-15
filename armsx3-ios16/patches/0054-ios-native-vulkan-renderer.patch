@@ -1,0 +1,115 @@
+--- a/3rdparty/CMakeLists.txt
++++ b/3rdparty/CMakeLists.txt
+@@ -205,7 +205,14 @@
+ 
+ # Vulkan
+ set(VULKAN_TARGET 3rdparty_dummy_lib)
+-if(USE_VULKAN)
++if(USE_VULKAN AND ARMSX3_IOS)
++    # Reuse the digest-verified arm64 iOS static driver, never the macOS build.
++    include("${CMAKE_SOURCE_DIR}/ios-core/moltenvk.cmake")
++    add_library(3rdparty_vulkan INTERFACE)
++    target_compile_definitions(3rdparty_vulkan INTERFACE HAVE_VULKAN)
++    target_link_libraries(3rdparty_vulkan INTERFACE armsx3_ios_moltenvk)
++    set(VULKAN_TARGET 3rdparty_vulkan)
++elseif(USE_VULKAN)
+ 	if(APPLE)
+ 		if(USE_SYSTEM_MVK)
+ 			message(STATUS "RPCS3: Using system MoltenVK")
+--- a/rpcs3/Emu/RSX/VK/vkutils/instance.cpp
++++ b/rpcs3/Emu/RSX/VK/vkutils/instance.cpp
+@@ -167,8 +167,11 @@
+ 			}
+ 
+ #ifdef __APPLE__
+-			extensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+-			extensions.push_back(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
++			// A directly linked MoltenVK driver does not advertise loader extensions.
++			if (support.is_supported(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME))
++				extensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
++			if (support.is_supported(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME))
++				extensions.push_back(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
+ 			if (support.is_supported(VK_EXT_LAYER_SETTINGS_EXTENSION_NAME))
+ 			{
+ 				extensions.push_back(VK_EXT_LAYER_SETTINGS_EXTENSION_NAME);
+@@ -274,12 +277,16 @@
+ 			}
+ 		}
+ #ifdef __APPLE__ 
+-		// MoltenVK's ICD will not be detected without these extensions enabled.
++		// Enable loader portability only when it is actually advertised.
+ 		else
+ 		{
+ 			extensions_loaded = true;
+-			extensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+-			extensions.push_back(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
++			supported_extensions support(supported_extensions::instance);
++			// A directly linked MoltenVK driver does not advertise loader extensions.
++			if (support.is_supported(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME))
++				extensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
++			if (support.is_supported(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME))
++				extensions.push_back(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
+ 		}
+ #endif
+ 
+@@ -297,7 +304,9 @@
+ #endif
+ 		instance_info.pNext = next_info;
+ #ifdef __APPLE__
+-		instance_info.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
++		if (std::any_of(extensions.begin(), extensions.end(), [](const char* name)
++			{ return std::string_view(name) == VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME; }))
++			instance_info.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+ #endif
+ 
+ 		if (VkResult result = vkCreateInstance(&instance_info, nullptr, &m_instance); result != VK_SUCCESS)
+--- a/rpcs3/Emu/RSX/VK/vkutils/metal_layer.mm
++++ b/rpcs3/Emu/RSX/VK/vkutils/metal_layer.mm
+@@ -14,9 +14,10 @@
+ void* GetCAMetalLayerFromMetalView(void* view)
+ {
+ #if TARGET_OS_IOS
+-    // UIKit views must be created with CAMetalLayer as their backing layer.
+-    // Ownership stays with the view; the renderer only borrows this pointer.
+-    return (__bridge void*)((__bridge UIView*)view).layer;
++    // iOS passes the CAMetalLayer captured on UIKit's main thread. The app
++    // retains its view until native GPU/thread teardown has completed.
++    // Never read UIView properties from the RSX thread.
++    return view;
+ #else
+     return ((NSView*)view).layer;
+ #endif
+--- a/rpcs3/Emu/RSX/display.h
++++ b/rpcs3/Emu/RSX/display.h
+@@ -18,7 +18,7 @@
+ #ifdef _WIN32
+ using display_handle_t = HWND;
+ #elif defined(__APPLE__)
+-using display_handle_t = void*; // NSView on macOS, UIView with CAMetalLayer on iOS
++using display_handle_t = void*; // NSView on macOS, owned CAMetalLayer on iOS
+ #else
+ #include <variant>
+ using display_handle_t = std::variant<
+--- a/rpcs3/Emu/RSX/VK/vkutils/swapchain.cpp
++++ b/rpcs3/Emu/RSX/VK/vkutils/swapchain.cpp
+@@ -1,2 +1,8 @@
++#ifdef __APPLE__
++#include <TargetConditionals.h>
++#if TARGET_OS_IOS
++extern "C" void armsx3_ios_runtime_note_present(int result) noexcept;
++#endif
++#endif
+ #include "stdafx.h"
+ #include "swapchain.h"
+@@ -547,6 +553,10 @@
+ 			present.pWaitSemaphores = &semaphore;
+ 		}
+ 
+-		return _vkQueuePresentKHR(dev.get_present_queue(), &present);
++		const auto result = _vkQueuePresentKHR(dev.get_present_queue(), &present);
++#if defined(__APPLE__) && TARGET_OS_IOS
++		armsx3_ios_runtime_note_present(static_cast<int>(result));
++#endif
++		return result;
+ 	}
+ }

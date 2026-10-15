@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 #import <UIKit/UIKit.h>
+#import <QuartzCore/CAMetalLayer.h>
+#import <Metal/Metal.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #include <dlfcn.h>
 #include <cstdio>
@@ -132,6 +134,47 @@ static constexpr DiagnosticStage stages[] = {
 static constexpr NSUInteger stageCount = sizeof(stages) / sizeof(stages[0]);
 static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
 
+// UIKit owns this layer for the entire native renderer lifetime. No RSX-thread
+// UIView reads or main-queue synchronous geometry callbacks are needed.
+@interface RenderSurface : UIView
+@end
+@implementation RenderSurface
++ (Class)layerClass { return CAMetalLayer.class; }
+@end
+@interface RenderController : UIViewController
+@property(nonatomic,strong) RenderSurface* surface;
+@property(nonatomic,strong) UILabel* status;
+@end
+@implementation RenderController
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.view.backgroundColor = UIColor.blackColor;
+    self.surface = [[RenderSurface alloc] init];
+    self.surface.opaque = YES;
+    CAMetalLayer* layer = (CAMetalLayer*)self.surface.layer;
+    layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
+    layer.framebufferOnly = YES;
+    layer.presentsWithTransaction = NO;
+    layer.drawableSize = CGSizeMake(1280,720);
+    [self.view addSubview:self.surface];
+    self.status = [[UILabel alloc] init];
+    self.status.textColor = UIColor.whiteColor;
+    self.status.numberOfLines = 0;
+    self.status.textAlignment = NSTextAlignmentCenter;
+    self.status.text = @"Starting native Vulkan… automatic stop after 10 seconds of execution";
+    [self.view addSubview:self.status];
+}
+- (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
+    const CGRect area = UIEdgeInsetsInsetRect(self.view.bounds,self.view.safeAreaInsets);
+    const CGFloat width = MIN(area.size.width, MAX(1,area.size.height - 80) * 16.0 / 9.0);
+    const CGFloat height = width * 9.0 / 16.0;
+    self.surface.frame = CGRectMake(CGRectGetMidX(area) - width/2,CGRectGetMidY(area) - height/2,width,height);
+    ((CAMetalLayer*)self.surface.layer).drawableSize = CGSizeMake(1280,720);
+    self.status.frame = CGRectMake(area.origin.x + 12,CGRectGetMaxY(area) - 72,MAX(1,area.size.width - 24),70);
+}
+@end
+
 @interface LoadController : UIViewController <UIDocumentPickerDelegate>
 @property(nonatomic,strong) UITextView* output;
 @property(nonatomic,strong) UILabel* progressLabel;
@@ -148,6 +191,8 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
 @property(nonatomic,strong) UIButton* gameLoadButton;
 @property(nonatomic,strong) UIButton* gameRunButton;
 @property(nonatomic,strong) UIButton* graphicsButton;
+@property(nonatomic,strong) UIButton* renderButton;
+@property(nonatomic,strong) RenderController* renderController;
 @property(nonatomic,assign) BOOL intakeBusy;
 @property(nonatomic,assign) NSInteger intakeMode;
 @property(nonatomic,assign) BOOL previousRunPending;
@@ -238,6 +283,10 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
     UIStackView* executionControls = [[UIStackView alloc] initWithArrangedSubviews:@[self.gameRunButton,self.graphicsButton]];
     executionControls.distribution = UIStackViewDistributionFillEqually; executionControls.spacing = 12;
     [stack addArrangedSubview:executionControls];
+    self.renderButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    [self.renderButton setTitle:@"Render game (10 seconds)" forState:UIControlStateNormal];
+    [self.renderButton addTarget:self action:@selector(renderGame) forControlEvents:UIControlEventTouchUpInside];
+    [stack addArrangedSubview:self.renderButton];
     self.output = [[UITextView alloc] init];
     self.output.editable = NO;
     self.output.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
@@ -269,6 +318,7 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
     self.gameButton.enabled = intakeReady; self.gameLoadButton.enabled = intakeReady;
     self.gameRunButton.enabled = intakeReady;
     self.graphicsButton.enabled = intakeReady;
+    self.renderButton.enabled = intakeReady;
     [self.runButton setTitle:self.nextStage ? @"Run remaining tests" : @"Run all tests" forState:UIControlStateNormal];
     self.progress.progress = float(self.nextStage) / float(stageCount);
 }
@@ -404,6 +454,54 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
 - (void)checkRuntime { [self checkRuntimeMode:NO execute:NO]; }
 - (void)checkGame { [self checkRuntimeMode:YES execute:NO]; }
 - (void)runGame { [self checkRuntimeMode:YES execute:YES]; }
+- (void)renderGame {
+    if (self.running || self.intakeBusy || self.failed || self.nextStage != stageCount || !self.coreHandle) return;
+    auto action = reinterpret_cast<int (*)(void*,unsigned,unsigned,char*,size_t)>(dlsym(self.coreHandle,"armsx3_core_render_game"));
+    if (!action) { [self showLogMessage:@"Rendering unavailable" detail:@"The native rendering function is missing."]; return; }
+    self.intakeBusy = YES; self.previousRunPending = NO;
+    const BOOL previousIdle = UIApplication.sharedApplication.idleTimerDisabled;
+    UIApplication.sharedApplication.idleTimerDisabled = YES;
+    [NSUserDefaults.standardUserDefaults setObject:@"Native Vulkan game rendering (10 seconds)" forKey:pendingStageKey];
+    [NSUserDefaults.standardUserDefaults synchronize];
+    [self.transcript appendString:@"\nRUN · Native Vulkan game rendering, 1280×720, automatic stop\n"];
+    self.output.text = self.transcript;
+    self.progressLabel.text = @"Starting native Vulkan renderer…";
+    RenderController* display = [[RenderController alloc] init];
+    display.modalPresentationStyle = UIModalPresentationFullScreen;
+    display.modalInPresentation = YES;
+    self.renderController = display;
+    [display loadViewIfNeeded];
+    void* layer = (__bridge void*)display.surface.layer;
+    [self refreshControls];
+    ARMSX3StartupLog("RENDER UI BEFORE native Vulkan game; UIKit retains CAMetalLayer through GPU/CPU cleanup");
+    [self presentViewController:display animated:YES completion:^{
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0), ^{
+            @autoreleasepool {
+                char buffer[4096] = {};
+                const int result = action(layer,1280,720,buffer,sizeof(buffer));
+                NSString* detail = [NSString stringWithUTF8String:buffer] ?: @"Renderer returned no detail.";
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    self.intakeBusy = NO;
+                    UIApplication.sharedApplication.idleTimerDisabled = previousIdle;
+                    self.failed = result == -2;
+                    [self.transcript appendFormat:@"%@ · %@\n",result == 0 ? @"PASS" : @"FAILED",detail];
+                    self.output.text = self.transcript;
+                    self.progressLabel.text = result == 0 ? @"Rendering completed · share the log" : @"Rendering failed · share the log";
+                    ARMSX3StartupLog([NSString stringWithFormat:@"RENDER UI %@: %@",result == 0 ? @"PASS" : @"FAIL",detail].UTF8String);
+                    if (result == -2) {
+                        // Keep the view AND its layer attached while native ownership is uncertain.
+                        display.status.text = @"Cleanup incomplete. Close and reopen ARMSX3, then share the previous log.";
+                    } else {
+                        [NSUserDefaults.standardUserDefaults removeObjectForKey:pendingStageKey];
+                        [NSUserDefaults.standardUserDefaults synchronize];
+                        [display dismissViewControllerAnimated:YES completion:^{ self.renderController = nil; }];
+                    }
+                    [self refreshControls];
+                });
+            }
+        });
+    }];
+}
 - (void)checkGraphics {
     if (self.running || self.intakeBusy || self.failed || self.nextStage != stageCount || !self.coreHandle) return;
     auto action = reinterpret_cast<int (*)(char*,size_t)>(dlsym(self.coreHandle,"armsx3_core_check_graphics"));

@@ -1,42 +1,42 @@
-# ARMSX3 iOS 16 core — Build 119
+# ARMSX3 iOS 16 core — Build 120
 
 Target: iPhone 13 Pro Max/A15, iOS 16.0, Dopamine and TrollStore.
-The installable app links the actual pinned rpcs3_emu core. Build117 passed all
-120 diagnostics, real firmware/game loading, and the complete three-second
-**Midnight Club: Los Angeles [BLUS30442]** run. Native running state, real PPU/SPU
-work, 20 joined PPU contexts, six SPUs, 51,678 completed HLE/LV2 calls and fully
-stopped cleanup were recorded. The game set up RSX memory/context/display buffers,
-created render/streamer/audio threads and performed SPU DMA. Static SPU block
-counters remained zero, as expected for this backend. Native exec_bytes/4 is a
-backend counter estimate, not a measured instruction rate or FPS.
+Build119 passed all 120 diagnostics, native firmware/disc loading and another
+three-second Midnight Club: Los Angeles [BLUS30442] execution/clean stop.
+Its graphics check reached **Apple A15 GPU** and passed both 1,024-pixel offscreen
+clear/copy/fence/readback tests. The directly linked driver omitted the loader-only
+portability enumeration extension; the optional extension/flag policy worked.
+The run retained 20 joined PPU contexts, six SPUs and 49,092 completed HLE/LV2
+calls. The exec_bytes/4 aggregate is a backend estimate, not measured throughput/FPS.
 
-Build118 retained the complete guest-run/cleanup success on the phone. Its new
-**Check graphics device** stopped before creating an instance because it required
-VK_KHR_portability_enumeration, an extension supplied by the Vulkan loader.
-The app links MoltenVK directly, whose extension catalog omits that loader feature.
-Build119 removes that Apple-only precondition. It still enables the extension and
-its paired flag whenever advertised, and retains portability_subset device setup.
+Build120 compiles the real native RSX Vulkan backend against the same digest-verified
+MoltenVK v1.4.2 iOS static archive. **Render game (10 seconds)** creates a retained
+UIKit CAMetalLayer, lends it to the native VKGSRender/Metal surface/swapchain, starts
+the imported game through the existing native boot/run path, and stops after a
+ten-second running window. Drawable size is bounded at 1280×720 and letterboxed
+in the available viewport. Static PPU/SPU decoders, null audio, MSAA off, async
+shader recompilation with two compiler threads, frame generation off and a
+1,024 MiB native VRAM allocation limit are used for this first renderer attempt.
+This is a renderer integration attempt; visible game content remains unverified.
 
-The graphics check uses the same pinned iOS MoltenVK static library.
-It creates a real Vulkan/Metal graphics device and queue, clears an offscreen
-RGBA8 image red then blue, copies each result to host-visible memory, waits on
-GPU fences and verifies all 1,024 pixels per pass. It logs device/API/driver and
-selected capabilities, then destroys the device and resources. This establishes
-the driver path; native RSX Vulkan rendering, shaders, UIKit swapchain presentation,
-audio output and controller input remain pending. No game picture is expected.
+Install the workflow's **ARMSX3_iOS16_INSTALL_THIS_IPA** using TrollStore. Reopen,
+run all 120 tests, then tap **Render game (10 seconds)** with the retained firmware
+and imported game. Keep the app open. After automatic shutdown, share the startup
+log and describe what appeared on screen. If firmware/disc is missing, reuse
+Install firmware / Import game folder; select the folder containing PS3_GAME and
+PS3_DISC.SFB. The original Run game (3 seconds), load checks and independent
+Check graphics device remain available.
 
-After the workflow succeeds, download **ARMSX3_iOS16_INSTALL_THIS_IPA** and
-install its IPA through TrollStore. Reopen and tap **Run all tests**. Once all
-120 pass:
-
-1. Tap **Check graphics device** and share the startup log with its result.
-   This check needs neither firmware nor a new game import.
-2. Optionally repeat **Run game (3 seconds)** with the retained firmware/disc
-   to verify execution after adding the graphics library. Keep the app open.
-3. If firmware/game is reported missing, reuse **Install firmware** and/or
-   **Import game folder**. Select the folder containing PS3_GAME and PS3_DISC.SFB.
-4. A graphics timeout retains its GPU resources and requires reopening the app.
-   If any action crashes, share its unfinished log and matching .ips report.
+Rendering success requires joined CPU execution evidence, at least one accepted
+native vkQueuePresentKHR result, no presentation errors and complete GPU/CPU
+teardown/config restoration. VK_SUCCESS and VK_SUBOPTIMAL_KHR are accepted; those
+results do not establish meaningful game pixels or FPS. The first accepted present
+is logged directly after the native queue call. No synthesized frames are counted.
+The UIKit view/layer stays attached through native shutdown; the GSFrameBase
+adapter has immutable dimensions and never queries UIKit from RSX threads. If
+cleanup is incomplete (-2), retain the attached view/layer, close/reopen the app,
+then share the previous run's log. A native crash needs that log and matching .ips.
+Audio output and controller input remain pending.
 
 The new run first performs the validated native game/title/disc/segment/firmware
 checks. Only then does it grant one start and invoke native Emulator::Run(false)
@@ -53,9 +53,9 @@ can be absent. SPU blocks are backend-dependent and may be zero.
 A successful run requires joined evidence of actual PPU instructions or completed
 HLE/LV2 calls and clean teardown/config restoration. Startup timeout, paused/error
 state, absent progress or incomplete cleanup reports failure. Fatal native CPU
-errors can still abort the app and retain the pending-run marker. This initial
-run uses null video/audio; display, sound and controller integration remain
-pending. It does not establish game compatibility, menu progress or playable FPS.
+errors can still abort the app and retain the pending-run marker. The original three-second
+run uses null video/audio; Build120 has a separate native Vulkan rendering action.
+Sound and controller integration remain pending. It does not establish game compatibility, menu progress or playable FPS.
 Warnings/errors remain enabled while verbose native notice/trace output is
 suppressed during this short run; explicit startup/execution markers remain.
 PPU call history is enabled temporarily, and configuration plus channel levels
@@ -78,7 +78,7 @@ actual native title, title ID and category against PARAM.SFO, the selected
 executable, /dev_bdvd and /dev_bdvd/PS3_GAME mounts, SFO/EBOOT paths, and a
 representative asset path when present. Segment/entry/real-firmware/stopped-PPU
 checks and fully-stopped cleanup/configuration restoration are shared with the
-validated cached-ELF check. The separate Run game action advances guest execution; display remains pending.
+validated cached-ELF check. The separate Run game action advances guest execution; Render game adds the native Vulkan display attempt.
 
 **Inspect EBOOT / ELF** and **Check runtime load** remain available for the
 independent cached-executable path. They are optional when importing a disc
@@ -111,22 +111,24 @@ game check adds those paths and validates native title/disc loading. Neither
 check starts the guest entry or produces picture/audio.
 
 The production core still uses the validated interpreter/immutable JIT path.
-LLVM and the native RSX Vulkan/MoltenVK renderer are disabled. The separate
-MoltenVK device check does not enable that renderer. The Run game action requests native
-guest execution; renderer presentation, device audio and controller input remain
-future integration work. Successful
+LLVM remains disabled. The native RSX Vulkan/MoltenVK backend is enabled for
+the separate Render game action; the original Run game keeps null video/audio.
+Native presentation on the phone, device audio and controller input remain
+unverified or pending. Successful
 readiness checks and executable inspection are not a playable-game result.
 
 The workflow keeps pinned dependencies and the original 49 production patches,
 plus patch0050 for unused JIT-arena finalization and patch0051 for joined-context
 observation and the iOS RSX startup/stop guard, plus patch0052 for static SPU
-startup and patch0053 for static SPU thread entry (53 patches total).
+startup and patch0053 for static SPU thread entry, plus patch0054 for the native
+Vulkan importer, optional Apple portability policy, borrowed iOS layer and present
+observer (54 patches total).
 34 synchronization host profiles plus the intake and graphics host checks gate the iOS
 compile, full link, signed bundle validation and one installable IPA. Matching
 core symbols and build logs remain available as separate artifacts.
 Build113's workflow produced the tested installable IPA. The historical patch
 validator remains scoped to its exact first 49 patches while preparation applies
-all 53. The host job also checks native PSF parsing and complete game
+all 54. The host job also checks native PSF parsing and complete game
 import. Local sanitizer
 checks use `ASAN_OPTIONS=detect_leaks=0` because LeakSanitizer cannot inspect
 processes in this environment.
@@ -205,7 +207,7 @@ exact SHA256. The package verifier parses its XCFramework and Mach-O archive
 members, requiring arm64 device-iOS objects with deployment target <=16.0 and
 rejecting simulator/macOS slices. The build links the static archive plus the
 required iOS frameworks, and includes its license and runtime guide in the app.
-The native core backend remains compiled with USE_VULKAN=OFF.
+Build120 changes the native core backend to USE_VULKAN=ON using that same verified archive.
 
 A separate graphics-host job compiles production GraphicsDevice/GraphicsCheck
 with ASAN+UBSAN against real Vulkan/lavapipe and Khronos synchronization validation.
@@ -215,8 +217,9 @@ failures. Failure return values and core-idle interfaces are modeled; Vulkan
 commands execute through the real software driver. A timeout preserves the whole
 owner and blocks reuse, avoiding destruction while work might still be queued.
 Linux results do not verify Apple's driver or iOS linking. The existing 35 host
-jobs plus this graphics job gate the IPA build. Build118 did not reach graphics device creation; Build119 retries it. Phone
-graphics success remains pending. Native RSX rendering and UIKit presentation are the next integration.
+jobs plus this graphics job gate the IPA build. Build118 did not reach graphics device creation; Build119 passed both readbacks
+on the A15 phone. Build120 integrates native RSX rendering and UIKit presentation;
+that full backend still needs CI compilation and phone validation.
 
 The graphics regression now also compiles the production Apple preprocessor path.
 A filtered instance-extension list models directly linked MoltenVK while keeping
@@ -225,3 +228,15 @@ reproduces its failure before instance creation. Build119 passes both advertised
 loader-extension and absent direct-driver-extension cases, preserving correct
 flag/extension pairing. The original cleanup/concurrency/failure cases remain.
 This is a host regression for instance setup, not an Apple GPU success claim.
+
+Build120 host coverage also compiles the production frame adapter against the
+actual native GSFrameBase interface and native GSRender constructor/destructor,
+context and exit methods, covering 64 ownership cycles and failed/incomplete
+releases. Render flow tests inject success/no-present/error/suboptimal queue
+outcomes with modeled guest/device backends and verify clean teardown/config
+restoration. A separate exact-patch54 check compiles the real native present
+method plus both Apple instance extension policies against host interfaces,
+checks hook order/return values and configures the actual iOS CMake import branch
+across sibling scopes/repeated includes. These do not compile the full native
+Vulkan renderer or prove iOS presentation; the full-link CI gate and phone log
+remain required.
