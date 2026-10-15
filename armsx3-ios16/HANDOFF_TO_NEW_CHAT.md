@@ -3137,3 +3137,46 @@ its allocator source rather than bypassing protection.
 Then advance complete game-folder/PARAM.SFO/disc assets and guest execution/
 render integration. Current cache-only load cannot establish actual title identity
 or playable Midnight Club LA. Keep replies short; user reports Actions result.
+
+
+## Build113 — repair the workflow's historical patch validator (2026-10-15)
+
+User reports Build112 workflow failed. Run38660569062 at commit
+f4d49503a67f09e0afad5b404aa6e75cc5c5d5a8 passed all35 host jobs
+(34 synchronization profiles plus intake/runtime/native-JIT lifecycle). Core job
+116180946509 stopped at Apply iOS core patches, before iOS compilation:
+test_p73_patch.py asserted the entire patch directory contained exactly49 files.
+Build112 added patch0050 for the confirmed native runtime cleanup abort.
+The obsolete catalog assertion, rather than a compilation or runtime result,
+prevented that repair from reaching an IPA.
+
+Build113 scopes test_p73_patch.py to its exact historical ordered prefix0001
+through0049. It still requires every predecessor, patch0049's exact filename,
+clean apply/check, unchanged prior services/scheduler/probes, and the observer
+body/declarations. Newer patches no longer alter this historical test's target.
+The production workflow still applies/checks every patch, including0050.
+Only this validator, bundle/fixture version113, README and both handoffs changed.
+No native/runtime/UI/intake code or production patch changed from Build112.
+All120 diagnostics and the unused-mutable-JIT cleanup repair remain intact.
+
+Validation: ran the complete exact Apply iOS core patches workflow shell step
+against a fresh detached local clone of pinned upstream
+92b931b9fb5eef7f1317cb482917dfc19aceebd9. Pinned source audit, P43 historical
+patch check, P114/common fixture and all earlier fixture checks, corrected P73,
+P76/P82/P86/P90/P94 registry checks, all50 git apply --check/applications, and
+core/iOS/header overlays passed. ASAN_OPTIONS=detect_leaks=0 is needed locally
+because LeakSanitizer cannot inspect /proc tasks in this environment; ASAN/UBSAN
+remain enabled by the native registry checks. The initial archive-only staging
+attempt lacked .git for the audit, so it was replaced by a pristine real clone.
+No workflow command was skipped. This validates preparation, not iOS compilation
+or phone cleanup; those remain pending Build113's workflow/device results.
+
+Next: after Build113 workflow succeeds, install ARMSX3_iOS16_INSTALL_THIS_IPA
+through TrollStore, reopen, Run all120 tests, then Check runtime load and share
+the startup log. Reuse installed firmware4.93/prepared EBOOT if still present.
+The phone already reached native ready state on Build111; expected new result
+is unused mutable arena skipped, final stopped callback completed and RUNTIME
+UI PASS. No guest entry is started. Preserve the missing-API failure for any
+nonempty mutable arena. No LLVM/Vulkan/gameplay claim. Complete game-folder/
+PARAM.SFO/assets import and execution/rendering remain later work. Keep replies
+short and do not monitor Actions after publishing; user reports the result.

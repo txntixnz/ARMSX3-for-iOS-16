@@ -6,14 +6,17 @@ import subprocess,sys,tempfile
 if len(sys.argv)!=2:raise SystemExit(__doc__)
 root=Path(sys.argv[1]);patches=Path(__file__).resolve().parent.parent/'patches'
 paths=['rpcs3/Emu/Cell/lv2/lv2.cpp','rpcs3/Emu/Cell/lv2/sys_sync.h']
-all_patches=sorted(patches.glob('*.patch'));assert len(all_patches)==49
-last=all_patches[-1];assert last.name=='0049-ios-lv2-mutex-timeout-observation.patch'
+# This test validates the historical patch49 observer against its first48
+# predecessors. Later port patches have their own checks and must not move it.
+observer_series=[p for p in sorted(patches.glob('*.patch')) if p.name[:4].isdigit() and int(p.name[:4])<=49]
+assert [p.name[:4] for p in observer_series]==[f'{n:04d}' for n in range(1,50)]
+last=observer_series[-1];assert last.name=='0049-ios-lv2-mutex-timeout-observation.patch'
 with tempfile.TemporaryDirectory(prefix='p73-patch-') as tmp:
  stage=Path(tmp)
  for rel in paths:
   target=stage/rel;target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes((root/rel).read_bytes())
  args=['git','apply',*[f'--include={p}' for p in paths]]
- for patch in all_patches[:-1]:subprocess.run(args+[str(patch)],cwd=stage,check=True)
+ for patch in observer_series[:-1]:subprocess.run(args+[str(patch)],cwd=stage,check=True)
  before=(stage/paths[0]).read_text();header_before=(stage/paths[1]).read_text()
  subprocess.run(args+['--check',str(last)],cwd=stage,check=True)
  subprocess.run(args+[str(last)],cwd=stage,check=True)

@@ -1,4 +1,4 @@
-# ARMSX3 iOS 16 core — Build 112
+# ARMSX3 iOS 16 core — Build 113
 
 Target: iPhone 13 Pro Max/A15, iOS 16.0, Dopamine and TrollStore.
 The installable app links the actual pinned rpcs3_emu core. Build 110 passed
@@ -7,7 +7,9 @@ and decrypted/parsed their EBOOT.BIN with five loadable segments. Build 111
 reached native runtime ready state with two nonempty mapped segments, loaded
 liblv2.sprx (two segments, 3635 functions), and one stopped PPU context, then
 aborted during JIT cleanup. Build 112 repairs that unused-arena finalization
-and keeps **Check runtime load** plus the same 120 readiness checks.
+but its workflow stopped before compilation at an outdated patch-count check.
+Build 113 corrects that historical validator and keeps the cleanup repair,
+**Check runtime load** and the same 120 readiness checks.
 
 After the workflow succeeds, download **ARMSX3_iOS16_INSTALL_THIS_IPA** and
 install its IPA through TrollStore. Reopen the app and tap **Run all tests**.
@@ -57,6 +59,11 @@ plus patch 0050 for unused JIT-arena finalization.
 34 synchronization host profiles plus the new intake host check gate the iOS
 compile, full link, signed bundle validation and one installable IPA. Matching
 core symbols and build logs remain available as separate artifacts.
+Build 112 passed all 35 host jobs. Build 113's complete core preparation step
+passed locally against the pristine pinned source, including all historical
+checks, all 50 patch applications and the core/iOS overlays. Local sanitizer
+checks use `ASAN_OPTIONS=detect_leaks=0` because LeakSanitizer cannot inspect
+processes in this environment.
 
 Local intake validation uses actual native PUP/SHA1 code, SELF routing/debug
 header removal and real filesystem rename/rollback. It reproduces the Build 109
@@ -75,4 +82,4 @@ separate regression reproduces Build 111's abort, checks 64 empty-arena lifecycl
 cycles with a real immutable executable page, retains rejection of six nonempty
 counter/snapshot cases, and preserves macOS/Linux reset/restore branches with
 modeled arena operations. Runtime loading reached ready state on the phone;
-complete cleanup must still be verified in Build 112. Actions compiles for iOS.
+complete cleanup must still be verified in Build 113. Actions compiles for iOS.
