@@ -1,33 +1,35 @@
-# Current checkpoint — Build135
+# Current checkpoint — Build136
 
-Build134 is phone-verified: the user reports a small speed improvement, continued
-severe lag, and an intentional Stop. The log confirms complete GPU/CPU teardown.
-Input and the previously confirmed clean graphics remain working; driving is
-not yet confirmed. Audio remains null.
+Build135 completed a clean phone session and Stop with2138 accepted presents.
+The21 slow timing windows averaged2.01FPS over216.68seconds. The RSX thread
+spent71.0% of that wall time waiting on an empty command FIFO and9.0% waiting
+on fences. This points toward CPU command production/synchronization as the
+main next target. It does not identify which PPU/SPU thread is responsible.
 
-Texture churn fell substantially: the latest roughly199-second run completed134
-upload batches (about4.32GiB), compared with1903 batches (60.46GiB) in the previous
-roughly362-second run. However, a30-second interval still averaged about2FPS with
-no upload batches or cache evictions. Upload/cache pressure is therefore not a
-complete explanation for the remaining lag. These are different user-driven
-runs, not a controlled benchmark.
+Build136 caches the bounded-diagnostic probe pointer once per PPU dispatch
+invocation, removing repeated Darwin TLS resolution from that interpreter loop.
+Nested callbacks retain their own probe and restore the caller's probe. Existing
+instruction budgets, state/Stop checks and the static decoder remain intact.
+This is a limited optimization; actual FPS improvement requires a phone test.
 
-Build135 adds an RSX-only timing report every10 seconds on a frame boundary,
-plus a final report before renderer teardown. Exclusive wall-clock buckets
-separate empty FIFO/guest waits, texture and shader work, and GPU/fence waits.
-The native live guest sampler stays disabled; no new profiling thread, live CPU
-register reads, guest-memory walks or GPU timestamp queries are enabled. The
-existing graphics, decoder, texture-reuse and input settings are retained.
-This build measures the remaining bottleneck; an FPS improvement is not promised.
+Every render heartbeat now also samples kernel thread CPU times, reporting the
+eight busiest live threads, with user/system percentages.100% means one CPU
+core. Kernel thread IDs prevent port-name reuse from corrupting the comparison.
+The sampler creates no extra thread and reads no live guest registers/memory.
+It releases all acquired Mach rights/arrays, including partial failures, and
+observation failures leave the game running. Longer iOS thread names preserve
+the guest thread identity in these reports. RSX timing remains enabled.
 
-Host regressions check nested/exclusive accounting, reporting across active
-scopes, foreign-thread exclusion, Stop and restart with a reused thread identity.
-Apple compilation and actual timing results still require the Actions/phone test.
+Host checks pass for production CPU accounting and snapshot cleanup, exact PPU
+dispatch with two workers/nested probes/Stop/exception recovery, the historical
+P55 caller/callee/stack fixture, runtime cleanup, and RSX timing. Apple SDK
+compilation and actual performance remain pending Actions and the next phone run.
+Graphics/input/texture policies remain as in the working build; audio remains null.
 
-Install `ARMSX3_iOS16_INSTALL_THIS_IPA`, **Quick start -> Start game**, use
-**START**, and try the same car/menu sequence for about60 seconds. Finish with
-**Stop game** and share the log and responsiveness. Firmware, imported disc and
-game cache persist; full120 diagnostics are optional. Historical checkpoints follow.
+Install `ARMSX3_iOS16_INSTALL_THIS_IPA`, **Quick start -> Start game**, and try the
+same menu/car sequence for about60seconds. Finish with **Stop game** and share
+the log and responsiveness. Imported firmware/disc/cache persist. Full120
+checks are optional. Historical checkpoints follow.
 
 # ARMSX3 for iOS 16 — P0 port checkpoint
 

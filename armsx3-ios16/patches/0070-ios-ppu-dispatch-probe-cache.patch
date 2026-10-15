@@ -1,0 +1,46 @@
+--- a/rpcs3/Emu/Cell/PPUThread.cpp
++++ b/rpcs3/Emu/Cell/PPUThread.cpp
+@@ -3156,11 +3156,18 @@
+ 
+ 	const auto cache = vm::g_exec_addr;
+ 	const auto mem_ = vm::g_base_addr;
++#if defined(__APPLE__) && TARGET_OS_IPHONE
++	// Bounded diagnostic entry points install a thread-local probe before calling
++	// exec_task and restore it after returning, including nested guest callbacks.
++	// Keep this invocation's probe in a register instead of resolving Darwin TLS
++	// again at every interpreter dispatch boundary during ordinary game execution.
++	auto* const dispatch_probe = s_ios_ppu_dispatch_probe;
++#endif
+ 
+ 	while (true)
+ 	{
+ #if defined(__APPLE__) && TARGET_OS_IPHONE
+-		if (auto* probe = s_ios_ppu_dispatch_probe)
++		if (auto* probe = dispatch_probe)
+ 		{
+ 			if (probe->return_addr && cia == probe->return_addr + 4 && state & cpu_flag::ret)
+ 			{ probe->result = static_cast<int>(probe->steps); return; }
+@@ -3184,7 +3191,7 @@
+ 		auto* next = state ? &ppu_ret : fn + 1;
+ #if defined(__APPLE__) && TARGET_OS_IPHONE
+ 		// Use the existing core step boundary so every fetch remains budgeted.
+-		if (s_ios_ppu_dispatch_probe) next = &ppu_ret;
++		if (dispatch_probe) next = &ppu_ret;
+ #endif
+ 		fn->fn(*this, {*op}, op, next);
+ 	}
+--- a/Utilities/Thread.cpp
++++ b/Utilities/Thread.cpp
+@@ -4090,7 +4090,12 @@
+ #endif
+ 
+ #if defined(__APPLE__)
++#if TARGET_OS_IOS
++	// Darwin permits 63 bytes; retain guest thread names in kernel CPU samples.
++	name.resize(std::min<usz>(63, name.size()));
++#else
+ 	name.resize(std::min<usz>(15, name.size()));
++#endif
+ 	pthread_setname_np(name.c_str());
+ #elif defined(__DragonFly__) || defined(__FreeBSD__) || defined(__OpenBSD__)
+ 	pthread_set_name_np(pthread_self(), name.c_str());

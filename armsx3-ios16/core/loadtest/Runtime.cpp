@@ -68,6 +68,7 @@ bool run_window(bool render, const std::function<bool()>& should_stop)
         return false;
     }
     begin_execution_observation();
+    reset_host_cpu_observation();
     permit_guest_start(true);
     log("EXECUTION BEFORE native Run(false); native RSX startup will release the PPU queue");
     try { invoke_main([] { Emu.Run(false); }); }
@@ -99,6 +100,7 @@ bool run_window(bool render, const std::function<bool()>& should_stop)
         {
             log("EXECUTION heartbeat: running; live native CPU objects=" + std::to_string(armsx3_ios_live_cpu_threads()) +
                 (render ? "; accepted Vulkan presents=" + std::to_string(presentation_progress().accepted) : std::string{}));
+            if (render) sample_host_cpu();
             heartbeat = std::chrono::steady_clock::now() + (should_stop ? std::chrono::seconds(5) : std::chrono::seconds(1));
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));

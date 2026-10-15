@@ -22,6 +22,8 @@ struct ExecutionProgress
 };
 void begin_execution_observation();
 ExecutionProgress execution_progress();
+void reset_host_cpu_observation() noexcept;
+void sample_host_cpu() noexcept;
 }
 extern "C" int armsx3_core_check_runtime(char* detail, std::size_t capacity);
 extern "C" int armsx3_core_check_game(char* detail, std::size_t capacity);

@@ -3,7 +3,7 @@
 include("${CMAKE_SOURCE_DIR}/ios-core/moltenvk.cmake")
 add_library(ARMSX3Core SHARED CoreBridge.cpp FrontendHooks.cpp Intake.cpp
     Runtime.cpp RuntimeFrontend.cpp RuntimeDispatch.mm RuntimeCapture.cpp GameImport.cpp
-    GraphicsDevice.cpp GraphicsCheck.cpp RuntimeFrame.cpp RuntimeInput.cpp
+    GraphicsDevice.cpp GraphicsCheck.cpp RuntimeFrame.cpp RuntimeInput.cpp RuntimeCpu.cpp
     "${CMAKE_SOURCE_DIR}/ios/src/StartupLog.mm"
     "${CMAKE_SOURCE_DIR}/rpcs3/rpcs3_version.cpp"
     "${CMAKE_SOURCE_DIR}/rpcs3/Input/pad_thread.cpp"

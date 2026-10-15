@@ -133,6 +133,7 @@ struct cfg_root{
  core.ppu_decoder.set(ppu_decoder_type(p));core.spu_decoder.set(spu_decoder_type(sp));core.libraries_control.set_set(l?std::set<std::string>{"liblv2.sprx:lle"}:std::set<std::string>{});
  video.renderer.set(video_renderer(v));audio.renderer.set(audio_renderer(a));io.keyboard.set(keyboard_handler(k));io.mouse.set(mouse_handler(m));net.net_active.set(np_internet_status(n));net.psn_status.set(np_psn_status(ps));return !i.fail();}
 }g_cfg,g_backup_cfg;
+namespace ios_runtime{void reset_host_cpu_observation() noexcept{}void sample_host_cpu() noexcept{}}
 std::string host_root;int mode=0;unsigned loads=0,kills=0,drains=0;u64 workers=0;bool on_main=false;
 bool host_guest_active=false,host_threads_joined=false;unsigned starts=0,ppu_starts=0,log_restores=0;
 named_thread<ppu_thread>host_ppu;named_thread<spu_thread>host_spu;

@@ -8741,3 +8741,99 @@ START, same menu/car sequence about60seconds, Stop game, share log/responsivenes
 Existing firmware/disc/cache persist. Graphics previously glitch-free and starter
 car purchase verified; driving still unconfirmed. Null audio unchanged.
 Native135-validation contains69 patches; native134-validation still68.
+
+
+## Build136 — PPU dispatch lookup reduction and kernel CPU-time samples
+
+Latest attachment read directly from upload, no Library tool:
+ARMSX3-startup-20261015-223207-130-36752.txt, PID36752, Build135.
+Parent main7bc62e849aeafe266f01401ce96fb25e18b84d25; tree
+9fe203efb0c48c02e8d34282ebfcae042e052e26; installable run38814478748.
+
+Phone evidence:
+- Running1792103235.754506; manual Stop1792103512.113905; final2138 accepted
+  presents. RSX final report3512.207299; Vulkan device/instance destroyed
+ 3513.052652; FXO3513.224430; VM3513.227501; fully stopped3513.233354;
+  RENDER/UI PASS3513.235247/3513.245943. No crash/fatal or stuck cleanup.
+-21 complete slow timing windows:435frames in216.68seconds =2.01FPS.
+  Wall-time-weighted exclusive RSX buckets: empty FIFO71.04%, fence wait8.95%,
+  texcache lookup4.64%, vertex/index3.78%, submit3.32%. Most slow windows empty
+  FIFO60–84%; one texture-pressure window26.5%FIFO/28.8%texcache/21.7%fences.
+  Earlier startup/copyright windows mostly30FPS and guest-semaphore pacing.
+-196 upload batches/about6.36GiB over~277seconds, broadly consistent with the
+  improved134 texture policy. Do not revert to192MiB eviction or lower graphics
+  quality to attack predominantly empty FIFO time.
+- Joined totals20,126,183,449 estimated PPU instructions/4,148,685 completed calls,
+ 28PPU+6SPU contexts. First mainPPU11,014,578,847 instructions/62058calls;
+  guest0x1000008 [MC] Render Thread3,827,675,113/2,759,901, lastusleep. CPU-side
+  command starvation is supported; which interpreter or synchronization path
+  dominates is not yet proven. New kernel metrics are intended to resolve it.
+
+Patch0070-ios-ppu-dispatch-probe-cache.patch:
+- PPU static exec_task captures its thread-local diagnostic probe ONCE before
+  the loop and uses the local pointer for budget/end/step handling. Existing
+  bounded entry points set the TLS pointer before entering exec_task and restore
+  it with RAII, including nesting and exceptions. Ordinary runtime previously
+  resolved the null probe repeatedly at every interpreter dispatch boundary.
+- No guest ISA, instruction count, scheduler, clocks, decoder, state/stop check,
+  mutable JIT, memory protection or diagnostics budget change. Nested exec_task
+  invocations get their own current pointer. Non-Apple paths unchanged.
+- iOS kernel thread names retain63bytes rather than the original15; macOS and
+  Linux name behavior unchanged. Guest name storage/native log names unchanged.
+  Needed so kernel samples can say main/render/SPURS names rather than only IDs.
+
+RuntimeCpu.cpp/HostCpuUsage.h:
+- Runs on the existing serialized runtime worker at render heartbeats (every5s
+  in continuous sessions), first call establishes baseline. No extra thread.
+- task_threads acquires own-process Mach rights. THREAD_IDENTIFIER_INFO supplies
+  stable64-bit kernel IDs; THREAD_BASIC_INFO supplies cumulative user/system
+  CPU seconds+microseconds; THREAD_EXTENDED_INFO supplies bounded kernel names.
+  Does NOT use pthread pointers or touch live CPUThread/VM/register/history data.
+- Rank per-thread deltas over steady-clock wall duration.100%=one fully used CPU
+  core, summed usage may exceed100%. Log top8 and sum of comparable LIVE threads.
+  First-seen, missing, counter-reset and non-forward-clock cases rebaseline;
+  previous maps retain only this snapshot, avoiding accumulation across churn.
+  This is not complete process accounting for threads that exited mid-window.
+- RAII releases EVERY acquired thread port and the returned VM array, including
+  thread_info failures and allocation exceptions. Observation errors reset the
+  baseline and log nonfatal failure, leaving game execution/Stop intact.
+- Runtime resets observation at each authorized run and samples only rendering
+  heartbeats. New CMake source is linked into the core. Runtime regression models
+  the CPU-observer APIs; dedicated tests compile the complete production collector.
+- Apple primary API references checked: official thread_extended_info_data_t
+  docs; apple-oss-distributions/adv_cmds ps/tasks.c demonstrates task_threads
+  port+array cleanup; Apple XNU THREAD_IDENTIFIER_INFO test and basic-info
+  microsecond conversion. No final external API guidance/citations needed.
+
+Validation completed:
+- All70 patches apply to exact pinned92b931b9fb5eef7f1317cb482917dfc19aceebd9;
+  native136-validation contains70; native135-validation still69.
+- test_ios_ppu_dispatch_cache.py compiles exact native exec_task and bounded
+  helper with host VM/ISA/state interfaces, counts TLS resolutions: ONE across
+  one million ordinary iterations per worker, two joined workers. Nested bounded
+  callbacks inside ordinary and bounded callers restore pointers; end/budget,
+  invalid args, pre-stopped state, handler exception cleanup/restart all pass.
+- Existing P55 production dispatcher/retained workers/caller/callee/leaf/stack/
+  TLS fixture passes576slices with intended faults and joins/restoration. Full
+ 34 synchronization job matrix remains required in Actions.
+- test_host_cpu.py compiles production HostCpuWindow AND RuntimeCpu.cpp under
+  ASAN/UBSAN and warnings-as-errors with explicit Mach interfaces. Verifies
+ 100%/50% per-core usage and user/system split, ranking, identity churn, reset,
+  zero/reversed clock and baseline; complete collector releases every acquired
+  right/VM array on success, partial query failures, missing names, task snapshot
+  failure and exception. Real Mach ABI/SDK compilation still requires Actions.
+- Production runtime/frontend/BootGame/JIT-finalizer/Stop regression passes,
+  isolated RSX timing regression passes, frozen bridge/120stages/four Quickstart
+  foundations/Build136 fixture passes; modified scripts parse; whitespace clean.
+- Workflow adds both new tests;34+2 prerequisites unchanged. No agents/images.
+  Build135 graphics/input/texture reuse retained; null audio unchanged. No large
+  FPS gain claimed from the lookup change. New kernel data must guide next fix.
+
+Next publish136 using parent lease7bc62e8..., check installable queued run ONCE,
+DO NOT monitor. User authorizes publishing/builds. Install artifact
+ARMSX3_iOS16_INSTALL_THIS_IPA; Quick start -> Start game, same menu/car sequence
+for about60seconds, Stop game, share log/responsiveness. Imported state persists.
+PPU enum supports only static and LLVM; SPU dynamic still has the missing Apple
+mutable-JIT boundary. Do not flip decoder blindly. Full recompiler performance
+will require implementing the real iOS JIT backend/LLVM build, not bypassing
+apple_jit_write_protect or pretending static is a recompiler. Driving unconfirmed.
