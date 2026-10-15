@@ -153,6 +153,7 @@ jobs:
           python3 armsx3-ios16/tests/test_native_renderer.py upstream-armsx3
           python3 armsx3-ios16/tests/test_ios_signal_recovery.py upstream-armsx3
           python3 armsx3-ios16/tests/test_ios_zcull_reports.py upstream-armsx3
+          python3 armsx3-ios16/tests/test_ios_graphics_memory.py upstream-armsx3
           python3 armsx3-ios16/tests/test_vulkan_config.py upstream-armsx3
           python3 armsx3-ios16/tests/test_jit_lifecycle.py upstream-armsx3
           python3 armsx3-ios16/tests/test_spu_cache_startup.py upstream-armsx3

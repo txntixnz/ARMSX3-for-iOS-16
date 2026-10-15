@@ -1,0 +1,36 @@
+diff --git a/rpcs3/Emu/System.cpp b/rpcs3/Emu/System.cpp
+--- a/rpcs3/Emu/System.cpp
++++ b/rpcs3/Emu/System.cpp
+@@ -4764,9 +4764,24 @@
+ 
+ 		set_progress_message("Resetting Objects");
+ 
++#if defined(__APPLE__) && TARGET_OS_IOS
++		// These destructors can wait in the GPU driver or shader compiler.
++		// UIKit must stay available for the runtime's cleanup timeout/log UI.
++		// Threads have joined and stopped-context capture has already finished.
++		sys_log.warning("iOS teardown BEFORE CPU object cleanup");
++		cpu_thread::cleanup();
++		lv2_obj::cleanup();
++		sys_log.warning("iOS teardown BEFORE FXO reset / Vulkan destruction");
++		g_fxo->reset();
++		sys_log.warning("iOS teardown AFTER FXO reset; BEFORE VM close");
++		vm::close();
++		sys_log.warning("iOS teardown AFTER VM close; posting final main callback");
++#endif
++
+ 		// Final termination from main thread (move the last ownership of join thread in order to destroy it)
+ 		CallFromMainThread([join_thread = std::move(join_thread), reset_emu_state, verbose_message, stop_watchdog, init_mtx, allow_autoexit, return_to_big_picture_mode, this]()
+ 		{
++#if !defined(__APPLE__) || !TARGET_OS_IOS
+ 			cpu_thread::cleanup();
+ 
+ 			lv2_obj::cleanup();
+@@ -4776,6 +4791,7 @@
+ 			sys_log.notice("Objects cleared...");
+ 
+ 			vm::close();
++#endif
+ 
+ 			*stop_watchdog = thread_state::finished;
+ 			static_cast<void>(init_mtx->reset());

@@ -97,7 +97,8 @@ bool run_window(bool render, const std::function<bool()>& should_stop)
         require(Emu.IsRunning(), "Guest left the running state during the execution window");
         if (std::chrono::steady_clock::now() >= heartbeat)
         {
-            log("EXECUTION heartbeat: running; live native CPU objects=" + std::to_string(armsx3_ios_live_cpu_threads()));
+            log("EXECUTION heartbeat: running; live native CPU objects=" + std::to_string(armsx3_ios_live_cpu_threads()) +
+                (render ? "; accepted Vulkan presents=" + std::to_string(presentation_progress().accepted) : std::string{}));
             heartbeat = std::chrono::steady_clock::now() + (should_stop ? std::chrono::seconds(5) : std::chrono::seconds(1));
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));

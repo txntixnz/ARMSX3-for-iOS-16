@@ -4274,3 +4274,83 @@ workflow outcome. Next: install ARMSX3_iOS16_INSTALL_THIS_IPA, Quick start -> St
 game, keep foreground, let loading progress, Stop game and send the log/result.
 Firmware/disc persist; no reimport or full diagnostics required. Audio/gamepad
 remain pending. Concise English; no generated images.
+
+
+## Build130 — iOS streaming-buffer growth and responsive teardown (2026-10-15)
+
+User reports unchanged loading screen and whole-app hangs twice, requiring app
+switcher termination. Uploaded ARMSX3-startup-20261015-175355-405-33871.txt is a
+recovered previous unfinished Build129 run, PID33843 (exporting process33871).
+Local copy /workspace/scratch/8dcd4680dd95/upload/ARMSX3-startup-20261015-175355-405-33871.txt;
+Library ID libfile_ce393337eea08191b45f3e5dd005bef8. Read local attachment directly.
+
+The failure has changed. Urgent ZCULL mode logs at1792086577.236595 and there are
+no report-page Bus errors. Run reaches running at1792086578.041943. At
+1792086637.284613, allocator refuses196608K (192MiB), system pool1 holds274MiB,
+configured cap1024MiB. The preceding warnings say recovery is uninterruptible
+and the texture cache cannot release temporary resources from within itself.
+RSX terminates with VK_ERROR_OUT_OF_DEVICE_MEMORY at memory.cpp:400. New fatal
+observer correctly detects this and automatically starts Kill(false) at
+1792086637.301183. All CPU contexts join/capture, but final cleanup stalls;
+30-second watchdog logs1792086667.307976. No final UI FAIL appears because final
+core destruction is queued onto UIKit's main thread and blocks that queue.
+No main menu or clean shutdown success should be claimed.
+
+Patch0061-ios-vulkan-ring-growth.patch changes iOS data_heap::grow only. Native
+old policy aligns old_capacity+request to64MiB. A64MiB upload+8 bytes (native
+VKTexture.cpp padding) on a64MiB ring therefore asks for192MiB. Replacement
+buffers start empty and old buffers stay in GC for in-flight references, so iOS
+now chooses max(old_capacity+16MiB, request+4096), aligned to16MiB. That boundary
+fits80MiB. Native ring allocation/wrapping, GC disposal, growth interrupts and
+budget checks remain in use. Requests at/above capacity limit refuse before
+mutating the ring. Named iOS growth warnings now precede allocation, and runtime
+heartbeats include accepted Vulkan presents. The uploaded allocator log does
+NOT identify which heap/request produced192MiB: the padding case is a native
+reproducer and plausible contributor, not confirmed device call-site evidence.
+The next device log can distinguish this via the new heap-name/request markers.
+
+Patch0062-ios-worker-core-destruction.patch moves CPU cleanup, LV2 cleanup, FXO
+reset (including Vulkan/compiler destruction) and VM close to the existing join
+worker after native joins, stopped-context capture and semi-destructors. iOS
+stage markers bracket CPU/FXO/VM operations. Final state/JIT/watchdog/on_stop
+callbacks still complete on main. Desktop retains its original main-thread
+cleanup. RuntimeFrame closes via atomics/C++ ownership, with no UIKit work.
+If a GPU destructor remains blocked, runtime can return -2 after30s and UIKit
+can display incomplete cleanup; view/layer/config remain retained and restarting
+requires process exit as before. This improves failure responsiveness; it does
+not assert that driver destruction itself will always finish.
+
+Validation completed:
+- All62 patches apply sequentially on clean pinned92b931b9f native worktree;
+  applied files match expected; CRLF-aware source whitespace check passes.
+- New test_ios_graphics_memory.py applies exact first60, applies/reverses61/62,
+  compiles actual native ring helper/grow/budget code and shutdown fragments
+  under ASAN+UBSAN. Controlled driver limit128MiB reproduces old192MiB failure;
+  iOS allocates80MiB, wraps within bounds, keeps old in-flight buffer ownership
+  and sends growth interrupt. Small/large/aligned/fixed-limit/budget refusal
+  cases pass. Desktop growth stays unchanged. VM/GPU/GC are host interfaces.
+- Shutdown test blocks actual extracted FXO reset call on a worker while main
+  processes modeled events. VM close/final callback happen only after release;
+  cleanup occurs exactly once; desktop destruction stays on main. This models
+  the event queue and FXO objects, not actual UIKit/Metal driver waits.
+- Production runtime/frontend host harness passes, including fatal observations,
+  threaded stop, timeout ownership/config retention and clean retries. This
+  harness's older native lifecycle fixture remains intentionally frozen at51;
+  the new shutdown fragment test covers62 separately.
+- Build130 fixture preserves frozen bridge,120 stages/four quick foundations,
+  session ABI and34+2 host prerequisites. Python AST/plist and non-patch staged
+  whitespace checks pass. Workflow runs the new graphics-memory test in intake.
+- Existing ZCULL regression now explicitly selects patches<=60 so later patches
+  cannot break its fixed historical policy reconstruction. No report-page or
+  signal dispatch policy changes this iteration.
+
+Actual iOS compile/link/package, loading/main menu, memory use and clean Stop
+still require workflow/device verification. A smaller allocation can still be
+refused by the real driver; no fixed promise of boot progress. Parent main
+f871259928af2003a263ad5d631b987a2d88632a. User authorizes main publication and
+builds. Publish via GitHub API lease and inspect one queued run only; do not
+monitor builds. Next: install ARMSX3_iOS16_INSTALL_THIS_IPA, Quick start -> Start
+game, keep foreground, Stop game, send log/result. Firmware/disc persist. No
+reimport/full diagnostics. Concise English; no generated images; audio/input
+pending. Scratch native130-validation has all62 patches; native129-validation
+also now contains these current changes (its directory name is historical).

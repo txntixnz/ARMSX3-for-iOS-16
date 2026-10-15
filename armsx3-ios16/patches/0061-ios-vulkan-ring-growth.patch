@@ -1,0 +1,37 @@
+diff --git a/rpcs3/Emu/RSX/VK/vkutils/data_heap.cpp b/rpcs3/Emu/RSX/VK/vkutils/data_heap.cpp
+index 3ee81094b..b8331d967 100644
+--- a/rpcs3/Emu/RSX/VK/vkutils/data_heap.cpp
++++ b/rpcs3/Emu/RSX/VK/vkutils/data_heap.cpp
+@@ -1,4 +1,7 @@
+ #include "barriers.h"
++#ifdef __APPLE__
++#include <TargetConditionals.h>
++#endif
+ #include "data_heap.h"
+ #include "device.h"
+ 
+@@ -144,7 +147,24 @@ namespace vk
+ 		}
+ #endif
+ 
++#if defined(__APPLE__) && TARGET_OS_IOS
++		// The replacement starts empty; old allocations stay with the GC.
++		// It needs room for the next request, not old capacity plus that
++		// request. A 64 MiB upload plus padding otherwise grows 64->192 MiB.
++		// Keep a full alignment margin and use 16 MiB steps on shared RAM.
++		if (size >= size_limit)
++		{
++			rsx_log.error("[%s] iOS ring request %lluK exceeds capacity limit %lluM.", m_name,
++				static_cast<u64>(size / 1024), static_cast<u64>(size_limit / 0x100000));
++			return false;
++		}
++		usz aligned_new_size = utils::align(std::max(m_size + 16 * 0x100000, size + 4096), 16 * 0x100000);
++		rsx_log.warning("[%s] iOS ring growth %lluM -> %lluM (request %lluK).", m_name,
++			static_cast<u64>(m_size / 0x100000), static_cast<u64>(aligned_new_size / 0x100000),
++			static_cast<u64>(size / 1024));
++#else
+ 		usz aligned_new_size = utils::align(m_size + size, 64 * 0x100000);
++#endif
+ 
+ 		// At the ceiling, reclaim rather than swap or die.
+ 		//

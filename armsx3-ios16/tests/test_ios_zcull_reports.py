@@ -13,7 +13,7 @@ root = Path(__file__).resolve().parent.parent
 native = Path(sys.argv[1]).resolve()
 pin = '92b931b9fb5eef7f1317cb482917dfc19aceebd9'
 rel = 'rpcs3/Emu/RSX/RSXZCULL.cpp'
-patches = sorted((root / 'patches').glob('*.patch'))
+patches = sorted(p for p in (root / 'patches').glob('*.patch') if int(p.name[:4]) <= 60)
 assert [p.name[:4] for p in patches] == [f'{n:04d}' for n in range(1, 61)]
 
 prelude = r'''
