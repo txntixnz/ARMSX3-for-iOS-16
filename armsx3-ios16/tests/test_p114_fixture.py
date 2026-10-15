@@ -1,4 +1,4 @@
-"""Build114 intake/runtime contracts, UI gating and prior-core freeze."""
+"""Build115 intake/runtime contracts, UI gating and prior-core freeze."""
 from pathlib import Path
 import hashlib,plistlib,re
 here=Path(__file__).resolve().parent
@@ -28,7 +28,7 @@ cmake=(here.parent/'core/loadtest/CMakeLists.txt').read_text()
 assert 'FrontendHooks.cpp Intake.cpp' in cmake and '-framework UniformTypeIdentifiers' in cmake
 assert 'Emu.BootGame(' not in intake and 'Emu.Run(' not in intake # inspection does not launch uncontrolled guest workers
 info=plistlib.loads((here.parent/'core/loadtest/Info.plist.in').read_bytes())
-assert info['CFBundleVersion']=='114' and info['MinimumOSVersion']=='16.0'
+assert info['CFBundleVersion']=='115' and info['MinimumOSVersion']=='16.0'
 workflow=(here.parent.parent/'.github/workflows/build-armsx3-ios16-core.yml').read_text()
 assert 'needs: [synchronization-host, intake-host]' in workflow
 assert len(re.findall(r'^\s+- script: test_p\d+_pair.py$',workflow,re.M))==34
@@ -36,7 +36,10 @@ assert re.search(r'^  intake-host:$',workflow,re.M) and 'python3 armsx3-ios16/te
 runtime=(here.parent/'core/loadtest/Runtime.cpp').read_text()
 assert 'Emu.BootGame(prepared.string(), "", true, cfg_mode::config_override, temporary.path.string())' in runtime
 assert 'configuration.misc.autostart.set(false)' in runtime and 'Emu.SetForceBoot(false)' in runtime
-assert 'Emu.Run(' not in runtime and 'Emu.Resume(' not in runtime
+assert runtime.count('Emu.Run(false)')==1 and 'Emu.Resume(' not in runtime
+assert 'if (execute) run_window()' in runtime and 'permit_guest_start(true)' in runtime
+assert 'armsx3_core_run_game' in app and 'Run game (3 seconds)' in app
+assert 'RuntimeCapture.cpp' in cmake and 'begin_execution_observation()' in runtime
 assert 'Emu.IsStopped(true)' in runtime and 'drain_main_queue()' in runtime
 assert 'liblv2 firmware loading failed' in runtime and 'g_cfg.from_string(previous)' in runtime
 assert 'Runtime.cpp RuntimeFrontend.cpp RuntimeDispatch.mm' in cmake
@@ -48,4 +51,4 @@ assert 'python3 armsx3-ios16/tests/test_game_import.py upstream-armsx3' in workf
 for token in ['UTTypeFolder] asCopy:NO', 'NSFileCoordinator', 'armsx3_core_import_game', 'armsx3_core_check_game']:
  assert token in app,token
 assert 'GameImport.cpp' in cmake
-print('PASS: prior bridge freeze;120 ordered stages; native intake and load-only BootGame configuration/cleanup gates; scoped UIKit actions; Build114/iOS16;34+1 host dependencies')
+print('PASS: prior bridge freeze;120 ordered stages; native intake, load-only BootGame gates and explicit bounded guest start; scoped UIKit actions; Build115/iOS16;34+1 host dependencies')

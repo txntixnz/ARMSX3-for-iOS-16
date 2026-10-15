@@ -5,6 +5,7 @@
 #include "StartupLog.h"
 #include "Emu/System.h"
 #include "Emu/system_config.h"
+#include "Emu/system_utils.hpp"
 #include "Emu/vfs_config.h"
 #include "Emu/IdManager.h"
 #include "Emu/VFS.h"
@@ -39,7 +40,7 @@ bool stopped() { return Emu.IsStopped(true) && !armsx3_ios_live_cpu_threads(); }
 bool teardown()
 {
     log("RUNTIME BEFORE native Kill(false) and thread/VM cleanup");
-    Emu.Kill(false);
+    invoke_main([] { Emu.Kill(false); });
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
     while (!stopped())
     {
@@ -57,10 +58,44 @@ bool teardown()
     log("RUNTIME AFTER cleanup: fully stopped, zero live CPU threads");
     return true;
 }
+void run_window()
+{
+    begin_execution_observation();
+    permit_guest_start(true);
+    log("EXECUTION BEFORE native Run(false); native RSX startup will release the PPU queue");
+    try { invoke_main([] { Emu.Run(false); }); }
+    catch (...) { permit_guest_start(false); throw; }
+    permit_guest_start(false);
+    const auto startup_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+    while (!Emu.IsRunning())
+    {
+        require(!frontend_failed(), "Guest startup reported a frontend error");
+        require(!Emu.IsStopped(), "Guest stopped before reaching the running state; inspect the log");
+        require(std::chrono::steady_clock::now() < startup_deadline, "Guest startup did not reach running state within 15 seconds");
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    log("EXECUTION native running state reached; three-second guest window started");
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    auto heartbeat = std::chrono::steady_clock::now();
+    while (std::chrono::steady_clock::now() < deadline)
+    {
+        require(!frontend_failed(), "Guest execution reported a frontend error");
+        if (Emu.IsStopped()) { log("EXECUTION guest requested an early stop"); break; }
+        require(Emu.IsRunning(), "Guest left the running state during the execution window");
+        if (std::chrono::steady_clock::now() >= heartbeat)
+        {
+            log("EXECUTION heartbeat: running; live native CPU objects=" + std::to_string(armsx3_ios_live_cpu_threads()));
+            heartbeat = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    log("EXECUTION window ended; stopping before collecting joined CPU counters");
+}
 }
 
-int check(std::string& detail, bool game = false)
+int check(std::string& detail, bool game = false, bool execute = false)
 {
+    require(!execute || game, "Guest execution requires an imported game folder");
     require(!is_main_thread(), "Runtime loading must run off the UIKit main thread");
     require(stopped(), "Stop emulator activity before checking runtime loading");
     const auto disc = game ? ios_game::installed() : ios_game::Disc{};
@@ -83,6 +118,13 @@ int check(std::string& detail, bool game = false)
     configuration.core.ppu_decoder.set(ppu_decoder_type::_static);
     configuration.core.spu_decoder.set(spu_decoder_type::_static);
     configuration.core.llvm_precompilation.set(false);
+    if (execute)
+    {
+        configuration.core.ppu_call_history.set(true);
+        // Keep warnings/errors and explicit startup markers without tracing
+        // every guest call through the synchronous diagnostic log writer.
+        configuration.log.set_map({{".*", logs::level::warning}});
+    }
     configuration.core.libraries_control.set_set({"liblv2.sprx:lle"});
     configuration.video.renderer.set(video_renderer::null);
     configuration.audio.renderer.set(audio_renderer::null);
@@ -169,6 +211,7 @@ int check(std::string& detail, bool game = false)
         log("RUNTIME PASS native ready state: mapped segments=" + std::to_string(loaded_segments) +
             " firmware modules=" + std::to_string(firmware_modules) + " stopped PPU contexts=" + std::to_string(ppu_workers) +
             "; guest entry has not been started");
+        if (execute) run_window();
     }
     catch (const std::exception& failure) { error = failure.what(); log("RUNTIME load failed: " + error); }
     catch (...) { error = "Native runtime loader threw an unknown exception"; log(error); }
@@ -179,6 +222,7 @@ int check(std::string& detail, bool game = false)
         {
             if (!teardown()) { detail = "Runtime cleanup is incomplete. Reopen the app and share the log."; return -2; }
             require(g_cfg.from_string(previous) && g_backup_cfg.from_string(previous_backup), "Could not restore runtime configuration");
+            if (execute) rpcs3::utils::configure_logs();
             require(!frontend_failed(), "Runtime frontend reported an error during cleanup");
         }
         catch (const std::exception& failure)
@@ -187,12 +231,37 @@ int check(std::string& detail, bool game = false)
         }
         catch (...) { detail = "Runtime cleanup threw an unknown exception. Reopen the app."; return -2; }
     }
+    if (execute && error.empty())
+    {
+        const auto progress = execution_progress();
+        if (!progress.captured || progress.failed || !(progress.instructions || progress.calls))
+            error = "Joined CPU counters did not confirm guest execution; inspect the startup log";
+        else
+        {
+            detail = "Guest run completed: " + disc.title + " [" + disc.id + "]. Native PPU instructions=" +
+                std::to_string(progress.instructions) + ", completed HLE/LV2 calls=" + std::to_string(progress.calls) +
+                ", SPU blocks=" + std::to_string(progress.spu_blocks) + ". Clean stop completed. Display and audio are pending.";
+            log("EXECUTION PASS: " + detail);
+            return 0;
+        }
+    }
     if (!error.empty()) { detail = error + ". Cleanup completed; share the log."; return -1; }
     detail = (game ? "Game load passed: " + disc.title + " [" + disc.id + "]. " : std::string("Native runtime load passed: ")) +
         std::to_string(loaded_segments) + " executable segments and " +
         std::to_string(firmware_modules) + " firmware modules. Cleanup completed. Game execution and display are next.";
     return 0;
 }
+}
+
+extern "C" __attribute__((visibility("default"))) int armsx3_core_run_game(char* detail, std::size_t capacity)
+{
+    if (!detail || capacity < 2) return -1;
+    std::string text; int result = -1;
+    try { result = ios_runtime::check(text, true, true); }
+    catch (const std::exception& error) { text = error.what(); ARMSX3StartupLog(text.c_str()); }
+    catch (...) { text = "Game execution threw an unknown exception"; ARMSX3StartupLog(text.c_str()); }
+    const auto length = std::min(capacity - 1, text.size());
+    std::memcpy(detail, text.data(), length); detail[length] = '\0'; return result;
 }
 
 extern "C" __attribute__((visibility("default"))) int armsx3_core_check_game(char* detail, std::size_t capacity)

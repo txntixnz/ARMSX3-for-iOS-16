@@ -27,6 +27,7 @@ void dispatch_main(std::function<void()> operation, atomic_t<u32>* wake_up);
 namespace
 {
 std::atomic<bool> failed{false};
+std::atomic<bool> start_permitted{false};
 void log(const char* text) { ARMSX3StartupLog(text); }
 std::string resolve(std::string_view value)
 {
@@ -50,15 +51,22 @@ public:
 }
 void record_frontend_failure(const char* message) { failed.store(true); log(message); }
 bool frontend_failed() { return failed.load(); }
+void permit_guest_start(bool allowed) { start_permitted.store(allowed); }
 void install_frontend()
 {
     // These callbacks remain installed for the process lifetime. Runtime checks
     // are serialized by UIKit and finish teardown before any intake can resume.
     failed.store(false);
+    start_permitted.store(false);
     static bool installed = false;
     if (installed) return;
     g_emu_callbacks.call_from_main_thread = dispatch_main;
     g_emu_callbacks.on_run = [](bool) {
+        if (start_permitted.exchange(false))
+        {
+            log("EXECUTION callback: explicit guest start accepted");
+            return;
+        }
         record_frontend_failure("RUNTIME FAIL: unexpected request to execute the guest");
         throw std::runtime_error("Guest execution is disabled during runtime load checks");
     };

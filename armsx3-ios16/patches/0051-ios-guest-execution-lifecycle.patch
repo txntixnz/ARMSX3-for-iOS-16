@@ -1,0 +1,44 @@
+--- a/rpcs3/Emu/System.cpp
++++ b/rpcs3/Emu/System.cpp
+@@ -1,4 +1,8 @@
+ #include "util/apple_jit.hpp"
++#if defined(__APPLE__) && TARGET_OS_IOS
++// Snapshot execution diagnostics only after native emulation threads join.
++extern "C" void armsx3_ios_runtime_capture_stopped() noexcept;
++#endif
+ #include "stdafx.h"
+ #include "VFS.h"
+ #include "Utilities/bin_patch.h"
+@@ -4338,6 +4342,10 @@
+ 
+ 		sys_log.notice("All threads have been stopped.");
+ 
++#if defined(__APPLE__) && TARGET_OS_IOS
++		armsx3_ios_runtime_capture_stopped();
++#endif
++
+ 		std::string path;
+ 
+ 		static_cast<void>(init_mtx->init());
+--- a/rpcs3/Emu/RSX/RSXThread.cpp
++++ b/rpcs3/Emu/RSX/RSXThread.cpp
+@@ -1,4 +1,7 @@
+ #include "stdafx.h"
++#ifdef __APPLE__
++#include <TargetConditionals.h>
++#endif
+ #include "RSXThread.h"
+ 
+ #include "Capture/rsx_capture.h"
+@@ -1155,6 +1158,11 @@
+ 		{
+ 			Emu.CallFromMainThread([]
+ 			{
++#if defined(__APPLE__) && TARGET_OS_IOS
++				// Stop and startup callbacks share UIKit's main queue. Ignore a
++				// start posted before an already completed stop request.
++				if (!Emu.IsStarting()) return;
++#endif
+ 				Emu.RunPPU();
+ 			});
+ 		}

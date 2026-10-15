@@ -146,6 +146,7 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
 @property(nonatomic,strong) UIButton* runtimeButton;
 @property(nonatomic,strong) UIButton* gameButton;
 @property(nonatomic,strong) UIButton* gameLoadButton;
+@property(nonatomic,strong) UIButton* gameRunButton;
 @property(nonatomic,assign) BOOL intakeBusy;
 @property(nonatomic,assign) NSInteger intakeMode;
 @property(nonatomic,assign) BOOL previousRunPending;
@@ -227,6 +228,10 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
     UIStackView* gameControls = [[UIStackView alloc] initWithArrangedSubviews:@[self.gameButton,self.gameLoadButton]];
     gameControls.distribution = UIStackViewDistributionFillEqually; gameControls.spacing = 12;
     [stack addArrangedSubview:gameControls];
+    self.gameRunButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    [self.gameRunButton setTitle:@"Run game (3 seconds)" forState:UIControlStateNormal];
+    [self.gameRunButton addTarget:self action:@selector(runGame) forControlEvents:UIControlEventTouchUpInside];
+    [stack addArrangedSubview:self.gameRunButton];
     self.output = [[UITextView alloc] init];
     self.output.editable = NO;
     self.output.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
@@ -256,6 +261,7 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
     self.firmwareButton.enabled = intakeReady; self.executableButton.enabled = intakeReady;
     self.runtimeButton.enabled = intakeReady;
     self.gameButton.enabled = intakeReady; self.gameLoadButton.enabled = intakeReady;
+    self.gameRunButton.enabled = intakeReady;
     [self.runButton setTitle:self.nextStage ? @"Run remaining tests" : @"Run all tests" forState:UIControlStateNormal];
     self.progress.progress = float(self.nextStage) / float(stageCount);
 }
@@ -388,21 +394,26 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
 - (void)selectFirmware { [self selectIntake:1]; }
 - (void)selectExecutable { [self selectIntake:2]; }
 - (void)selectGame { [self selectIntake:3]; }
-- (void)checkRuntime { [self checkRuntimeMode:NO]; }
-- (void)checkGame { [self checkRuntimeMode:YES]; }
-- (void)checkRuntimeMode:(BOOL)game {
+- (void)checkRuntime { [self checkRuntimeMode:NO execute:NO]; }
+- (void)checkGame { [self checkRuntimeMode:YES execute:NO]; }
+- (void)runGame { [self checkRuntimeMode:YES execute:YES]; }
+- (void)checkRuntimeMode:(BOOL)game execute:(BOOL)execute {
     if (self.running || self.intakeBusy || self.failed || self.nextStage != stageCount || !self.coreHandle) return;
-    auto action = reinterpret_cast<int (*)(char*,size_t)>(dlsym(self.coreHandle,game ? "armsx3_core_check_game" : "armsx3_core_check_runtime"));
+    const char* symbol = execute ? "armsx3_core_run_game" : game ? "armsx3_core_check_game" : "armsx3_core_check_runtime";
+    auto action = reinterpret_cast<int (*)(char*,size_t)>(dlsym(self.coreHandle,symbol));
     if (!action) { [self showLogMessage:@"Runtime loading unavailable" detail:@"The core runtime function is missing."]; return; }
     self.intakeBusy = YES; self.previousRunPending = NO;
     const BOOL previousIdle = UIApplication.sharedApplication.idleTimerDisabled;
     UIApplication.sharedApplication.idleTimerDisabled = YES;
-    [NSUserDefaults.standardUserDefaults setObject:game ? @"Game load check" : @"Runtime load check" forKey:pendingStageKey];
+    [NSUserDefaults.standardUserDefaults setObject:execute ? @"Game execution (3 seconds)" : game ? @"Game load check" : @"Runtime load check" forKey:pendingStageKey];
     [NSUserDefaults.standardUserDefaults synchronize];
-    self.progressLabel.text = game ? @"Loading imported game and checking disc paths…" : @"Loading executable and firmware modules…";
-    [self.transcript appendString:game ? @"\nRUN · Imported game load and cleanup\n" : @"\nRUN · Native runtime load and cleanup\n"];
+    self.progressLabel.text = execute ? @"Starting game… runs for 3 seconds after startup; keep app open" :
+        game ? @"Loading imported game and checking disc paths…" : @"Loading executable and firmware modules…";
+    [self.transcript appendString:execute ? @"\nRUN · Imported game execution and automatic stop\n" :
+        game ? @"\nRUN · Imported game load and cleanup\n" : @"\nRUN · Native runtime load and cleanup\n"];
     self.output.text = self.transcript;
-    ARMSX3StartupLog(game ? "GAME UI BEFORE native game load; original EBOOT and disc assets, no guest execution" :
+    ARMSX3StartupLog(execute ? "EXECUTION UI BEFORE explicit imported-game run; 15-second startup budget, 3-second run, then native cleanup" :
+        game ? "GAME UI BEFORE native game load; original EBOOT and disc assets, no guest execution" :
         "RUNTIME UI BEFORE native load check; prepared executable, no guest execution");
     [self refreshControls];
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0), ^{
@@ -421,7 +432,7 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
                 self.output.text = self.transcript;
                 [self.output scrollRangeToVisible:NSMakeRange(self.output.text.length,0)];
                 self.progressLabel.text = result == 0 ? @"Runtime load complete · share the log" : @"Runtime load failed · share the log";
-                ARMSX3StartupLog([NSString stringWithFormat:@"%@ UI %@: %@",game ? @"GAME" : @"RUNTIME",result == 0 ? @"PASS" : @"FAIL",detail].UTF8String);
+                ARMSX3StartupLog([NSString stringWithFormat:@"%@ UI %@: %@",execute ? @"EXECUTION" : game ? @"GAME" : @"RUNTIME",result == 0 ? @"PASS" : @"FAIL",detail].UTF8String);
                 [self refreshControls];
             });
         }

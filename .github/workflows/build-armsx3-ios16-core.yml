@@ -130,7 +130,7 @@ jobs:
             upstream-armsx3/rpcs3/Emu/Cell/Modules/sys_ppu_thread_.cpp \
             "${{ matrix.profile }}"
   intake-host:
-    name: Check firmware, executable and runtime loading
+    name: Check intake, runtime and guest start
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:

@@ -7247,3 +7247,113 @@ containing both PS3_GAME and PS3_DISC.SFB), keep open, Check game load, share lo
 Do not request or fabricate the user's game dump. Real title/ID, source copy and
 mount/cleanup result from that run determine the next execution/render work.
 Keep replies short; user reports Actions success/failure; do not monitor Actions.
+
+
+## Build115 — full Midnight Club disc load PASS; bounded native guest execution (2026-10-15)
+
+New phone log ARMSX3-startup-20261015-012638-552-29061.txt is Build114/PID29061.
+All120 ordered P2-P121 diagnostics PASS. Complete selected disc import passed:
+19files/5,668,431,532bytes (~5.67GB), source snapshot/staged checks and transaction
+publication, actual PARAM.SFO title 'Midnight Club: Los Angeles', TITLE_ID
+BLUS30442, CATEGORY DG. Native BootGame from original imported EBOOT returned0/
+state6. Actual native title/ID/category, boot path, /dev_bdvd and PS3_GAME roots,
+PARAM.SFO/EBOOT and carchive_audio.rpf asset mapping all matched. Native main
+mapped2nonempty segments, real liblv2 id587203072 had2segments/3635functions,
+one PPU stayed STOP. Native Kill joined threads, unmounted disc/assets/firmware,
+cleared FXO, skipped the unused mutable JIT arena and completed fully-stopped/
+zeroCPU/mainqueue-drained cleanup with GAME UI PASS. Original SELF loading and
+coordinated full folder import are now device verified. Guest entry not started.
+This is the confirmed real title identity, replacing earlier unconfirmed guesses.
+
+Build115 adds functional Run game (3 seconds), retaining all120 diagnostics and
+both existing load-only actions. It reuses the imported disc and firmware; no
+5.67GB recopy needed if the app retained those files. armsx3_core_run_game calls
+the common runtime path with game=true/execute=true. It first performs all native
+identity/disc/ELF/real-firmware/STOP/frontend checks. A one-use frontend start
+permit is then armed and consumed by on_run. Native Emu.Run(false) starts the
+emulator; the actual native RSX startup callback calls RunPPU, releasing native
+queued PPU initialization/firmware/game work. Do not directly call RunPPU from
+the app; that would race the native RSX startup. Emu.Run is main-queue synchronous
+and exceptions are propagated to the worker. All load-only actions still reject
+on_run, all unexpected extra starts and Resume stay rejected.
+
+Worker waits at most15seconds for native running state (not merely starting),
+then monitors a3second guest window with atomic state/liveCPU heartbeats, allows
+a guest early stop after running, and requests native Kill(false) on UIKit's main
+queue. It reads no live CPU registers or non-atomic instruction counters. The
+common teardown still waits up to30seconds for complete stop, drains finalmain
+queue and restores g_cfg/g_backup_cfg. Run-only temporary configuration enables
+PPU call history and sets native channel regex .* to warning, retaining warnings/
+errors while avoiding per-call notice/trace synchronous fsync traffic. After
+cleanup native configure_logs restores the prior channel configuration too.
+Native Run/RunPPU, interpreter, firmware, null RSX and devices remain native;
+LLVM/mutable JIT/Vulkan/MoltenVK are not enabled by this feature.
+
+Patch0051-ios-guest-execution-lifecycle.patch has two iOS-only additions:
+- System.cpp declares/calls armsx3_ios_runtime_capture_stopped after every native
+  emulation-thread join and before semi-destructors/context destruction. No
+  scheduler/guest mutation. Existing50 patches unchanged;51total now.
+- RSXThread.cpp startup callback ignores itself if Emu is no longer starting.
+  The host timeout scenario caught the late queued start -> RunPPU ensure race.
+  Explicit Run and Kill are main-queue serialized and this callback checks state
+  on that same queue, so an old startup request cannot restart a stopped run.
+  Non-iOS callback behavior is unchanged. Do not remove native ensure guards or
+  force state/CPU flags directly from UIKit.
+
+New RuntimeCapture.cpp arms one joined snapshot only for an explicit guest run.
+After native joins it enumerates registered PPU/SPU contexts, logs PPU id/PC/
+exec_bytes/4/native completed HLE-LV2 history index/last function, up to8 recent
+retained calls for the first16PPUs, SPU id/PC/block counter for first8SPUs, and
+aggregates. Reads occur before context destruction with owners joined. A mutex
+protects the returned summary and atomic one-shot arm prevents duplicate reads.
+Contexts that retired/unregistered before shutdown can be absent; these counters
+are surviving-context evidence, not complete process totals or a benchmark. SPU
+blocks are backend-dependent and may remainzero. A successful action requires
+captured, error-free, nonzero PPU instructions OR completed calls plus complete
+cleanup. Missing/zero evidence, paused/error state or startup timeout fail with
+log detail. A frontend/cleanup failure retains -2/reopen policy. Fatal native CPU
+errors can abort the process and leave the existing pending-operation marker.
+No device guest-execution success, menu progress or playable FPS is claimed yet.
+
+RuntimeDispatch adds invoke_main: synchronous UIKit queue execution, captured
+std::exception_ptr rethrown on the worker, preserving main-thread operation order
+and normal C++ error handling. Existing asynchronous native callbacks/wake-ack
+protocol and final drain remain. UIKit Run game button reuses serialized background
+runtime action, all120 readiness gate, pending marker, idle timer and failure
+handling. It says keep app open; no GPU display/audio/controller presentation in
+this initial execution window. Execution markers are logged before native Run,
+on accepted callback, running state, heartbeat, window end, joined capture, cleanup
+and final UI result. A black/no game picture is expected with null video/audio.
+
+Host test_runtime.py now compiles production runtime/frontend/capture, pinned
+native BootGame/SetForceBoot AND actual native Run/RunPPU bodies plus patched RSX
+startup callback and joined-capture hook. PPU initialization/guest work/RSX queue/
+Load/VM/FXO/devices/config and UIKit remain explicit host models. Modeled work
+provides known counters solely to verify observation/report logic; do not call
+that device ARM or real game execution. Covers authorized one-shot start, original
+cached/game load cases, partial load/firmware/mapping failures, missing inputs,
+startup timeout, zero progress, unexpected extra start/paused state, missing or
+failed capture, late RSX callback after stop, joined-only/one-shot field reads,
+automatic stop/config/log restoration and existing timeout/wake/cleanup cases.
+Native initialize/finalize and actual Apple missing-symbol boundary remain in the
+suite. ASAN+UBSAN Wall/Wextra/Werror use detect_leaks=0 for host /proc restriction.
+
+test_runtime_capture.py reconstructs native System/RSX files from the exact pinned
+git objects and applies the first50 production patches in isolation, then0051.
+It verifies capture after native finished joins/before destroying_context and
+that removing the scoped additions restores prior source byte-for-byte. It
+exports the actual guarded RSX callback and hook into the runtime host test.
+The existing workflow host gate invokes that validator through test_runtime.py;
+34 synchronization profiles unchanged. CMake includes RuntimeCapture.cpp; version
+115/metadata fixtures/README/both handoffs updated. CoreBridge/all120 stages,
+GameImport/Intake/first50patches remain unchanged. Exact clean pinned host and
+all51-patch core-preparation steps are validated before publishing. iOS compile
+and real guest-run result remain pending this build's workflow and phone.
+
+Next: install Build115 ARMSX3_iOS16_INSTALL_THIS_IPA via TrollStore, reopen,
+Run all120 tests, reuse existing firmware/disc if present, tap Run game (3 seconds),
+keep app open through automatic stop and share startup log; if a crash also share
+matching .ips. Avoid redundant firmware/game reimport unless reported missing.
+The resulting native running/startup/last-call/CPU counters determine subsequent
+execution fixes and rendering/audio integration. Keep responses short and no
+Actions monitoring after publication; user reports success/failure.

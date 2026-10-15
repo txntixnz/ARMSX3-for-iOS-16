@@ -13,6 +13,19 @@ void drain_main_queue()
 {
     if (!is_main_thread()) dispatch_sync(dispatch_get_main_queue(), ^{});
 }
+void invoke_main(std::function<void()> operation)
+{
+    if (is_main_thread()) { operation(); return; }
+    std::exception_ptr failure;
+    auto* error = &failure;
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        @autoreleasepool {
+            try { operation(); }
+            catch (...) { *error = std::current_exception(); }
+        }
+    });
+    if (failure) std::rethrow_exception(failure);
+}
 void dispatch_main(std::function<void()> operation, atomic_t<u32>* wake_up)
 {
     auto callback = std::make_shared<std::function<void()>>(std::move(operation));
