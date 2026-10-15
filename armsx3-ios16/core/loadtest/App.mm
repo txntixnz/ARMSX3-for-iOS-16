@@ -5,8 +5,15 @@
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #include <dlfcn.h>
 #include <cstdio>
+#include <atomic>
 #include "StartupLog.h"
 #include "LogExport.h"
+
+// UIKit writes only this cancellation flag. The runtime worker owns teardown.
+static std::atomic<bool> renderStopRequested{false};
+static int renderShouldStop(void* context) {
+    return static_cast<std::atomic<bool>*>(context)->load(std::memory_order_relaxed) ? 1 : 0;
+}
 
 struct DiagnosticStage { unsigned phase; const char* title; const char* symbol; };
 static constexpr DiagnosticStage stages[] = {
@@ -144,6 +151,9 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
 @interface RenderController : UIViewController
 @property(nonatomic,strong) RenderSurface* surface;
 @property(nonatomic,strong) UILabel* status;
+@property(nonatomic,strong) UIButton* stopGameButton;
+@property(nonatomic,copy) dispatch_block_t stopAction;
+- (void)requestGameStop;
 @end
 @implementation RenderController
 - (void)viewDidLoad {
@@ -161,8 +171,18 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
     self.status.textColor = UIColor.whiteColor;
     self.status.numberOfLines = 0;
     self.status.textAlignment = NSTextAlignmentCenter;
-    self.status.text = @"Starting native Vulkan… automatic stop after 10 seconds of execution";
+    self.status.text = @"Game session · tap Stop game when finished";
     [self.view addSubview:self.status];
+    self.stopGameButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    [self.stopGameButton setTitle:@"Stop game" forState:UIControlStateNormal];
+    [self.stopGameButton setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+    [self.stopGameButton addTarget:self action:@selector(requestGameStop) forControlEvents:UIControlEventTouchUpInside];
+    [self.view addSubview:self.stopGameButton];
+}
+- (void)requestGameStop {
+    self.stopGameButton.enabled = NO;
+    self.status.text = @"Stopping game… waiting for cleanup";
+    if (self.stopAction) self.stopAction();
 }
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
@@ -171,7 +191,8 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
     const CGFloat height = width * 9.0 / 16.0;
     self.surface.frame = CGRectMake(CGRectGetMidX(area) - width/2,CGRectGetMidY(area) - height/2,width,height);
     ((CAMetalLayer*)self.surface.layer).drawableSize = CGSizeMake(1280,720);
-    self.status.frame = CGRectMake(area.origin.x + 12,CGRectGetMaxY(area) - 72,MAX(1,area.size.width - 24),70);
+    self.status.frame = CGRectMake(area.origin.x + 12,CGRectGetMaxY(area) - 72,MAX(1,area.size.width - 148),70);
+    self.stopGameButton.frame = CGRectMake(CGRectGetMaxX(area) - 128,CGRectGetMaxY(area) - 64,116,54);
 }
 @end
 
@@ -293,13 +314,13 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
     executionControls.distribution = UIStackViewDistributionFillEqually; executionControls.spacing = 12;
     [stack addArrangedSubview:executionControls];
     self.renderButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    [self.renderButton setTitle:@"Render game (10 seconds)" forState:UIControlStateNormal];
+    [self.renderButton setTitle:@"Start game" forState:UIControlStateNormal];
     [self.renderButton addTarget:self action:@selector(renderGame) forControlEvents:UIControlEventTouchUpInside];
     [stack addArrangedSubview:self.renderButton];
     self.output = [[UITextView alloc] init];
     self.output.editable = NO;
     self.output.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
-    self.output.text = @"Tap Quick start for four foundation checks, then Render game. Run all tests remains available for full diagnostics.\n\nWhen finished, share the .txt log or tap Copy results and paste into chat. Quick start or the full tests enable firmware, game and graphics actions.";
+    self.output.text = @"Tap Quick start for four foundation checks, then Start game. Run all tests remains available for full diagnostics.\n\nWhen finished, share the .txt log or tap Copy results and paste into chat. Quick start or the full tests enable firmware, game and graphics actions.";
     [stack addArrangedSubview:self.output];
     NSString* pending = [NSUserDefaults.standardUserDefaults stringForKey:pendingStageKey];
     if (pending.length) {
@@ -309,6 +330,8 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
     [self refreshControls];
     [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(enteredBackground:)
         name:UIApplicationDidEnterBackgroundNotification object:nil];
+    [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(sessionWillResignActive:)
+        name:UIApplicationWillResignActiveNotification object:nil];
     ARMSX3StartupLog("AUTO UI ready; one-tap ordered diagnostics available; no test starts without a tap");
 }
 - (void)dealloc {
@@ -359,6 +382,10 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
     self.progressLabel.text = @"Stopping after the current test…";
     ARMSX3StartupLog("AUTO stop requested; current test will finish before pausing");
     [self refreshControls];
+}
+- (void)sessionWillResignActive:(NSNotification*)notification {
+    (void)notification;
+    if (self.renderController && self.intakeBusy) [self.renderController requestGameStop];
 }
 - (void)enteredBackground:(NSNotification*)notification {
     (void)notification;
@@ -450,9 +477,9 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
         self.foundationReady = YES;
         self.quickMode = NO;
         ARMSX3StartupLog("QUICK PASS: four foundation checks completed; remaining diagnostics were not run");
-        [self.transcript appendString:@"\nQuick start passed. Tap Render game; full diagnostics are optional.\n"];
+        [self.transcript appendString:@"\nQuick start passed. Tap Start game; full diagnostics are optional.\n"];
         self.output.text = self.transcript;
-        self.progressLabel.text = @"Ready · Render game available";
+        self.progressLabel.text = @"Ready · Start game available";
         [self finishSequence];
     } else if (self.nextStage == stageCount) {
         ARMSX3StartupLog("AUTO PASS: all diagnostic stages completed; game boot remains untested");
@@ -481,17 +508,19 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
 - (void)runGame { [self checkRuntimeMode:YES execute:YES]; }
 - (void)renderGame {
     if (self.running || self.intakeBusy || self.failed || (!self.foundationReady && self.nextStage != stageCount) || !self.coreHandle) return;
-    auto action = reinterpret_cast<int (*)(void*,unsigned,unsigned,char*,size_t)>(dlsym(self.coreHandle,"armsx3_core_render_game"));
+    auto action = reinterpret_cast<int (*)(void*,unsigned,unsigned,int (*)(void*),void*,char*,size_t)>(dlsym(self.coreHandle,"armsx3_core_render_session"));
     if (!action) { [self showLogMessage:@"Rendering unavailable" detail:@"The native rendering function is missing."]; return; }
     self.intakeBusy = YES; self.previousRunPending = NO;
     const BOOL previousIdle = UIApplication.sharedApplication.idleTimerDisabled;
     UIApplication.sharedApplication.idleTimerDisabled = YES;
-    [NSUserDefaults.standardUserDefaults setObject:@"Native Vulkan game rendering (10 seconds)" forKey:pendingStageKey];
+    renderStopRequested.store(false, std::memory_order_relaxed);
+    [NSUserDefaults.standardUserDefaults setObject:@"Game session (Stop game to finish)" forKey:pendingStageKey];
     [NSUserDefaults.standardUserDefaults synchronize];
-    [self.transcript appendString:@"\nRUN · Native Vulkan game rendering, 1280×720, automatic stop\n"];
+    [self.transcript appendString:@"\nRUN · Game session, 1280×720, Stop game to finish\n"];
     self.output.text = self.transcript;
     self.progressLabel.text = @"Starting native Vulkan renderer…";
     RenderController* display = [[RenderController alloc] init];
+    display.stopAction = ^{ renderStopRequested.store(true, std::memory_order_relaxed); };
     display.modalPresentationStyle = UIModalPresentationFullScreen;
     display.modalInPresentation = YES;
     self.renderController = display;
@@ -503,7 +532,7 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0), ^{
             @autoreleasepool {
                 char buffer[4096] = {};
-                const int result = action(layer,1280,720,buffer,sizeof(buffer));
+                const int result = action(layer,1280,720,renderShouldStop,&renderStopRequested,buffer,sizeof(buffer));
                 NSString* detail = [NSString stringWithUTF8String:buffer] ?: @"Renderer returned no detail.";
                 dispatch_async(dispatch_get_main_queue(), ^{
                     self.intakeBusy = NO;
@@ -511,10 +540,11 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
                     self.failed = result == -2;
                     [self.transcript appendFormat:@"%@ · %@\n",result == 0 ? @"PASS" : @"FAILED",detail];
                     self.output.text = self.transcript;
-                    self.progressLabel.text = result == 0 ? @"Rendering completed · share the log" : @"Rendering failed · share the log";
+                    self.progressLabel.text = result == 0 ? @"Game stopped · share the log" : @"Rendering failed · share the log";
                     ARMSX3StartupLog([NSString stringWithFormat:@"RENDER UI %@: %@",result == 0 ? @"PASS" : @"FAIL",detail].UTF8String);
                     if (result == -2) {
                         // Keep the view AND its layer attached while native ownership is uncertain.
+                        display.stopGameButton.enabled = NO;
                         display.status.text = @"Cleanup incomplete. Close and reopen ARMSX3, then share the previous log.";
                     } else {
                         [NSUserDefaults.standardUserDefaults removeObjectForKey:pendingStageKey];

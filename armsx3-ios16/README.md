@@ -1,12 +1,13 @@
-# Current checkpoint — Build124
+# Current checkpoint — Build125
 
-Native iOS core with Vulkan now builds and packages successfully (Build123).
-Build124 fixes runtime renderer policy and adds **Quick start**: four foundation
-checks enable game actions; the full120 diagnostics remain optional. Install
-`ARMSX3_iOS16_INSTALL_THIS_IPA`, tap Quick start, then Render game (10 seconds).
-Keep the app foreground and share the startup log and screen result. Existing
-firmware/disc can be reused. Game presentation is pending device testing;
-audio and controls are not implemented yet. Historical checkpoints follow.
+Build124 displays Midnight Club LA startup screens on iPhone13 Pro Max/A15
+through native Vulkan, with318 accepted presentations and clean shutdown.
+Build125 replaces the main10-second rendering action with **Start game** and
+**Stop game**. It runs until stopped or interrupted; extended device testing is
+pending. Install `ARMSX3_iOS16_INSTALL_THIS_IPA`, tap **Quick start**, then
+**Start game**. Keep ARMSX3 foreground; tap **Stop game** before sharing the log.
+Existing firmware/disc can be reused; full120 diagnostics remain optional.
+Audio and gamepad controls are pending. Historical checkpoints follow.
 
 # ARMSX3 for iOS 16 — P0 port checkpoint
 

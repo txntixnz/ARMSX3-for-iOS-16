@@ -7983,3 +7983,48 @@ DO NOT monitor after publication (user reports finish/failure). Next: install
 ARMSX3_iOS16_INSTALL_THIS_IPA in TrollStore, Quick start -> Render game (10 seconds),
 keep foreground, share startup log and what appeared. Audio/controls pending.
 No generated images; concise English replies.
+
+
+## Build125 — 2026-10-15: persistent game session and Stop game
+
+Build124 d21a65e238298cf5203179192ac14168419f12e7 booted on phone. User log
+ARMSX3-startup-20261015-151935-919-32293.txt: Quick start4 passes; real native
+Vulkan318 accepted presentations,221364 completed HLE/LV2 calls, clean GPU/CPU
+teardown. User clip RPReplay_Final1792077966.mp4 visibly shows Midnight Club LA
+startup/licensing screens progressing; no main menu yet. Its return to app is
+the programmed10-second stop, not a demonstrated crash. Do not report318 unique
+game frames/FPS or successful gameplay. SPU block counter0 is merely that counter.
+
+Build125 changes the main rendering action to Start game, using a new exported
+armsx3_core_render_session C ABI with an off-main stop predicate/context. UIKit
+sets only an atomic flag when Stop game is tapped or the app resigns active.
+The worker polls after loading/during native startup/while running; it retains
+all existing Kill/main-queue drain/CPU joins/frame lifetime/config and renderer
+policy restoration. Stop while loading waits for native load to return before
+cleanup. Session has no10-second deadline; the old bounded render_game export
+remains as a diagnostic API. Three-second execution checks unchanged.
+A stop before execution is a cancellation with clean teardown, not a false
+zero-counter failure. No-present and Vulkan errors still fail after a real run.
+Incomplete teardown still returns-2, retains the Metal layer/view and requires
+process restart. No overlapping UI actions; all120 diagnostics remain optional.
+Heartbeat every5 seconds during continuous session. UI shows Stop game and
+reserves its bottom row. Uses existing UIKit/CoreGraphics/stdlib dependencies.
+
+Validation: production runtime/frontend + actual native BootGame/policy/Run/
+GSRender contracts pass ASAN+UBSAN. Added threaded atomic cancellation after
+120ms while the old render diagnostic deadline is40ms in host tests, four
+repeated success/no-present/error/success runs, pre-start and startup cancellation,
+existing bounded startup/run/cleanup/error/timeout and64 adapter lifetimes pass.
+Build125 fixture validates frozen diagnostic bridge,4-stage Quick start/readiness,
+continuous C ABI/UI wiring and optional full120 cursor. Python AST/plist and
+git diff checks pass. All56 native patches/renderer implementation unchanged.
+No local iOS SDK; new UIKit build and longer device session pending CI/phone.
+
+User explicitly authorized publishing this project to main and starting Actions.
+Use GitHub tools (shell git push has no credentials). Parent mainBuild124
+d21a65e238298cf5203179192ac14168419f12e7. Publish with expected-head lease;
+one queued check only, do not monitor. Next user installs
+ARMSX3_iOS16_INSTALL_THIS_IPA via TrollStore, Quick start -> Start game; keep
+foreground, allow startup to progress, then Stop game and share log/screen result.
+Firmware/disc persist. Audio/gamepad controls still pending. Concise English,
+no generated images; extracted video frames used only for internal inspection.

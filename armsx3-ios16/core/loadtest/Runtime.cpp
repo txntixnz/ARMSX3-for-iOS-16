@@ -60,8 +60,13 @@ bool teardown()
     log("RUNTIME AFTER cleanup: fully stopped, zero live CPU threads");
     return true;
 }
-void run_window(bool render)
+bool run_window(bool render, const std::function<bool()>& should_stop)
 {
+    if (should_stop && should_stop())
+    {
+        log("SESSION stop requested before guest execution");
+        return false;
+    }
     begin_execution_observation();
     permit_guest_start(true);
     log("EXECUTION BEFORE native Run(false); native RSX startup will release the PPU queue");
@@ -72,31 +77,35 @@ void run_window(bool render)
     while (!Emu.IsRunning())
     {
         require(!frontend_failed(), "Guest startup reported a frontend error");
+        if (should_stop && should_stop()) { log("SESSION stop requested during guest startup"); return false; }
         require(!Emu.IsStopped(), "Guest stopped before reaching the running state; inspect the log");
         require(std::chrono::steady_clock::now() < startup_deadline, "Guest startup did not reach running state within 15 seconds");
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
-    log(render ? "RENDER native running state reached; ten-second rendering window started" :
+    log(should_stop ? "SESSION native running state reached; running until Stop game" :
+        render ? "RENDER native running state reached; ten-second rendering window started" :
         "EXECUTION native running state reached; three-second guest window started");
     const auto deadline = std::chrono::steady_clock::now() + (render ? std::chrono::seconds(10) : std::chrono::seconds(3));
     auto heartbeat = std::chrono::steady_clock::now();
-    while (std::chrono::steady_clock::now() < deadline)
+    while (should_stop || std::chrono::steady_clock::now() < deadline)
     {
         require(!frontend_failed(), "Guest execution reported a frontend error");
+        if (should_stop && should_stop()) { log("SESSION user requested stop; starting GPU/CPU cleanup"); break; }
         if (Emu.IsStopped()) { log("EXECUTION guest requested an early stop"); break; }
         require(Emu.IsRunning(), "Guest left the running state during the execution window");
         if (std::chrono::steady_clock::now() >= heartbeat)
         {
             log("EXECUTION heartbeat: running; live native CPU objects=" + std::to_string(armsx3_ios_live_cpu_threads()));
-            heartbeat = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+            heartbeat = std::chrono::steady_clock::now() + (should_stop ? std::chrono::seconds(5) : std::chrono::seconds(1));
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     log("EXECUTION window ended; stopping before collecting joined CPU counters");
+    return true;
 }
 }
 
-int check(std::string& detail, bool game = false, bool execute = false, bool render = false)
+int check(std::string& detail, bool game = false, bool execute = false, bool render = false, const std::function<bool()>& should_stop = {})
 {
     require(!render || (execute && renderer_frame_ready()), "Rendering requires an owned frame and imported-game execution");
     require(!execute || game, "Guest execution requires an imported game folder");
@@ -164,7 +173,7 @@ int check(std::string& detail, bool game = false, bool execute = false, bool ren
     const auto previous_default_renderer = Emu.GetDefaultRenderer();
     std::string error;
     unsigned loaded_segments = 0, firmware_modules = 0;
-    bool attempted = false;
+    bool attempted = false, executed = false;
     try
     {
         log(render ? "RENDER BEFORE native BootGame: imported game, static decoders, native Vulkan, null audio, 1280x720 surface" :
@@ -233,7 +242,7 @@ int check(std::string& detail, bool game = false, bool execute = false, bool ren
         log("RUNTIME PASS native ready state: mapped segments=" + std::to_string(loaded_segments) +
             " firmware modules=" + std::to_string(firmware_modules) + " stopped PPU contexts=" + std::to_string(ppu_workers) +
             "; guest entry has not been started");
-        if (execute) run_window(render);
+        if (execute) executed = run_window(render, should_stop);
     }
     catch (const std::exception& failure) { error = failure.what(); log("RUNTIME load failed: " + error); }
     catch (...) { error = "Native runtime loader threw an unknown exception"; log(error); }
@@ -257,7 +266,7 @@ int check(std::string& detail, bool game = false, bool execute = false, bool ren
         }
         catch (...) { detail = "Runtime cleanup threw an unknown exception. Reopen the app."; return -2; }
     }
-    if (execute && error.empty())
+    if (execute && executed && error.empty())
     {
         const auto progress = execution_progress();
         if (!progress.captured || progress.failed || !(progress.instructions || progress.calls))
@@ -279,6 +288,12 @@ int check(std::string& detail, bool game = false, bool execute = false, bool ren
         }
     }
     if (!error.empty()) { detail = error + ". Cleanup completed; share the log."; return -1; }
+    if (execute && !executed)
+    {
+        detail = "Game session stopped before guest execution. Clean GPU/CPU stop completed.";
+        log("SESSION cancelled: " + detail);
+        return 0;
+    }
     detail = (game ? "Game load passed: " + disc.title + " [" + disc.id + "]. " : std::string("Native runtime load passed: ")) +
         std::to_string(loaded_segments) + " executable segments and " +
         std::to_string(firmware_modules) + " firmware modules. Cleanup completed. Game execution and display are next.";
@@ -319,8 +334,8 @@ extern "C" __attribute__((visibility("default"))) int armsx3_core_check_runtime(
     std::memcpy(detail, text.data(), length); detail[length] = '\0'; return result;
 }
 
-extern "C" __attribute__((visibility("default"))) int armsx3_core_render_game(
-    void* layer, unsigned width, unsigned height, char* detail, std::size_t capacity)
+static int render_session_impl(void* layer, unsigned width, unsigned height,
+    armsx3_stop_callback should_stop, void* stop_context, char* detail, std::size_t capacity)
 {
     if (!detail || capacity < 2) return -1;
     std::string text; int result = -1; bool prepared = false;
@@ -330,7 +345,8 @@ extern "C" __attribute__((visibility("default"))) int armsx3_core_render_game(
         if (!ios_runtime::is_main_thread() && Emu.IsStopped(true) && !armsx3_ios_live_cpu_threads())
         {
             ios_runtime::prepare_renderer_frame(layer, width, height); prepared = true;
-            result = ios_runtime::check(text, true, true, true);
+            const std::function<bool()> stop = should_stop ? std::function<bool()>([=] { return should_stop(stop_context) != 0; }) : std::function<bool()>{};
+            result = ios_runtime::check(text, true, true, true, stop);
         }
         else throw std::runtime_error("Rendering requires an idle core and a background caller");
     }
@@ -343,4 +359,22 @@ extern "C" __attribute__((visibility("default"))) int armsx3_core_render_game(
     }
     const auto length = std::min(capacity - 1, text.size());
     std::memcpy(detail, text.data(), length); detail[length] = '\0'; return result;
+}
+
+extern "C" __attribute__((visibility("default"))) int armsx3_core_render_game(
+    void* layer, unsigned width, unsigned height, char* detail, std::size_t capacity)
+{
+    return render_session_impl(layer, width, height, nullptr, nullptr, detail, capacity);
+}
+
+extern "C" __attribute__((visibility("default"))) int armsx3_core_render_session(
+    void* layer, unsigned width, unsigned height, armsx3_stop_callback should_stop,
+    void* stop_context, char* detail, std::size_t capacity)
+{
+    if (!should_stop)
+    {
+        if (detail && capacity > 0) detail[0] = '\0';
+        return -1;
+    }
+    return render_session_impl(layer, width, height, should_stop, stop_context, detail, capacity);
 }

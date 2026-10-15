@@ -325,6 +325,34 @@ int main(int argc,char**argv){
   assert(g_cfg.to_string()==prior&&g_backup_cfg.to_string()==backup);
   assert(Emu.IsHeadless()&&Emu.GetSupportedRenderers()==std::set<video_renderer>{video_renderer::null}&&Emu.GetDefaultRenderer()==video_renderer::null);
  }
+
+ // Continuous sessions use real atomic cancellation from another host thread.
+ // The bounded render window is accelerated to40ms above; keep sessions alive
+ // for120ms to prove the diagnostic deadline no longer ends interactive play.
+ assert(armsx3_core_render_session(&layer,1280,720,nullptr,nullptr,detail,sizeof(detail))==-1);
+ auto stop_flag=[](void* context)->int{return static_cast<std::atomic<bool>*>(context)->load()?1:0;};
+ for(int scenario:{0,26,27,0}){
+  mode=scenario;g_fxo->main={};std::atomic<bool>stop{false};
+  const auto started=std::chrono::steady_clock::now();
+  std::thread cancel([&]{std::this_thread::sleep_for(std::chrono::milliseconds(120));stop.store(true);});
+  const int result=armsx3_core_render_session(&layer,1280,720,stop_flag,&stop,detail,sizeof(detail));
+  cancel.join();
+  assert(result==(scenario==0?0:-1));
+  assert(std::chrono::steady_clock::now()-started>=std::chrono::milliseconds(100));
+  assert(Emu.IsStopped(true)&&workers==0&&g_fxo->objects.empty()&&!ios_runtime::renderer_frame_ready());
+  assert(g_cfg.to_string()==prior&&g_backup_cfg.to_string()==backup&&Emu.IsHeadless());
+ }
+ // Stop tapped while loading must prevent Run, then fully release its surface.
+ mode=0;g_fxo->main={};std::atomic<bool>already_stopped{true};const auto before_cancelled_start=starts;
+ assert(armsx3_core_render_session(&layer,1280,720,stop_flag,&already_stopped,detail,sizeof(detail))==0);
+ assert(starts==before_cancelled_start&&std::string(detail).find("before guest execution")!=std::string::npos);
+ assert(Emu.IsStopped(true)&&workers==0&&g_fxo->objects.empty()&&!ios_runtime::renderer_frame_ready()&&Emu.IsHeadless());
+ // A stop polled during native startup exits without waiting for its timeout.
+ mode=20;g_fxo->main={};unsigned polls=0;
+ auto stop_during_start=[](void* context)->int{return ++*static_cast<unsigned*>(context)>=3?1:0;};
+ assert(armsx3_core_render_session(&layer,1280,720,stop_during_start,&polls,detail,sizeof(detail))==0);
+ assert(polls>=3&&Emu.IsStopped(true)&&workers==0&&g_fxo->objects.empty()&&!ios_runtime::renderer_frame_ready()&&Emu.IsHeadless());
+ mode=0;
  // Incomplete native teardown must retain the live frame and refuse release.
  mode=7;g_fxo->main={};assert(armsx3_core_render_game(&layer,1280,720,detail,sizeof(detail))==-2);
  assert(!Emu.IsStopped(true)&&!g_fxo->objects.empty());
@@ -361,7 +389,7 @@ int main(int argc,char**argv){
  std::ofstream(host_root+"/cache/ARMSX3-prepared-executable.elf",std::ios::trunc)<<"BAD";
  const auto count=loads;assert(armsx3_core_check_runtime(detail,sizeof(detail))==-1);assert(loads==count);
  assert(jit_metrics.reserves==0&&jit_metrics.allocations==0&&jit_metrics.decommits==0&&jit_metrics.resets==0&&jit_metrics.write_protection.empty());
- std::puts("PASS: production runtime/frontend plus native JIT finalizer,49 callback signatures and native BootGame; load-only override, mapped segments/firmware identity, missing inputs/idle/main-thread/C ABI guards, partial failures, delayed cleanup, timeout, queue/wake protocol and config restoration. Native Load/VM/FXO/devices/config and UIKit are host models/source contracts; game identity/category/executable/disc/asset mapping checks; complete cached-ELF cleanup verified on Build113 phone; Build114 game identity/disc/assets/cleanup verified on phone; native Run/RunPPU and authorized start, startup timeout, zero-progress/paused outcomes and joined execution capture covered with modeled guest work; actual native SPU-cache startup prefix/guard included in modeled PPU initialization; Build115 guard abort is separately reproduced; native GSRender frame ownership with production adapter covered for 64 cycles; render success/no-present/present-error/suboptimal and cleanup/config restore covered with injected queue outcomes. Native renderer policy uses exact System.cpp video fixup and System.h accessors; headless and unsupported Vulkan now reproduce native fallback. Native Vulkan compiled/linked in Build123; phone presentation of this change remains pending.");
+ std::puts("PASS: production runtime/frontend plus native JIT finalizer,49 callback signatures and native BootGame; load-only override, mapped segments/firmware identity, missing inputs/idle/main-thread/C ABI guards, partial failures, delayed cleanup, timeout, queue/wake protocol and config restoration. Native Load/VM/FXO/devices/config and UIKit are host models/source contracts; game identity/category/executable/disc/asset mapping checks; complete cached-ELF cleanup verified on Build113 phone; Build114 game identity/disc/assets/cleanup verified on phone; native Run/RunPPU and authorized start, startup timeout, zero-progress/paused outcomes and joined execution capture covered with modeled guest work; actual native SPU-cache startup prefix/guard included in modeled PPU initialization; Build115 guard abort is separately reproduced; native GSRender frame ownership with production adapter covered for 64 cycles; render success/no-present/present-error/suboptimal and cleanup/config restore covered with injected queue outcomes. Native renderer policy uses exact System.cpp video fixup and System.h accessors; headless and unsupported Vulkan now reproduce native fallback. Native Vulkan compiled/linked in Build123 and Build124 phone/video confirms game startup screens. New continuous session survives the accelerated bounded deadline, threaded atomic stop, cancel before execution, cancel during startup and repeated cleanup; no-present and Vulkan errors still fail. UIKit/button/lifecycle and extended phone operation remain pending.");
 }
 '''
 # Accelerate the timeout scenario only. The native app retains its 30-second
