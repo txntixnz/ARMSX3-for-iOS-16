@@ -1,5 +1,5 @@
 """Darwin SIGBUS permissions: exact native ESR decoder and recovery dispatch.
-Compile after all57 patches with explicit host signal/VM/RSX interfaces. A real
+Compile after all58 patches with explicit host signal/VM/RSX interfaces. A real
 Linux mprotect fault is routed through Darwin-style SIGBUS/ESR state, then the
 actual dispatch retries the native host load/store after a modeled RSX unprotect.
 This does not execute iOS signals or the full RSX access-violation implementation.
@@ -12,8 +12,8 @@ root=Path(__file__).resolve().parent.parent
 native=Path(sys.argv[1]).resolve()
 PIN='92b931b9fb5eef7f1317cb482917dfc19aceebd9'
 paths=['Utilities/Thread.cpp','rpcs3/Emu/CPU/Backends/AArch64/AArch64Signal.h','rpcs3/Emu/CPU/Backends/AArch64/AArch64Signal.cpp']
-patches=sorted(p for p in (root/'patches').glob('*.patch') if int(p.name[:4])<=57)
-assert [p.name[:4] for p in patches]==[f'{n:04d}' for n in range(1,58)]
+patches=sorted(p for p in (root/'patches').glob('*.patch') if int(p.name[:4])<=58)
+assert [p.name[:4] for p in patches]==[f'{n:04d}' for n in range(1,59)]
 strip=lambda s:re.sub(r'^#(?:include[^\n]*|pragma once)\n','',s,flags=re.M)
 with tempfile.TemporaryDirectory(prefix='armsx3-ios-signal-') as directory:
  temp=Path(directory)
@@ -21,11 +21,17 @@ with tempfile.TemporaryDirectory(prefix='armsx3-ios-signal-') as directory:
   p=temp/rel;p.parent.mkdir(parents=True,exist_ok=True)
   p.write_bytes(subprocess.check_output(['git','-C',str(native),'show',PIN+':'+rel]))
  options=[f'--include={p}' for p in paths]
- for patch in patches[:-1]:subprocess.run(['git','apply',*options,str(patch)],cwd=temp,check=True)
+ for patch in patches[:-2]:subprocess.run(['git','apply',*options,str(patch)],cwd=temp,check=True)
  before=(temp/paths[0]).read_text()
- subprocess.run(['git','apply','--check',str(patches[-1])],cwd=temp,check=True)
- subprocess.run(['git','apply',str(patches[-1])],cwd=temp,check=True)
- subprocess.run(['git','apply','--reverse','--check',str(patches[-1])],cwd=temp,check=True)
+ for patch in patches[-2:]:
+  subprocess.run(['git','apply','--check',str(patch)],cwd=temp,check=True)
+  subprocess.run(['git','apply',str(patch)],cwd=temp,check=True)
+ pre58_header=(temp/paths[1]).read_text().replace('u64 fault_address;','u64 FAR;')
+ for patch in reversed(patches[-2:]):
+  subprocess.run(['git','apply','--reverse','--check',str(patch)],cwd=temp,check=True)
+  subprocess.run(['git','apply','--reverse',str(patch)],cwd=temp,check=True)
+ assert (temp/paths[0]).read_text()==before
+ for patch in patches[-2:]:subprocess.run(['git','apply',str(patch)],cwd=temp,check=True)
  thread=(temp/paths[0]).read_text();header=strip((temp/paths[1]).read_text());decoder=strip((temp/paths[2]).read_text())
  # Compile unchanged native decoding through the exact fault-direction and
  # three recovery-dispatch branches, stopping before unrelated fatal diagnostics.
@@ -39,6 +45,8 @@ with tempfile.TemporaryDirectory(prefix='armsx3-ios-signal-') as directory:
  prelude=r"""
 #include <cassert>
 #include <cstdint>
+#include <cstddef>
+#include <string>
 #include <cstdio>
 #include <cstring>
 #include <csignal>
@@ -52,6 +60,8 @@ using real_ucontext_t=void;
 #undef __linux__
 #define __APPLE__ 1
 #define ARCH_ARM64 1
+// Native Thread.cpp dependencies define this compatibility macro.
+#define FAR
 #ifndef TARGET_OS_IOS
 #define TARGET_OS_IOS 1
 #endif
@@ -74,7 +84,20 @@ bool handle_access_violation(u32 addr,bool writing,bool exec,model_ucontext_t*)n
  return true;
 }
 """
+ fatal_start=thread.index('#if defined(__APPLE__) && defined(ARCH_ARM64) && TARGET_OS_IOS\n\tconst auto* darwin_context')
+ fatal_end=thread.index('\n#endif',fatal_start)+len('\n#endif')
+ fatal_detail=thread[fatal_start:fatal_end]
  harness=r"""
+static_assert(sizeof(aarch64::aarch64_exception_state)==16);
+static_assert(offsetof(aarch64::aarch64_exception_state,ESR)==8);
+static_assert(offsetof(aarch64::aarch64_exception_state,exception_id)==12);
+u32 logged_esr=0;u64 logged_far=0;
+namespace fmt{[[maybe_unused]] void append(std::string&,const char*,u32 esr,u64 far){logged_esr=esr;logged_far=far;}}
+void fatal_detail(model_ucontext_t*context){
+ std::string msg;
+ /* EXACT_FATAL_DETAIL */
+ (void)context;
+}
 bool dispatch(int sig,siginfo_t*info,model_ucontext_t*context){
  /* EXACT_NATIVE_PREFIX */
  (void)cause;return false;
@@ -88,10 +111,16 @@ void permission_signal(int sig,siginfo_t*info,void*){
  // and generic BUS_ADRALN. Feed the documented Darwin frame into native code.
  siginfo_t apple{};apple.si_addr=info->si_addr;apple.si_code=BUS_ADRALN;
  darwin.es.ESR=(0x24u<<26)|0x0fu|(observed_direction?0x40u:0u);
- darwin.es.FAR=uptr(info->si_addr);
+ darwin.es.fault_address=uptr(info->si_addr);
  if(!dispatch(SIGBUS,&apple,&state))_exit(95);
 }
 int main(){
+ darwin.es.ESR=0x9200000fu;darwin.es.fault_address=0x340300400ull;fatal_detail(&state);
+#if TARGET_OS_IOS
+ assert(logged_esr==0x9200000fu&&logged_far==0x340300400ull);
+#else
+ assert(logged_esr==0&&logged_far==0);
+#endif
  siginfo_t info{};info.si_code=BUS_ADRALN;info.si_addr=reinterpret_cast<void*>(0x340300400ull);
  vm::g_base_addr=reinterpret_cast<u8*>(0x300000000ull);vm::size=0x100000000ull;
  // Every EC and FSC/direction combination, including true alignment=0x21,
@@ -137,7 +166,7 @@ int main(){
 #endif
  std::puts("PASS native ESR exhaustive matrix, exact protected-page dispatch, original SIGSEGV/desktop behavior and real mmap read/write retry via Darwin frame model");
 }
-""".replace('/* EXACT_NATIVE_PREFIX */',prefix)
+""".replace('/* EXACT_NATIVE_PREFIX */',prefix).replace('/* EXACT_FATAL_DETAIL */',fatal_detail)
  for ios in (1,0):
   source=prelude+'\n'+header+'\n'+decoder+'\n'+bus+'\n'+harness
   (temp/'test.cpp').write_text(source)
@@ -154,4 +183,12 @@ int main(){
  failed=subprocess.run([str(temp/'old')],stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=15)
  assert failed.returncode!=0 and b'handled==(permission?1:0)' in failed.stderr,'pre57 must fail permission recovery'
  print('PASS old native SIGBUS gate reproduces the blocked-permission regression')
-print('PASS patch57 after exact first56/reverse; true alignment/backing/translation/execute/outside faults remain unhandled. iOS actual signal/RSX recovery still needs device verification.')
+ # Reproduce the native macro failure using the exact fatal-detail statement.
+ broken_header=strip(pre58_header)
+ broken_harness=harness.replace('darwin_context->es.fault_address','darwin_context->es.FAR')
+ broken=prelude+'\n'+broken_header+'\n'+decoder+'\n'+bus+'\n'+broken_harness
+ (temp/'macro-before.cpp').write_text(broken)
+ failure=subprocess.run(['g++','-std=c++23','-fsyntax-only','-DTARGET_OS_IOS=1',str(temp/'macro-before.cpp')],stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+ assert failure.returncode!=0 and b'expected unqualified-id' in failure.stderr
+ print('PASS native FAR macro compile regression reproduced; corrected header keeps16-byte context/ESR offset8 and compiles exact fatal-detail access')
+print('PASS patches57/58 after exact first56/reverse; true alignment/backing/translation/execute/outside faults remain unhandled. iOS actual signal/RSX recovery still needs device verification.')

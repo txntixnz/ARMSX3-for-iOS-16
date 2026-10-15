@@ -8084,3 +8084,42 @@ Use GitHub tools expected-head lease, one queued check; do not monitor. Next:
 install ARMSX3_iOS16_INSTALL_THIS_IPA, Quick start -> Start game, keep foreground,
 let loading progress, Stop game and send log/screen result. Audio/pad pending.
 Do not generate images; concise English replies.
+
+
+## Build127 — 2026-10-15: fix FAR macro collision in fatal diagnostics
+
+User reported Build126 workflow failed. Actions38766320420, native
+job116530985028 failed at Compile emulator core archive. All36 host jobs passed
+(including new iOS signal regression and actual Vulkan host work). Native ninja
+-k0 compiled remaining sources including AArch64Signal.cpp. The only compiler
+error was Utilities/Thread.cpp:3719 expected unqualified-id at the new fatal
+log expression darwin_context->es.FAR. Its header also warned that u64 FAR;
+declares nothing: a dependency compatibility macro expands FAR to empty in
+this translation unit. No Build126 IPA or new on-phone fault result exists.
+
+New patch0058 changes the existing Darwin modeled exception-state field name
+FAR -> fault_address and updates the one diagnostic member access. Keeps the
+field as u64 at offset0, ESR u32 at8, exception_id u32 at12, total16 bytes.
+Protects the native context layout when headers define FAR. No undefined-symbol
+workaround or global macro undef; patch0057 recovery policy/CPU decoder and all
+Runtime/frontend/render/session/UI behavior unchanged. Total58 patches.
+
+Extended test_ios_signal_recovery.py reconstructs exact first56+57+58 and checks
+both reverse applications/roundtrip. Defines the actual colliding FAR macro
+condition before native AArch64Signal header; static asserts16-byte state and
+ESR offset8. Compiles exact new native fatal-detail block against an explicit
+fmt interface, asserts captured ESR/FAR values, and proves pre58 header/member
+access fails compilation with the observed expected-unqualified-id diagnostic.
+All prior8192 EC/FSC/write combinations per iOS/macOS profile and real host mmap
+fault/retry tests still pass ASAN+UBSAN; old native SIGBUS gate still fails as
+expected. These remain host context/VM/RSX models, NOT native iOS signal proof.
+Build127 fixture/prior bridge/Quick start/session contracts and syntax/plist
+checks pass. Patch58 applies to the full prepared first57 worktree; Build126
+CI already applied/compiled first57 except the one Thread.cpp logging access.
+New complete iOS compile/link/package and main-menu progress still pending.
+
+Parentmain0bcc9f1f7d25ee0945973eeced8e59b14b0a3037. User authorized main
+publication; GitHub API with expected-head lease, confirm one queued run only,
+do not monitor. When IPA succeeds: Quick start -> Start game, keep foreground,
+wait for loading, Stop game, send log and screen result. Retained disc/firmware.
+No new diagnostic stages. Audio/gamepad pending. Concise English; no images.

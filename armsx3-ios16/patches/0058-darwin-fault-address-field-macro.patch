@@ -1,0 +1,24 @@
+diff --git a/Utilities/Thread.cpp b/Utilities/Thread.cpp
+--- a/Utilities/Thread.cpp
++++ b/Utilities/Thread.cpp
+@@ -3715,7 +3715,7 @@
+ 
+ #if defined(__APPLE__) && defined(ARCH_ARM64) && TARGET_OS_IOS
+ 	const auto* darwin_context = reinterpret_cast<const aarch64::aarch64_darwin_mcontext64*>(context->uc_mcontext);
+-	fmt::append(msg, "iOS ESR: 0x%08x, FAR: 0x%llx\n", darwin_context->es.ESR, darwin_context->es.FAR);
++	fmt::append(msg, "iOS ESR: 0x%08x, FAR: 0x%llx\n", darwin_context->es.ESR, darwin_context->es.fault_address);
+ #endif
+ 
+ 	if (vm::try_get_addr(info->si_addr).second)
+diff --git a/rpcs3/Emu/CPU/Backends/AArch64/AArch64Signal.h b/rpcs3/Emu/CPU/Backends/AArch64/AArch64Signal.h
+--- a/rpcs3/Emu/CPU/Backends/AArch64/AArch64Signal.h
++++ b/rpcs3/Emu/CPU/Backends/AArch64/AArch64Signal.h
+@@ -28,7 +28,7 @@
+ #elif defined(__APPLE__)
+     struct aarch64_exception_state
+     {
+-        u64 FAR;      // Fault address reg
++        u64 fault_address;      // Fault address reg
+         u32 ESR;      // Exception syndrome reg (ESR_EL1)
+         u32 exception_id;
+     };
