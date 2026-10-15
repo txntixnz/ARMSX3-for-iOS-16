@@ -8123,3 +8123,56 @@ publication; GitHub API with expected-head lease, confirm one queued run only,
 do not monitor. When IPA succeeds: Quick start -> Start game, keep foreground,
 wait for loading, Stop game, send log and screen result. Retained disc/firmware.
 No new diagnostic stages. Audio/gamepad pending. Concise English; no images.
+
+
+## Build128 — 2026-10-15: renderer-owned iOS translation faults
+
+Build127 compiled and ran. User log ARMSX3-startup-20261015-164852-474-33182.txt
+exports PID33168: native run starts1792082822.23, shaders/cache/workers progress,
+then RSX fails1792082886.40 reading host0x340300400/guest0x40300400 with
+ESR0x92000007. GCM interrupt PPU then faults writing0x40300470, ESR0x92000047.
+These are data-abort translation FSC7, not permission FSC0xc..0xf or alignment.
+Stop at1792082897 ends in30s cleanup timeout due two SPUs waiting on dead PPU.
+Main menu remains unconfirmed; previous permission-only fix missed this class.
+
+The actual native sys_rsx_context_allocate allocates3MiB at0x40100000 and sets
+reports=base+2MiB=0x40300000. Native ZCULL report locks use real host page_size
+and page_start. With16KiB host pages, report at0x40301400 shares protection with
+semaphore/control accesses0x40300400 etc. Native on_access_violation can restore
+the whole page, but prior SIGBUS/FSC7 gate never called it.
+
+Patch0059 after frozen58 adds is_data_translation_fault for EC0x24/25 and
+FSC0x04..07. Only iOS ARM64 SIGBUS data translation faults in an allocated guest
+page may enter the native access handler with new optional rsx_only=true. That
+retains SPU unsavable scope/temporary VM unlock/CPU state handling and requires
+actual native RSX callback acceptance. If declined, returns false BEFORE generic
+logical-permission retries, preventing a logically-readable but unbacked mapping
+from becoming an endless loop. Normal callers defaultfalse and all previous
+permission/SIGSEGV/platform behavior remains. No arbitrary page unprotection,
+new allocations, fault-PC skips, changed texture data or guessed shader fix.
+
+Regression now reconstructs exact59 patches and roundtrip reverses57/58/59 to
+frozen56. Compiles exact ESR decoder, signal direction/dispatch, native access
+handler prefix including SPU state scope, native utils::page_start and actual
+ZCULL on_report_enqueued/completed/disable_optimizations/on_access_violation.
+Host interfaces model CPU state/locks, VM flags, fmt, GPU and platform context;
+native ZCULL methods perform real mmap/mprotect with16KiB report protection.
+Sixteen real host read/write faults at the uploaded offsets, active/stale report
+blocks, FSC7/F plus direction variants recover and preserve bytes. ASAN+UBSAN
+pass. Exhaustive8192 EC/FSC/write combinations per iOS/macOS profile pass;
+unallocated/unowned translation faults and true alignment/external/execute/
+outside faults remain unhandled. Generic logical fallback is deliberately made
+able to retry in a negative guard case; rsx_only blocks it. Exact old Build127
+permission-only gate fails the new matrix; pre57 gate and FAR macro regression
+checks retained. New behavior still needs actual iOS signals/GPU concurrency test.
+
+All59 patches apply on full prepared native worktree and native diff check passes.
+Build128 fixture/frozen bridge/Quick start/session gates and AST/plist checks pass.
+Runtime/frontend/UI/3second diagnostic/session/renderer config remain Build125.
+No new phone diagnostic stages or user setup. Same workflow34+2 host jobs.
+Complete iOS compile/link/package and device main-menu/shutdown test pending.
+Parentmain a52dba6f013a7bfeb16ff1aa9b031a8049b85807. User authorized main
+publication. Publish via GitHub API lease; confirm one queued run, do not monitor.
+Next: install ARMSX3_iOS16_INSTALL_THIS_IPA, Quick start -> Start game, keep
+foreground, let loading progress, Stop game and send log/result. Disc/firmware
+persist. Audio/gamepad pending. Concise English; no generated images.

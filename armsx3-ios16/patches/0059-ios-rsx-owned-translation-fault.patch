@@ -1,0 +1,72 @@
+diff --git a/Utilities/Thread.cpp b/Utilities/Thread.cpp
+--- a/Utilities/Thread.cpp
++++ b/Utilities/Thread.cpp
+@@ -2059,7 +2059,7 @@
+ 	}
+ }
+ 
+-bool handle_access_violation(u32 addr, bool is_writing, bool is_exec, ucontext_t* context) noexcept
++bool handle_access_violation(u32 addr, bool is_writing, bool is_exec, ucontext_t* context, bool rsx_only = false) noexcept
+ {
+ 	g_tls_fault_all++;
+ 
+@@ -2118,6 +2118,11 @@
+ 		}
+ 	}
+ 
++	// iOS can report a protected GPU report page as a translation fault.
++	// A retry there requires renderer ownership; logical page flags alone
++	// must not turn an unbacked mapping into an endless retry loop.
++	if (rsx_only) return false;
++
+ #if defined(ARCH_X64)
+ 	const u8* const code = reinterpret_cast<u8*>(RIP(context));
+ 
+@@ -3596,8 +3601,17 @@
+ 	// Gated on more than "not an instruction fetch" now: see is_bus_error above.
+ #if defined(__APPLE__) && defined(ARCH_ARM64) && TARGET_OS_IOS
+ 	// Darwin reports mprotect access faults as SIGBUS/BUS_ADRALN as well.
+-	// Only retry a hardware data-permission fault through the existing VM/RSX
+-	// handler. True alignment/unbacked-page faults must still terminate.
++	// PROT_NONE can report translation FSC=7 on iOS. Only offer an allocated
++	// guest page to the native RSX handler; do not use generic logical retries.
++	if (is_bus_error && !is_executing && aarch64::is_data_translation_fault(context))
++	{
++		if (auto [addr, ok] = vm::try_get_addr(info->si_addr);
++			ok && vm::check_addr(addr, vm::page_allocated) && thread_ctrl::get_current() &&
++			handle_access_violation(addr, is_writing, false, context, true))
++		{
++			return;
++		}
++	}
+ 	const bool try_recovery = !is_executing && (!is_bus_error || aarch64::is_data_permission_fault(context));
+ #else
+ 	const bool try_recovery = !is_executing && !is_bus_error;
+diff --git a/rpcs3/Emu/CPU/Backends/AArch64/AArch64Signal.h b/rpcs3/Emu/CPU/Backends/AArch64/AArch64Signal.h
+--- a/rpcs3/Emu/CPU/Backends/AArch64/AArch64Signal.h
++++ b/rpcs3/Emu/CPU/Backends/AArch64/AArch64Signal.h
+@@ -57,4 +57,5 @@
+     // Data-abort permission faults only; excludes alignment, translation,
+     // external/backing errors and instruction aborts even when SIGBUS is used.
+     bool is_data_permission_fault(const ucontext_t* uctx);
++    bool is_data_translation_fault(const ucontext_t* uctx);
+ }
+diff --git a/rpcs3/Emu/CPU/Backends/AArch64/AArch64Signal.cpp b/rpcs3/Emu/CPU/Backends/AArch64/AArch64Signal.cpp
+--- a/rpcs3/Emu/CPU/Backends/AArch64/AArch64Signal.cpp
++++ b/rpcs3/Emu/CPU/Backends/AArch64/AArch64Signal.cpp
+@@ -77,6 +77,15 @@
+             fault_status >= 0x0c && fault_status <= 0x0f;
+     }
+ 
++    bool is_data_translation_fault(const ucontext_t* uctx)
++    {
++        const u64 esr = _read_ESR_EL1(uctx);
++        const u32 exception_class = (esr >> 26) & 0x3f;
++        const u32 fault_status = esr & 0x3f;
++        return (exception_class == 0x24 || exception_class == 0x25) &&
++            fault_status >= 0x04 && fault_status <= 0x07;
++    }
++
+     fault_reason decode_fault_reason(const ucontext_t* uctx)
+     {
+         auto esr = _read_ESR_EL1(uctx);

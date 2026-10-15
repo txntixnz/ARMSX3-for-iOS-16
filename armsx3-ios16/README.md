@@ -1,12 +1,13 @@
-# Current checkpoint — Build127
+# Current checkpoint — Build128
 
-Build124 displays Midnight Club LA startup screens on A15/iOS16. Longer
-Build125 sessions hit guest-memory faults before the main menu. Build126
-adds targeted iOS protected-page fault recovery; Build127 fixes a field-name
-macro collision that prevented its iOS compilation. Device verification is
-pending. Install `ARMSX3_iOS16_INSTALL_THIS_IPA`, **Quick start -> Start game**,
-keep foreground, then **Stop game** and share the log/result. Firmware/disc
-persist. Full120 diagnostics optional; audio/gamepad controls pending.
+Midnight Club LA displays startup screens on A15/iOS16. Longer Build127
+sessions report a data translation fault in the GPU report page. Build128
+routes allocated guest translation faults to the native renderer, with a
+required renderer acceptance check. Native GPU report-page host regressions
+pass; actual iOS loading/main-menu/shutdown verification is pending.
+Install `ARMSX3_iOS16_INSTALL_THIS_IPA`, **Quick start -> Start game**, keep
+foreground, then **Stop game** and share the log/result. Firmware/disc persist.
+Full120 diagnostics optional; audio/gamepad controls pending.
 Historical checkpoints follow.
 
 # ARMSX3 for iOS 16 — P0 port checkpoint
