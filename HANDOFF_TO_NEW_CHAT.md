@@ -7528,3 +7528,118 @@ JIT headers and production app/runtime/frontend/capture/intake/import/bridge
 sources remain unchanged. Unchanged34synchronization profiles remain for Actions.
 Phone success and full iOS compile/link are still pending; no monitoring Actions
 after the single queued check at publication.
+
+
+## Build118 — MoltenVK graphics-device foundation (2026-10-15)
+
+Build117 phone SUCCESS: ARMSX3-startup-20261015-094237-913-29981.txt, PID29981.
+All120diagnostics passed, cached runtime and actual game-folder load/cleanup
+passed, then Midnight Club: Los Angeles [BLUS30442] completed its full3second
+native running window. Running1792057351.097407 -> window end1792057354.101032;
+joined snapshot1792057354.120176 has20PPUcontexts,6SPUs,51,678completed HLE/LV2calls.
+Native exec_bytes/4 aggregate=1,588,286,587 is a backend estimate, not independently
+measured instruction throughput/FPS. Five primary SPUs PC4520, secondary PC70136,
+block counters0 are normal for static interpretation; DMA/code-sized GET logs
+prove SPU work beyond thread creation. Log shows native RSX device memory/context,
+GCM event queue, display buffers, render/streamer/audio threads and asset reads.
+The syscalls/MFC waits marked aborted after the explicit window-end/Kill request
+are stop cancellation, not an app crash. Stop callback completed, fully stopped
+with zero liveCPUthreads1792057354.149632, EXECUTION UI PASS1792057354.154463.
+No JIT abort or crash report. No rendering/menu/audio/playable FPS claim yet.
+
+Build118 adds Check graphics device separately from the verified guest-run path.
+Native RSX still uses NullGSRender; WITH_LLVM=OFF and USE_VULKAN=OFF remain for the
+native core. The new MoltenVK library is linked solely into the core frontend's
+independent graphics check. No fake game frames or CPU-generated game image.
+No Vulkan native renderer source/shader/swapchain/frontend frame is enabled yet.
+Next substantive integration after this device check is native VKGSRender plus
+UIKit CAMetalLayer GSFrame and swapchain ownership.
+
+New GraphicsDevice.cpp/.h use real Vulkan API:1.1instance with portability
+enumeration/flag when available (required onApple), enumerate device/graphics
+queue, enable portability_subset when exposed, create device, log physical/API/
+driver/maxTexture/storageBuffer/geometry/tessellation/fragmentStores capabilities.
+Allocate32x32RGBA8 optimal image plus host-visible readback buffer, prefer coherent
+memory but invalidate non-coherent memory correctly. Submit red clear, barrier,
+image-to-buffer copy and host-read barrier; wait5second fence; compare all1024RGBA
+pixels. Repeat blue with command/fence reset and correct prior layout. This
+validates transfer/GPU synchronization/readback; no shader translation, draw,
+surface or screen presentation is tested. Destroy resources in dependency order.
+No native guest memory is read or mutated.
+
+Resources use one RAII owner and serialized try-lock. Any uncertain submission
+failure or unfinished fence wait retains the complete owner until process exit,
+marks graphics unusable and returns-2/reopen; do not destroy image/buffer/pool
+while the GPU might still use them. Device-lost wait permits normal destruction.
+No unbounded vkDeviceWaitIdle is used. Ordinary setup/readback failures return-1
+with complete cleanup; another check can run. Concurrent checks reject safely.
+GraphicsCheck.cpp C ABI rejects main-thread execution, non-fully-stopped Emu or
+liveCPUcontexts; UIKit readiness120/idle gate runs it on the existing serialized
+worker flow, stores unfinished-operation marker, restores idle timer and disables
+all further actions on-2. Graphics and Run game buttons share a row. Firmware/
+game imports are not prerequisites for the graphics check. Existing game flow
+unchanged; Runtime/Capture output now labels exec_bytes/4 as an estimate/raw
+backend counter instead of claiming an independent instruction count.
+
+Pinned dependency: KhronosGroup/MoltenVK releasev1.4.2 MoltenVK-ios.tar,
+SHA256 b5d947b1660e6e9fed40b9cd2387e160aaab9e80b775c0cef7e14059405178c1.
+Fetched official release metadata/archive; runtime docs say iOS>=15. Download
+contains static/MoltenVK.xcframework/ios-arm64/libMoltenVK.a and include/vulkan.
+Verifier parses XCFramework metadata and every Mach-O archive object, requiring
+arm64/object kind/device iOS/platform2/minOS<=16, rejecting macOS/simulator. This
+release archive is one combined Mach-O object (not a count of source units),
+minOS15.0, built with SDK26; full Xcode16.4/iOS16link still belongs to Actions.
+fetch-moltenvk.sh checks exact archive digest before extraction. Imported STATIC
+CMake target exposes headers only to ARMSX3Core and links required iOS Metal/
+Foundation/QuartzCore/CoreGraphics/IOSurface/UIKit frameworks. No dynamic external
+MVK framework. Package includes upstream LICENSE and runtime guide under
+ThirdParty/MoltenVK. build-core.sh now takes third arg verified MoltenVK root;
+workflow fetches/verifies before native compile and passes all3roots.
+
+New independent graphics-host job installs Vulkan headers, mesa lavapipe and
+Khronos validation layer, selects software ICD and runs production GraphicsDevice
+AND GraphicsCheck under ASAN+UBSAN/Wall/Wextra/Werror, real Vulkan GPU commands and
+synchronization validation enabled via instance pNext. Core idle/main-thread and
+injected error return values are explicit host models. Success repeated4cycles,
+instance/device/map failure, wrong pixel, device loss, concurrent rejection,
+uncertain submit and fence timeout are covered. Exact pixel mismatch fails;
+normal failure owners are all destroyed; uncertain work destroys none and blocks
+reuse. The timeout fault is injected after waiting for the actual software GPU,
+so the host test itself leaves no active GPU work. The submit fault skips actual
+queueing but tests conservative retention. No validation VUID/errors permitted.
+Linux results prove Vulkan command use, not Apple driver/Metal/ISA or device iOS.
+
+Local host environment initially lacked Vulkan headers/ICD: downloaded Ubuntu24
+packages into scratch only, extracted headers/lavapipe/validation libraries,
+pointed private ICD/layer JSON paths at those extracted libraries. Actual software
+GPU reports llvmpipe LLVM20.1.2/Vulkan1.4. Production positive readback and all
+failure scenarios passed with Khronos synchronization validation. No stubbed GPU.
+Pinned MoltenVK fetch/check/extraction script also passed locally against exact
+34.5MBarchive. Existing runtime/intake/JIT/SPU/import/120fixtures stay in their
+host gate;34synchronization profiles unchanged. Total host prerequisites36 now:
+34sync +intake-host +graphics-host. All53production patches remain unchanged.
+Info.plist/metadata fixtures/README and both independent handoffs nowBuild118.
+Run exact clean intake-host/core-preparation and graphics checks before publishing.
+
+Next phone step: install Build118 ARMSX3_iOS16_INSTALL_THIS_IPA via TrollStore
+once workflow succeeds. Reopen, Run all120tests, tap Check graphics device,
+share startup log. No firmware/game reimport is needed for this check. Optional
+Run game3seconds regression can reuse existing firmware/disc. If graphics/core
+load crashes share unfinished startup log and matching.ips. No game picture yet;
+this is the real driver foundation for native renderer integration. Keep replies
+concise English, no generated images. Verify workflow queued once after publishing,
+then no Actions monitoring; user reports success/failure.
+
+Build118 final prepublication validation PASSED: exact clean YAML intake-host
+and all53patch core-preparation commands exited0; final overlay byte comparisons
+passed after docs/packaging edits. Nine production graphics scenarios passed with
+real lavapipe/Khronos synchronization validation and ASAN+UBSAN. Correct full64
+CPU-count ABI is used and a high32bit-live count is rejected in the host wrapper
+check. Native Runtime/Capture differ only in counter log labels. All53patches/
+CoreBridge/intake/import/frontend/dispatch/JIT headers remain unchanged. Exact
+pinned MoltenVK download/digest/extraction/Mach-O verifier passed; Apple branch
+compiled against actual Vulkan headers; standalone imported-target CMake3.28
+configure/generate passed. Python/YAML/plist118/shell syntax and git diff --check
+passed. License files are checked before IPA packaging. Actual Xcode16.4/iOS16
+compile/link and phone graphics result remain pending. No Actions monitoring
+after the single queued check.

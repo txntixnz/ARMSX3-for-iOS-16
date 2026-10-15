@@ -6,6 +6,8 @@ cmake --build "$build_dir" --target ARMSX3CoreLoadTest --parallel 3 -- -k 0
 app="$build_dir/ios-core/loadtest/ARMSX3CoreLoadTest.app"
 core="$app/Frameworks/libARMSX3Core.dylib"
 test -f "$core"
+test -f "$app/ThirdParty/MoltenVK/MoltenVK-LICENSE"
+test -f "$app/ThirdParty/MoltenVK/MoltenVK_Runtime_UserGuide.md"
 test "$(xcrun lipo -archs "$core")" = arm64
 xcrun vtool -show-build "$core" > "$build_dir/core-platform.txt"
 xcrun otool -L "$core" > "$build_dir/core-libraries.txt"

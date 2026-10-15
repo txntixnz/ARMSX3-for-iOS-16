@@ -154,8 +154,25 @@ jobs:
           python3 armsx3-ios16/tests/test_spu_cache_startup.py upstream-armsx3
           python3 armsx3-ios16/tests/test_spu_thread_entry.py upstream-armsx3
           python3 armsx3-ios16/tests/test_game_import.py upstream-armsx3
+  graphics-host:
+    name: Check real Vulkan work and graphics cleanup
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install software Vulkan and validation layers
+        run: sudo apt-get update && sudo apt-get install -y libvulkan-dev mesa-vulkan-drivers vulkan-validationlayers
+      - name: Verify GPU commands and failure lifecycles
+        env:
+          ASAN_OPTIONS: detect_leaks=0
+          GRAPHICS_VALIDATION: '1'
+        run: |
+          set -euo pipefail
+          export VK_ICD_FILENAMES="$(find /usr/share/vulkan/icd.d -name '*lvp*json' -print -quit)"
+          test -n "$VK_ICD_FILENAMES"
+          python3 armsx3-ios16/tests/test_graphics_device.py
   core:
-    needs: [synchronization-host, intake-host]
+    needs: [synchronization-host, intake-host, graphics-host]
     name: Cross-compile real rpcs3_emu for iOS 16 arm64
     runs-on: macos-15
     timeout-minutes: 120
@@ -210,6 +227,9 @@ jobs:
           cp -R armsx3-ios16/ios upstream-armsx3/ios
           cp armsx3-ios16/core/apple_jit.hpp upstream-armsx3/rpcs3/util/apple_jit.hpp
           cp armsx3-ios16/core/immutable_jit.hpp upstream-armsx3/rpcs3/util/immutable_jit.hpp
+      - name: Fetch and verify pinned iOS MoltenVK
+        shell: bash
+        run: bash armsx3-ios16/core/fetch-moltenvk.sh "$GITHUB_WORKSPACE/moltenvk-ios"
       - name: Show toolchain
         run: |
           xcodebuild -version
@@ -225,7 +245,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          bash armsx3-ios16/core/build-core.sh upstream-armsx3 ffmpeg-ios 2>&1 | tee armsx3-core-build.log
+          bash armsx3-ios16/core/build-core.sh upstream-armsx3 ffmpeg-ios moltenvk-ios 2>&1 | tee armsx3-core-build.log
       - name: Verify and collect iOS archive
         shell: bash
         run: |

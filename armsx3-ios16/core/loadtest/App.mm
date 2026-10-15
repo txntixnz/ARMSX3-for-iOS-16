@@ -147,6 +147,7 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
 @property(nonatomic,strong) UIButton* gameButton;
 @property(nonatomic,strong) UIButton* gameLoadButton;
 @property(nonatomic,strong) UIButton* gameRunButton;
+@property(nonatomic,strong) UIButton* graphicsButton;
 @property(nonatomic,assign) BOOL intakeBusy;
 @property(nonatomic,assign) NSInteger intakeMode;
 @property(nonatomic,assign) BOOL previousRunPending;
@@ -231,16 +232,21 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
     self.gameRunButton = [UIButton buttonWithType:UIButtonTypeSystem];
     [self.gameRunButton setTitle:@"Run game (3 seconds)" forState:UIControlStateNormal];
     [self.gameRunButton addTarget:self action:@selector(runGame) forControlEvents:UIControlEventTouchUpInside];
-    [stack addArrangedSubview:self.gameRunButton];
+    self.graphicsButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    [self.graphicsButton setTitle:@"Check graphics device" forState:UIControlStateNormal];
+    [self.graphicsButton addTarget:self action:@selector(checkGraphics) forControlEvents:UIControlEventTouchUpInside];
+    UIStackView* executionControls = [[UIStackView alloc] initWithArrangedSubviews:@[self.gameRunButton,self.graphicsButton]];
+    executionControls.distribution = UIStackViewDistributionFillEqually; executionControls.spacing = 12;
+    [stack addArrangedSubview:executionControls];
     self.output = [[UITextView alloc] init];
     self.output.editable = NO;
     self.output.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
-    self.output.text = @"Tap Run all tests. The core loads and every test runs in order. The sequence stops on the first failure.\n\nWhen finished, share the .txt log or tap Copy results and paste into chat. Game boot is still pending.";
+    self.output.text = @"Tap Run all tests. The core loads and every test runs in order. The sequence stops on the first failure.\n\nWhen finished, share the .txt log or tap Copy results and paste into chat. Complete the tests to enable firmware, game and graphics actions.";
     [stack addArrangedSubview:self.output];
     NSString* pending = [NSUserDefaults.standardUserDefaults stringForKey:pendingStageKey];
     if (pending.length) {
         self.previousRunPending = YES;
-        self.output.text = [NSString stringWithFormat:@"Previous run did not finish: %@.\n\nShare log or Copy results includes that previous run until you start testing again. Run all tests starts a fresh sequence in this process. Game boot is still pending.", pending];
+        self.output.text = [NSString stringWithFormat:@"Previous run did not finish: %@.\n\nShare log or Copy results includes that previous run until you start testing again. Run all tests starts a fresh sequence in this process. Complete the tests to enable firmware, game and graphics actions.", pending];
     }
     [self refreshControls];
     [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(enteredBackground:)
@@ -262,6 +268,7 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
     self.runtimeButton.enabled = intakeReady;
     self.gameButton.enabled = intakeReady; self.gameLoadButton.enabled = intakeReady;
     self.gameRunButton.enabled = intakeReady;
+    self.graphicsButton.enabled = intakeReady;
     [self.runButton setTitle:self.nextStage ? @"Run remaining tests" : @"Run all tests" forState:UIControlStateNormal];
     self.progress.progress = float(self.nextStage) / float(stageCount);
 }
@@ -374,7 +381,7 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
     [self refreshControls];
     if (self.nextStage == stageCount) {
         ARMSX3StartupLog("AUTO PASS: all diagnostic stages completed; game boot remains untested");
-        [self.transcript appendFormat:@"\nAll %lu tests passed. Share the startup log.\nGame boot is still pending.\n", (unsigned long)stageCount];
+        [self.transcript appendFormat:@"\nAll %lu tests passed. Share the startup log.\nComplete the tests to enable firmware, game and graphics actions.\n", (unsigned long)stageCount];
         self.output.text = self.transcript;
         self.progressLabel.text = [NSString stringWithFormat:@"All %lu tests passed", (unsigned long)stageCount];
         [self finishSequence];
@@ -397,6 +404,41 @@ static NSString* const pendingStageKey = @"ARMSX3PendingDiagnosticStage";
 - (void)checkRuntime { [self checkRuntimeMode:NO execute:NO]; }
 - (void)checkGame { [self checkRuntimeMode:YES execute:NO]; }
 - (void)runGame { [self checkRuntimeMode:YES execute:YES]; }
+- (void)checkGraphics {
+    if (self.running || self.intakeBusy || self.failed || self.nextStage != stageCount || !self.coreHandle) return;
+    auto action = reinterpret_cast<int (*)(char*,size_t)>(dlsym(self.coreHandle,"armsx3_core_check_graphics"));
+    if (!action) { [self showLogMessage:@"Graphics check unavailable" detail:@"The graphics function is missing."]; return; }
+    self.intakeBusy = YES; self.previousRunPending = NO;
+    const BOOL previousIdle = UIApplication.sharedApplication.idleTimerDisabled;
+    UIApplication.sharedApplication.idleTimerDisabled = YES;
+    [NSUserDefaults.standardUserDefaults setObject:@"Graphics device check" forKey:pendingStageKey];
+    [NSUserDefaults.standardUserDefaults synchronize];
+    self.progressLabel.text = @"Checking graphics device and GPU readback…";
+    [self.transcript appendString:@"\nRUN · Graphics device and offscreen readback\n"];
+    self.output.text = self.transcript;
+    [self refreshControls];
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0), ^{
+        @autoreleasepool {
+            char buffer[4096] = {};
+            const int result = action(buffer,sizeof(buffer));
+            NSString* detail = [NSString stringWithUTF8String:buffer] ?: @"Graphics check returned no detail.";
+            dispatch_async(dispatch_get_main_queue(), ^{
+                self.intakeBusy = NO; UIApplication.sharedApplication.idleTimerDisabled = previousIdle;
+                self.failed = result == -2;
+                if (result != -2) {
+                    [NSUserDefaults.standardUserDefaults removeObjectForKey:pendingStageKey];
+                    [NSUserDefaults.standardUserDefaults synchronize];
+                }
+                [self.transcript appendFormat:@"%@ · %@\n",result == 0 ? @"PASS" : @"FAILED",detail];
+                self.output.text = self.transcript;
+                [self.output scrollRangeToVisible:NSMakeRange(self.output.text.length,0)];
+                self.progressLabel.text = result == 0 ? @"Graphics device passed · share the log" : @"Graphics check failed · share the log";
+                ARMSX3StartupLog([NSString stringWithFormat:@"GRAPHICS UI %@: %@",result == 0 ? @"PASS" : @"FAIL",detail].UTF8String);
+                [self refreshControls];
+            });
+        }
+    });
+}
 - (void)checkRuntimeMode:(BOOL)game execute:(BOOL)execute {
     if (self.running || self.intakeBusy || self.failed || self.nextStage != stageCount || !self.coreHandle) return;
     const char* symbol = execute ? "armsx3_core_run_game" : game ? "armsx3_core_check_game" : "armsx3_core_check_runtime";

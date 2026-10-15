@@ -48,7 +48,7 @@ extern "C" void armsx3_ios_runtime_capture_stopped() noexcept
             progress.calls += ppu.syscall_history.index;
             if (progress.ppu_contexts > 16) return;
             log_capture("EXECUTION joined PPU id=" + std::to_string(id) + " pc=" + std::to_string(ppu.cia) +
-                " native instructions=" + std::to_string(ppu.exec_bytes / 4) + " completed HLE/LV2 calls=" +
+                " native exec_bytes/4=" + std::to_string(ppu.exec_bytes / 4) + " completed HLE/LV2 calls=" +
                 std::to_string(ppu.syscall_history.index) + " last=" + (ppu.last_function ? ppu.last_function : "none"));
             const auto& history = ppu.syscall_history;
             const u64 count = std::min<u64>({8, history.index, history.data.size()});
@@ -68,7 +68,7 @@ extern "C" void armsx3_ios_runtime_capture_stopped() noexcept
         });
         progress.captured = true;
         log_capture("EXECUTION joined snapshot: PPU contexts=" + std::to_string(progress.ppu_contexts) +
-            " native instructions=" + std::to_string(progress.instructions) + " completed calls=" + std::to_string(progress.calls) +
+            " native exec_bytes/4=" + std::to_string(progress.instructions) + " completed calls=" + std::to_string(progress.calls) +
             " SPU contexts=" + std::to_string(progress.spu_contexts) + " blocks=" + std::to_string(progress.spu_blocks));
     }
     catch (...) { progress.failed = true; ARMSX3StartupLog("EXECUTION stopped-context observation failed"); }

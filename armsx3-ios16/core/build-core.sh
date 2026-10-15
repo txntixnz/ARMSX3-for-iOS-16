@@ -2,6 +2,7 @@
 set -euo pipefail
 source_dir="$(cd "$1" && pwd)"
 ffmpeg_dir="$(cd "$2" && pwd)"
+moltenvk_dir="$(cd "$3" && pwd)"
 build_dir="$source_dir/build-ios-core"
 sdk="$(xcrun --sdk iphoneos --show-sdk-path)"
 # Avoid host pkg-config/Homebrew libraries being mistaken for device libraries.
@@ -22,6 +23,7 @@ cmake -S "$source_dir" -B "$build_dir" -G Ninja \
   -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=ONLY \
   -DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER \
   -DARMSX3_FFMPEG_ROOT="$ffmpeg_dir" \
+  -DARMSX3_MOLTENVK_ROOT="$moltenvk_dir" \
   -DWITH_LLVM=OFF -DUSE_VULKAN=OFF -DUSE_NATIVE_INSTRUCTIONS=OFF \
   -DUSE_LTO=OFF -DUSE_PRECOMPILED_HEADERS=OFF \
   -DUSE_SDL=OFF -DUSE_FAUDIO=OFF -DUSE_LIBEVDEV=OFF \

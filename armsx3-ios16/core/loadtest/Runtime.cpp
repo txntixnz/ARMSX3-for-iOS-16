@@ -238,7 +238,7 @@ int check(std::string& detail, bool game = false, bool execute = false)
             error = "Joined CPU counters did not confirm guest execution; inspect the startup log";
         else
         {
-            detail = "Guest run completed: " + disc.title + " [" + disc.id + "]. Native PPU instructions=" +
+            detail = "Guest run completed: " + disc.title + " [" + disc.id + "]. Native PPU instruction estimate=" +
                 std::to_string(progress.instructions) + ", completed HLE/LV2 calls=" + std::to_string(progress.calls) +
                 ", SPU blocks=" + std::to_string(progress.spu_blocks) + ". Clean stop completed. Display and audio are pending.";
             log("EXECUTION PASS: " + detail);

@@ -1,37 +1,35 @@
-# ARMSX3 iOS 16 core — Build 117
+# ARMSX3 iOS 16 core — Build 118
 
 Target: iPhone 13 Pro Max/A15, iOS 16.0, Dopamine and TrollStore.
-The installable app links the actual pinned rpcs3_emu core. Build114 passed all
-120 diagnostics, imported19 files/5,668,431,532 bytes, and natively loaded
-**Midnight Club: Los Angeles [BLUS30442]**. Its real title/category, original
-EBOOT, PARAM.SFO, disc roots and carchive_audio.rpf asset path matched. Native
-loading mapped two nonempty executable segments, loaded liblv2 firmware and
-completed thread/VM/JIT cleanup. The guest entry remained stopped.
-Build115 adds **Run game (3 seconds)** with an explicit native guest start,
-automatic stop and execution evidence captured from joined CPU contexts.
-The Build115 device run aborted in native SPU-cache initialization before reaching
-running state: the static interpreter entered an unavailable Apple mutable-code
-write-protection API. Build116 skips that guard only for static SPU initialization,
-which sets ordinary heap dispatcher/interpreter data. Other decoder paths keep
-the guard; macOS/Linux behavior and the cache continuation remain unchanged.
-Build116 passed that boundary on the phone, reached running state and executed
-real game/firmware startup calls. It created five primary and one secondary SPURS
-threads before an unconditional SPU cpu_task entry call hit the same absent API.
-Build117 skips that entry call only for the static decoder with no JIT instance.
-All other decoder/instance combinations keep it. This new fix needs a device run.
+The installable app links the actual pinned rpcs3_emu core. Build117 passed all
+120 diagnostics, real firmware/game loading, and the complete three-second
+**Midnight Club: Los Angeles [BLUS30442]** run. Native running state, real PPU/SPU
+work, 20 joined PPU contexts, six SPUs, 51,678 completed HLE/LV2 calls and fully
+stopped cleanup were recorded. The game set up RSX memory/context/display buffers,
+created render/streamer/audio threads and performed SPU DMA. Static SPU block
+counters remained zero, as expected for this backend. Native exec_bytes/4 is a
+backend counter estimate, not a measured instruction rate or FPS.
+
+Build118 adds **Check graphics device** using a pinned iOS MoltenVK static library.
+It creates a real Vulkan/Metal graphics device and queue, clears an offscreen
+RGBA8 image red then blue, copies each result to host-visible memory, waits on
+GPU fences and verifies all 1,024 pixels per pass. It logs device/API/driver and
+selected capabilities, then destroys the device and resources. This establishes
+the driver path; native RSX Vulkan rendering, shaders, UIKit swapchain presentation,
+audio output and controller input remain pending. No game picture is expected.
 
 After the workflow succeeds, download **ARMSX3_iOS16_INSTALL_THIS_IPA** and
 install its IPA through TrollStore. Reopen and tap **Run all tests**. Once all
 120 pass:
 
-1. Reuse the installed firmware and imported game if retained after updating.
-2. If either is missing, **Install firmware** with PS3UPDAT.PUP and/or
-   **Import game folder** with the folder containing both PS3_GAME and
-   PS3_DISC.SFB (including PARAM.SFO, USRDIR/EBOOT.BIN and all assets).
-3. Tap **Run game (3 seconds)** and keep the app open. Native startup has a
-   15-second budget; the three-second window begins when running state is reached.
-4. Share the startup log after automatic stop/cleanup. If it crashes, share the
-   log from that unfinished run plus the matching .ips crash report.
+1. Tap **Check graphics device** and share the startup log with its result.
+   This check needs neither firmware nor a new game import.
+2. Optionally repeat **Run game (3 seconds)** with the retained firmware/disc
+   to verify execution after adding the graphics library. Keep the app open.
+3. If firmware/game is reported missing, reuse **Install firmware** and/or
+   **Import game folder**. Select the folder containing PS3_GAME and PS3_DISC.SFB.
+4. A graphics timeout retains its GPU resources and requires reopening the app.
+   If any action crashes, share its unfinished log and matching .ips report.
 
 The new run first performs the validated native game/title/disc/segment/firmware
 checks. Only then does it grant one start and invoke native Emulator::Run(false)
@@ -106,7 +104,8 @@ game check adds those paths and validates native title/disc loading. Neither
 check starts the guest entry or produces picture/audio.
 
 The production core still uses the validated interpreter/immutable JIT path.
-LLVM and Vulkan/MoltenVK are disabled. The Run game action requests native
+LLVM and the native RSX Vulkan/MoltenVK renderer are disabled. The separate
+MoltenVK device check does not enable that renderer. The Run game action requests native
 guest execution; renderer presentation, device audio and controller input remain
 future integration work. Successful
 readiness checks and executable inspection are not a playable-game result.
@@ -115,7 +114,7 @@ The workflow keeps pinned dependencies and the original 49 production patches,
 plus patch0050 for unused JIT-arena finalization and patch0051 for joined-context
 observation and the iOS RSX startup/stop guard, plus patch0052 for static SPU
 startup and patch0053 for static SPU thread entry (53 patches total).
-34 synchronization host profiles plus the new intake host check gate the iOS
+34 synchronization host profiles plus the intake and graphics host checks gate the iOS
 compile, full link, signed bundle validation and one installable IPA. Matching
 core symbols and build logs remain available as separate artifacts.
 Build113's workflow produced the tested installable IPA. The historical patch
@@ -148,7 +147,7 @@ mounts and missing asset mappings. Native game-folder loading, coordinated impor
 on the Build114 phone. Build116 reached running state and actual game startup
 including guest-created SPURS groups, PPU handler threads, firmware module loads
 and game-content calls. It aborted at SPU thread entry before completing the
-three-second window or joined capture/cleanup. Build117 retries that window.
+three-second window or joined capture/cleanup. Build117 completed that window and clean teardown on the phone.
 Actions compiles for iOS.
 
 The game import host check compiles production GameImport.cpp with the pinned
@@ -193,3 +192,21 @@ still reject the missing API; macOS protection and Linux behavior remain. CPU
 state, local storage, instruction-table handlers, group/logging/platform interfaces
 and JIT gateway are host models. This checks native loops, not the full native
 SPU ISA, scheduler, ARM gateway or a successful phone execution window.
+
+The graphics library is MoltenVK v1.4.2, fetched from the Khronos release with an
+exact SHA256. The package verifier parses its XCFramework and Mach-O archive
+members, requiring arm64 device-iOS objects with deployment target <=16.0 and
+rejecting simulator/macOS slices. The build links the static archive plus the
+required iOS frameworks, and includes its license and runtime guide in the app.
+The native core backend remains compiled with USE_VULKAN=OFF.
+
+A separate graphics-host job compiles production GraphicsDevice/GraphicsCheck
+with ASAN+UBSAN against real Vulkan/lavapipe and Khronos synchronization validation.
+It verifies repeated two-color GPU clear/copy/fence/readback, idle/thread guards,
+concurrent rejection and injected instance/device/map/pixel/device-loss/submission/timeout
+failures. Failure return values and core-idle interfaces are modeled; Vulkan
+commands execute through the real software driver. A timeout preserves the whole
+owner and blocks reuse, avoiding destruction while work might still be queued.
+Linux results do not verify Apple's driver or iOS linking. The existing 35 host
+jobs plus this graphics job gate the IPA build. Phone graphics success remains
+pending. Native RSX rendering and UIKit presentation are the next integration.
