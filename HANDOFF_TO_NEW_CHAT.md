@@ -9488,3 +9488,31 @@ screen about60seconds; Stop and share log/responsiveness. Check new bounded-pass
 sizes/frequency, upload totals, FIFO/draw/texture timing, frame progress and OOM.
 Keep SPU vector paths/FIFO parking/input/graphics; null audio unchanged. Driving
 unconfirmed. No claimed or promised device FPS gain from host cache models.
+
+
+## Build145 — revert Build144 after device graphics regression
+
+User reports very glitchy graphics with roughly unchanged FPS. Evidence:
+ARMSX3-startup-20261016-114840-742-43835.txt, build144/PID43835.
+Two complete slow RSX windows: 20 frames/10.2433s and 18/10.4024s
+(~1.84 FPS combined); final partial window 18/9.7626s. These manual
+sessions are not a controlled benchmark. 1686 accepted presents and clean
+Stop with zero live CPU threads do not validate visual correctness.
+Bounded cache passes start at 292MiB and later reach 418MiB before a pass,
+with retained usage approaching 402MiB despite the nominal 288MiB quota.
+The precise stale texture/graphics corruption mechanism is NOT established.
+
+Recovery: remove patch0077 and its policy-specific test/workflow invocation;
+restore texture reuse validation and all production patch inputs exactly to
+Build143. Preserve patches1..76, SPU vector optimizations, input and runtime.
+Build number145 and fixture updated. No new performance optimization bundled.
+Build144 analysis stays above for history; its policy is no longer active.
+
+Validate fixture and byte-for-byte Build143 production-patch/workflow parity.
+Publish once and verify workflow queued; do not monitor. Phone confirmation
+required: Quick start -> Start game, same menu about60seconds, Stop and share
+log plus whether graphics are restored. No promised FPS improvement. Once
+visual baseline is recovered, investigate FIFO/SPU bottleneck separately.
+
+Local validation passed: Build145 fixture, diff whitespace check, exact Build143
+76-patch/workflow/reuse-test parity. Full iOS CI and phone test pending.

@@ -1,3 +1,15 @@
+# Current checkpoint — Build145
+
+Build144 produced very glitchy graphics on the phone with roughly unchanged
+FPS. Its bounded texture eviction is reverted. Build145 restores Build143's
+production renderer patches while retaining the existing CPU optimizations.
+The exact corruption mechanism is unconfirmed; clean shutdown is not proof
+of correct graphics. iOS compilation and phone visual validation are pending.
+
+Once ready, install ARMSX3_iOS16_INSTALL_THIS_IPA, use Quick start -> Start game,
+test the same menu for about60seconds, then Stop and share the log and whether
+graphics are restored. This recovery build does not promise an FPS gain.
+
 # Current checkpoint — Build144
 
 Build143 reached the menu, then slowed to about1.12FPS across four complete
