@@ -9019,3 +9019,105 @@ Stop game, share log/responsiveness. Look for “iOS SPU dispatch profile” tog
 with HOST CPU and iOS RSX timing. Decode repeated PC/opcodes with native sources,
 account for untracked coverage and quantify overhead before a targeted change.
 Graphics/input/starter-car purchase work; driving remains unconfirmed.
+
+
+## Build139 — retire geometry between draws after an attribute-ring OOM
+
+Latest attachment read directly from upload:
+ARMSX3-startup-20261016-013526-546-37950.txt, PID 37950, Build138.
+Parent main 9421381f6ede00fd46d8029f58db4d7cadc0e3e0; tree
+34d9d616c9cab7c8514821cb892582a1e0b1772c; installable run 38833243398.
+
+Phone evidence and revised priority:
+- UI FAILED because RSX hit VK_ERROR_OUT_OF_DEVICE_MEMORY, not because the
+  user requested Stop. Last heartbeat at 1792114429.690273 had 1902 accepted
+  presents. Fatal at 4431.826087; runtime caught it at 4431.829302 and cleaned
+  up. Device/instance gone 4436.189710; FXO 4436.378866; VM 4436.381660;
+  fully stopped with zero live CPU threads 4436.382902; UI FAIL 4436.394583.
+- At 4430.429575 the attribute buffer starts growing 64->80->96->112->128->
+  144->160 MiB over about 1.4 seconds. Requests only 550,473,255,92,67,492 KiB.
+  Several allocation recoveries succeed, then the 160 MiB replacement is refused
+  (system pool=1, pool total=274 MiB, reported heap cap=1024 MiB). This is a
+  geometry-stream retention problem before the existing 1 GiB reclaim ceiling.
+  The heap budget check does not predict what the iOS driver can allocate.
+- 9 complete slow windows: 143 frames / 94.2113 seconds = 1.52 FPS. Startup
+  remains near 30 FPS. Late FIFO-empty wall shares reach about 80–86%; the
+  4422.792212 window instead spends 43.6% in texcache lookup and only 2.5%
+  FIFO idle. 193 completed texture-upload batches, about 6.17 GiB, pending=0.
+  Texture batching alone cannot bound a draw burst with few texture uploads.
+- All six SPUs emit 17 instruction-profile reports including final flushes.
+  Kernel2/3 total 513260/508669 samples, 420100/419957 untracked (about 82%).
+  Secondary Kernel0 970817 samples/718981 untracked; Primary Kernel4
+  272910/149193. Primary2/3 contain many different PC/opcodes around d3c4–d504;
+  Primary4 has a repeated four-instruction loop around cacc–cad8/b828–b834.
+  This is instruction frequency with incomplete coverage, not CPU time and not
+  proof of safe idle loops. Do not skip guest work based on these samples.
+- No controlled Build137/138 FPS comparison; diagnostic countdown, scene, timing
+  and thermal state can differ. Address the concrete fatal allocation first.
+
+Patch0073-ios-retire-geometry-between-draws.patch:
+- VKGSRender::end invokes reclaim_geometry_uploads after dirty frame-context
+  handling, before pipeline analysis, texture/sampler locking, load_program_env
+  or emit_geometry. No new draw's offsets or CPU upload pointers exist yet.
+  Deliberately not called from grow()/mid-upload/mid-subdraw with live temporary
+  allocations. A very large single guest draw still uses native growth; this
+  is a batching watermark, not a universal hard cap or an allocator OOM retry.
+- iOS-only checks: skip uninterruptible/flushing/deadlock or absent geometry
+  heaps; trigger if pending attributes>=32 MiB OR indices>=8 MiB (half of the
+  initial 64/16 MiB rings). No dependency on presents or texture-upload bytes.
+- Capture submitted CB pointer, native flush_command_queue(), then CHECK_RESULT
+  on its wait(FRAME_PRESENT_TIMEOUT). Native success-only monotonic snapshots
+  return managed ring space. Timeout/device failure leaves snapshots/memory
+  pending and skips cache invalidation. No early GET reset or buffer deletion.
+- After SUCCESS, purge cached vertex ranges, reset the three shader bulk
+  allocators, mark vertex/fragment contexts, texture parameters, transform and
+  fragment constants, raster stipple and interpreter instruction data dirty.
+  Subsequent load_program_env rebuilds references before ring bytes are reused.
+  Bulk reset simply discards unused suballocations; it never rewinds the ring.
+- Log “iOS: completed geometry batch” with attribute/index bytes and pending
+  bytes. Existing CB render-pass/query close, queue ordering and state reload
+  behavior is used. No manual Vulkan command injection or altered draw semantics.
+- Non-iOS helper is empty; prior growth policy and all texture/image/input/audio
+  policies remain. A new generic bulk_allocator::reset is only used here.
+
+Patch0074-ios-make-spu-dispatch-profile-opt-in.patch:
+- Gate only the four Build138 observer regions with the compile definition
+  ARMSX3_IOS_SPU_DISPATCH_PROFILE=1. Normal build has no per-instruction observer
+  decrement, sample table, TLS initialization or profile logging. Keep optional
+  code/test available for targeted investigation; no UI option required.
+- Preserve the two earlier independent iOS immutable/JIT boundary guards in
+  SPUCommonRecompiler.cpp. No decoder change, LLVM enablement or protection bypass.
+  RSX wall reports and Mach kernel CPU sampling remain active.
+
+Validation completed:
+- All 74 patches check/apply in order to exact pinned92b931b9... in
+  native139-validation, native whitespace clean; changed Python scripts parse.
+- New test_ios_geometry_retirement.py reconstructs relevant exact source through
+  all patches. Compiles actual ring helper, CB chunk/wait, snapshot manager,
+  pipeline flags, bulk reset and new renderer helper. Queue submission, byte
+  storage and cache/environment consumers are explicit host interfaces; placement
+  is checked against the real end() source. Not a full Vulkan/Metal execution.
+- ASAN+UBSAN, warnings as errors, iOS/macOS/Linux profiles pass. Tests cover both
+  watermarks, below-threshold no-op, all skip gates, success-only cache purge/
+  bulk reset/state flags, preservation of unrelated flags, timeout/device-lost
+  retaining pending GET/snapshot/refs, and index-only pressure. Six-and-quarter
+  GiB of small vertex/index draws without presents/texture uploads reuses original
+  64/16 MiB heaps with no growth; pending byte markers survive until completion.
+  Same host workload without the hook reproduces the driver growth refusal.
+- SPU test now runs iOS profiling-enabled, iOS DEFAULT-disabled, macOS, Linux:
+  all pass. Optional histogram behavior remains covered; default has zero starts
+  or reports and matches baseline PC/branch/state results.
+- Production runtime/Stop/JIT finalizer, upload retirement including historical
+  negatives, graphics-memory/worker cleanup, menu-memory, texture-reuse and
+  frozen120stage/Quickstart Build139 fixture pass. ASAN_OPTIONS=detect_leaks=0
+  matches CI's environment limitation; ASAN+UBSAN stay enabled.
+- Workflow adds geometry regression to intake-host;34+2 prerequisites unchanged.
+  No local Apple SDK/full linked emulator test. Real effect needs next phone log.
+
+Next publish139 with lease9421381..., check installable workflow queued ONCE,
+DO NOT monitor. User authorizes publication/builds. Install
+ARMSX3_iOS16_INSTALL_THIS_IPA, Quick start -> Start game, repeat the menu/car
+sequence that led to OOM and stay in that scene about60seconds, Stop, share log.
+Check geometry batch pending bytes, any further attribute growth/OOM, cleanup,
+RSX CPU/wall and FPS. Profiling disabled may remove overhead but promise no gain.
+Graphics/input/starter-car purchase work; driving remains unconfirmed.

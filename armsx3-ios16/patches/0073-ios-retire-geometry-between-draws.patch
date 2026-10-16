@@ -1,0 +1,90 @@
+--- a/rpcs3/Emu/RSX/Common/ring_buffer_helper.h
++++ b/rpcs3/Emu/RSX/Common/ring_buffer_helper.h
+@@ -206,6 +206,13 @@
+ 				return alloc(static_cast<u32>(size / ElementSize));
+ 			}
+ 
++			// Discard unused suballocations after the owning GPU batch retires.
++			void reset()
++			{
++				m_capacity = 0;
++				m_address = 0;
++			}
++
+ 			u32 capacity() const
+ 			{
+ 				return m_capacity;
+--- a/rpcs3/Emu/RSX/VK/VKGSRender.h
++++ b/rpcs3/Emu/RSX/VK/VKGSRender.h
+@@ -312,6 +312,7 @@
+ 	void update_vertex_env(u32 id, const vk::vertex_upload_info& vertex_info);
+ 	void upload_transform_constants(const rsx::io_buffer& buffer);
+ 
++	void reclaim_geometry_uploads();
+ 	void reclaim_texture_uploads();
+ 	u64 m_ios_texture_cache_next_check = 288ull * 0x100000;
+ 	void reclaim_texture_cache();
+--- a/rpcs3/Emu/RSX/VK/VKGSRender.cpp
++++ b/rpcs3/Emu/RSX/VK/VKGSRender.cpp
+@@ -1757,6 +1757,50 @@
+ 	}
+ }
+ 
++void VKGSRender::reclaim_geometry_uploads()
++{
++#if defined(__APPLE__) && TARGET_OS_IOS
++	// Between guest draws: no new vertex/index range or shader environment
++	// for this draw has been allocated yet. Do not reclaim inside an upload.
++	if (vk::is_uninterruptible() ||
++		(m_queue_status & flush_queue_state::flushing) ||
++		(m_queue_status & flush_queue_state::deadlock) ||
++		!m_attrib_ring_info.heap || !m_index_buffer_ring_info.heap)
++	{
++		return;
++	}
++
++	constexpr usz mb = 0x100000;
++	const auto attrib_bytes = m_attrib_ring_info.pending_bytes();
++	const auto index_bytes = m_index_buffer_ring_info.pending_bytes();
++	if (attrib_bytes < 32 * mb && index_bytes < 8 * mb) return;
++
++	ensure(is_current_thread());
++	auto* submitted = m_current_command_buffer;
++	flush_command_queue();
++	CHECK_RESULT(submitted->wait(FRAME_PRESENT_TIMEOUT));
++
++	// Completion returns all managed rings through the command-buffer snapshot.
++	// Future draws must rebuild cached references before those bytes are reused.
++	m_vertex_cache->purge();
++	m_vertex_env_allocator->reset();
++	m_transform_constants_allocator->reset();
++	m_fragment_constants_allocator->reset();
++	m_graphics_state |= rsx::pipeline_state::vertex_state_dirty |
++		rsx::pipeline_state::fragment_state_dirty |
++		rsx::pipeline_state::fragment_texture_state_dirty |
++		rsx::pipeline_state::transform_constants_dirty |
++		rsx::pipeline_state::fragment_constants_dirty |
++		rsx::pipeline_state::polygon_stipple_pattern_dirty;
++	m_interpreter_state |= rsx::vertex_program_dirty | rsx::fragment_program_dirty;
++
++	rsx_log.warning("iOS: completed geometry batch (attrib=%lluK, index=%lluK); pending %lluK/%lluK.",
++		static_cast<u64>(attrib_bytes / 1024), static_cast<u64>(index_bytes / 1024),
++		static_cast<u64>(m_attrib_ring_info.pending_bytes() / 1024),
++		static_cast<u64>(m_index_buffer_ring_info.pending_bytes() / 1024));
++#endif
++}
++
+ void VKGSRender::reclaim_texture_uploads()
+ {
+ #if defined(__APPLE__) && TARGET_OS_IOS
+--- a/rpcs3/Emu/RSX/VK/VKDraw.cpp
++++ b/rpcs3/Emu/RSX/VK/VKDraw.cpp
+@@ -1400,6 +1400,8 @@
+ 		m_current_frame->flags &= ~frame_context_state::dirty;
+ 	}
+ 
++	reclaim_geometry_uploads();
++
+ 	analyse_current_rsx_pipeline();
+ 
+ 	m_frame_stats.setup_time += m_profiler.duration();

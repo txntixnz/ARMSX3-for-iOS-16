@@ -119,10 +119,11 @@ with tempfile.TemporaryDirectory(prefix='armsx3-spu-profile-') as temp:
     host=host.replace('static void old_interpreter(spu_thread&,void*,u8*);', 'static void old_interpreter(spu_thread&,void*,u8*);static void old_interpreter_before(spu_thread&,void*,u8*);')
     host=host.replace('++s.decoded;', '++utils::ticks;++s.decoded;if(s.decoded==host_limit)s.state.value=1;')
     host=host.replace('if(op.opcode==0x10000001)', 'if(op.opcode==0x30000000){s.pc=0;return false;}\n if(op.opcode==0x10000001)')
-    for name,apple,ios in [('ios',True,True),('macos',True,False),('linux',False,False)]:
+    for name,apple,ios,enabled in [('ios-profile',True,True,True),('ios-default',True,True,False),('macos',True,False,False),('linux',False,False,False)]:
         code=prelude+'\n#include <string>\n'+support+host+before+'\n#if IOS_TEST\n'+profile+'\n#endif\n'+interpreter+checks
         (work/'test.cpp').write_text(code)
-        options=[f'-DIOS_TEST={int(ios)}',f'-DTARGET_OS_IOS={int(ios)}']
+        options=[f'-DIOS_TEST={int(enabled)}',f'-DTARGET_OS_IOS={int(ios)}']
+        if enabled:options+=['-DARMSX3_IOS_SPU_DISPATCH_PROFILE=1']
         if apple:options+=['-D__APPLE__=1']
         subprocess.run(['g++','-std=c++23','-Wall','-Wextra','-Werror','-pthread','-fsanitize=address,undefined',
                         '-fno-omit-frame-pointer',*options,str(work/'test.cpp'),'-o',str(work/'test')],check=True)

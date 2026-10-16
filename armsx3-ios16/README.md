@@ -1,36 +1,36 @@
-# Current checkpoint — Build138
+# Current checkpoint — Build139
 
-Build137 completed a clean phone session and Stop with 2243 accepted presents.
-Its 25 complete slow windows averaged 1.98 FPS over 257.88 seconds. The last
-20 CPU samples show the RSX thread using 17.1% of one core, versus 78.9% in
-the previous run's comparable late samples. The timed empty-FIFO wait reduced
-renderer CPU use; three SPU workers still consume about 97–99% each. These
-user-driven sessions are not a controlled before/after FPS benchmark.
+Build138 ended with VK_ERROR_OUT_OF_DEVICE_MEMORY. The attribute ring grew
+from 64 to 160 MiB in six steps for requests of only 67–550 KiB; the final
+160 MiB replacement was refused. Native cleanup completed with zero live CPU
+threads. Its nine complete slow windows averaged 1.52 FPS; different manual
+sessions and profiling overhead prevent a controlled FPS comparison.
 
-Build138 adds sparse instruction-dispatch sampling inside each SPU worker's
-own static interpreter. Every 16384–32767 fetched instructions, it records
-the existing PC/opcode pair in a fixed 128-entry table. Reports every ten
-seconds list six frequent pairs, total samples and samples the full table
-could not track. The data persists across gateway re-entries; collection
-does not read another worker's registers or guest memory.
+Build139 submits and waits for a geometry batch between guest draws when
+unretired attributes reach 32 MiB or indices reach 8 MiB. A successful command
+buffer fence returns ring space through the existing snapshots, even without
+a present or texture upload. Vertex-cache references, unused bulk allocations
+and shader environment data are renewed before subsequent draws reuse bytes.
+Timeouts/errors do not release pending memory. Large individual draws retain
+the native growth path; these thresholds are not a universal hard memory cap.
 
-This measures sampled instruction frequency, not CPU time. The table can
-miss later instruction sites when full, and the per-instruction countdown
-has device overhead that remains unmeasured. The reports are evidence for
-the next optimization; this diagnostic change does not promise higher FPS.
-The verified renderer wait remains active alongside RSX wall/host CPU reports.
+The SPU trace showed varied instruction sites and substantial missing coverage,
+so it does not establish a safe guest-loop shortcut. Per-instruction profiling
+is now opt-in with ARMSX3_IOS_SPU_DISPATCH_PROFILE=1; the normal build has no
+profiling countdown. RSX wall timing and kernel CPU reports remain active.
+Build137's verified renderer idle-CPU saving remains in place.
 
-All 72 patches apply to the pinned native source. Sanitized host checks pass
-for the exact SPU interpreter/profile with modeled instruction and platform
-interfaces: matching PC/branch/Stop behavior, bounded coverage reporting,
-short gateway re-entries and six-worker isolation. Runtime, SPU entry, FIFO
-maintenance and frozen 120-stage/Quickstart regressions also pass. Apple SDK
-compilation and actual device profiling still require the next test.
+All 74 patches apply to the pinned native source. Sanitized host checks pass
+for exact geometry batch/ring/fence/snapshot code with modeled queue/GPU/cache
+interfaces: 6.25 GiB of small geometry uploads without growth, the missing-hook
+failure, success-only cache/state renewal, guard conditions and failed waits.
+Runtime, texture memory/reuse, upload retirement and frozen Quickstart checks
+pass. Apple SDK compilation, real graphics and phone performance remain pending.
 
-Install `ARMSX3_iOS16_INSTALL_THIS_IPA`, **Quick start -> Start game**, and spend
-about 60 seconds in the **slow 3D menu/car screen**. Finish with **Stop game**
-and share the log and responsiveness. Imported firmware/disc/cache persist.
-Full 120 checks are optional. Audio remains null; driving is unconfirmed.
+Install `ARMSX3_iOS16_INSTALL_THIS_IPA`, **Quick start -> Start game**, and repeat
+the menu/car sequence that failed, then stay there about 60 seconds. Finish
+with **Stop game** and share the log. Imported firmware/disc/cache persist;
+full 120 checks are optional. Audio remains null; driving is unconfirmed.
 Historical checkpoints follow.
 
 # ARMSX3 for iOS 16 — P0 port checkpoint

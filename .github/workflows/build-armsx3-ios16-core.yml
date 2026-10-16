@@ -164,6 +164,7 @@ jobs:
           python3 armsx3-ios16/tests/test_ios_zcull_reports.py upstream-armsx3
           python3 armsx3-ios16/tests/test_ios_graphics_memory.py upstream-armsx3
           python3 armsx3-ios16/tests/test_ios_upload_retirement.py upstream-armsx3
+          python3 armsx3-ios16/tests/test_ios_geometry_retirement.py upstream-armsx3
           python3 armsx3-ios16/tests/test_vulkan_config.py upstream-armsx3
           python3 armsx3-ios16/tests/test_jit_lifecycle.py upstream-armsx3
           python3 armsx3-ios16/tests/test_spu_cache_startup.py upstream-armsx3

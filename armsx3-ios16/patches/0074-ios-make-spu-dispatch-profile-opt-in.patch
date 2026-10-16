@@ -1,0 +1,38 @@
+--- a/rpcs3/Emu/Cell/SPUCommonRecompiler.cpp
++++ b/rpcs3/Emu/Cell/SPUCommonRecompiler.cpp
+@@ -2942,7 +2942,7 @@
+ 	spu_runtime::g_tail_escape(&spu, func, rip);
+ }
+ 
+-#if defined(__APPLE__) && TARGET_OS_IOS
++#if defined(__APPLE__) && TARGET_OS_IOS && defined(ARMSX3_IOS_SPU_DISPATCH_PROFILE) && ARMSX3_IOS_SPU_DISPATCH_PROFILE
+ // Owned entirely by this SPU worker, persisting across gateway re-entries.
+ // Only an already-fetched opcode and this worker's PC enter the table.
+ // Keep destruction trivial: the SPU gateway may abandon interpreter frames.
+@@ -3029,7 +3029,7 @@
+ 
+ 	// LS pointer
+ 	const auto base = static_cast<const u8*>(ls);
+-#if defined(__APPLE__) && TARGET_OS_IOS
++#if defined(__APPLE__) && TARGET_OS_IOS && defined(ARMSX3_IOS_SPU_DISPATCH_PROFILE) && ARMSX3_IOS_SPU_DISPATCH_PROFILE
+ 	static thread_local ios_spu_dispatch_profile thread_profile(spu.lv2_id);
+ 	auto* const profile = &thread_profile;
+ #endif
+@@ -3065,7 +3065,7 @@
+ 		}
+ 
+ 		const u32 op = *reinterpret_cast<const be_t<u32>*>(base + spu.pc);
+-#if defined(__APPLE__) && TARGET_OS_IOS
++#if defined(__APPLE__) && TARGET_OS_IOS && defined(ARMSX3_IOS_SPU_DISPATCH_PROFILE) && ARMSX3_IOS_SPU_DISPATCH_PROFILE
+ 		if (--profile->remaining == 0) [[unlikely]]
+ 		{
+ 			profile->record(spu.pc, op);
+@@ -3075,7 +3075,7 @@
+ 		if (table.decode(op)(spu, {op}))
+ 			spu.pc += 4;
+ 	}
+-#if defined(__APPLE__) && TARGET_OS_IOS
++#if defined(__APPLE__) && TARGET_OS_IOS && defined(ARMSX3_IOS_SPU_DISPATCH_PROFILE) && ARMSX3_IOS_SPU_DISPATCH_PROFILE
+ 	if (::is_stopped(spu.state)) profile->report(true);
+ #endif
+ }
