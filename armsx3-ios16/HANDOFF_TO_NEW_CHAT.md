@@ -5279,3 +5279,83 @@ DO NOT monitor. User authorizes publication/builds. Latest device log remains
 Build139 (2141presents/clean Stop); do not invent Build140 performance. Once
 ready use ARMSX3_iOS16_INSTALL_THIS_IPA, Quick start -> Start game, same slow3D
 menu about60seconds, Stop, share log. No promised FPS gain. Driving unconfirmed.
+
+## Build142 — native iOS SPU byte rotates and zero-fill shifts
+
+Latest attachment read directly from upload:
+ARMSX3-startup-20261016-030418-844-39009.txt, PID39009, Build141.
+Parent main8382c229064992eb7adc9bd07ba0b4e24c923239; tree
+2ba1b3159d890ef2bbb8281d387f7b2a46cb5125; installable run38840871782.
+
+Phone evidence:
+- Running1792119666.234504; user Stop9855.876337. Final2058accepted presents;
+  RSX final9855.879532; GPU idle9855.895592; device/instance gone9856.891771;
+  FXO9857.078013; VM9857.080998; fully stopped zeroCPUs9857.085281;
+  RENDER/UI PASS9857.087155/9857.094070. No fatal/OOM/hung teardown.
+-12complete slow windows:321frames/123.4356seconds=2.6005FPS, weighted empty
+  FIFO wall61.93%, late stable windows~69–77%. Build139 had17windows/395frames/
+  176.3714seconds=2.2396FPS. Different manual scenes, caches and thermal state:
+  do not claim a controlled SHUFB speedup from this comparison alone.
+- Last20 kernel samples: Primary SPURS Kernel2/3 each98.1% of a core; Secondary
+  Kernel0 95.6%; other SPUs51.0/52.7/71.5%. RSX19.5%, PPU Render Thread14.9%.
+  Guest CPU work remains a target; utilization is not instruction throughput.
+-117texture upload batches/about3.819GiB,17texture budget passes. No ring growth
+  or geometry-batch report, so Build139's watermark remains unexercised on this
+  session. Joined28PPU+6SPU;16,951,035,345PPU estimated instructions and
+  3,732,758completed HLE/LV2 calls. No SPU dispatch-sampler overhead/logs.
+
+Patch0076-ios-neon-spu-byte-rotate-shifts.patch:
+- SPUInterpreter.cpp only, three small inline helpers under ARCH_ARM64 &&
+  __APPLE__ && TARGET_OS_IOS. Replace aligned32/64byte temporary arrays and
+  a dynamic unaligned stack load with native register-vector lookup paths.
+- All nine forms: ROTQBYBI/ROTQMBYBI/SHLQBYBI, ROTQBY/ROTQMBY/SHLQBY,
+  ROTQBYI/ROTQMBYI/SHLQBYI. The earlier Build138 trace includes ROTQBY opcodes
+  0x3b9325c0 and0x3b8991a5; their decoder index=word>>21=0x1dc. This establishes
+  use, not a CPU-time fraction. Do not infer that all SPU time is these ops.
+- A lane-number vector0..15 minus byte count (masked15) selects rotation;
+  lane+count selects zero-fill right shift; lane-count with unsigned-byte wrap
+  selects zero-fill left shift. TBL indices>=16 yield zero, including counts
+  16..31. Native register and BYBI>>3/negation/immediate masks remain exact.
+- Source operands are evaluated before destination assignment. Preserve all
+  RA/RB/RT aliases, return=true, PC/state behavior and non-iOS scalar bodies.
+  No guest memory access, heap allocation, table cache, TLS/counter, JIT code,
+  floating-point change, decoder switch or guest-work skipping is introduced.
+- Arm's primary TBL reference confirms out-of-range zero semantics:
+  https://documentation-service.arm.com/static/6245c734b059dc5ff9a8bdab
+  (D6.225). This confirms instruction behavior, not a measured game speedup.
+- Keep the tested SHUFB change, FIFO parking, geometry/texture lifetime fixes,
+  input and null audio. Full mutable-JIT/LLVM work remains separate and must
+  not bypass apple_jit_write_protect or enable a decoder with a missing backend.
+
+Validation:
+- All76 patches check/apply to exact92b931b9fb5eef7f1317cb482917dfc19aceebd9
+  in native142-validation; native whitespace clean; changed Python scripts parse.
+- New test_ios_spu_byte_shifts.py reconstructs actual native before/after code,
+  verifies scope is limited to three helpers/nine bodies, and compiles real
+  v128/SPU opcode/bitfield layouts. Reuses the explicit register-context prefix
+  from the shuffle test; Linux models only new NEON vector operations. Existing
+  SSE/unaligned-load implementations execute on the host as the golden baseline.
+- ASAN+UBSAN, warnings as errors, all five profiles pass: iOS ARM uses the new
+  code; macOS ARM/other ARM/iOS x86/Linux x86 keep the old path.224928cases each:
+  all128immediates, raw counts0..255 and all mask/zero-fill boundaries, random
+  full32bit high counts, all small source/destination alias patterns,20000random
+  cases per opcode across128registers. Old/new/independent byte-index oracle
+  agree on the full register context, PC and guard; return=true preserved.
+- Existing SHUFB test now checks patch0075's source-scope assertion against its
+  immediate post-patch source, then tests the current final SHUFB body. Later
+  independent instruction patches no longer falsely fail a whole-file check.
+  Its five profiles and captured Apple tbl.16b parser regressions pass.
+- Historical SPU entry/missing mutable-JIT API rejection and frozen120stage/
+  four-stage Quickstart Build142 fixture pass. No unrelated native code change.
+- Workflow adds host byte-shift regression and actual Xcode iOS16/apple-a15
+  assembly validation before FFmpeg/core compile. Require one TBL in each of
+  nine new bodies, no scalar LDRB and no SP/x29 stack memory access. Same accepted
+  Apple/GNU mnemonic spellings as the repaired shuffle check. No local Apple SDK:
+  these codegen checks/full linked build and real phone effect remain pending.
+  All34+2 prerequisites retained. No agents/images. No promised FPS gain.
+
+Next publish142 with lease8382c22..., verify installable workflow queued ONCE,
+DO NOT monitor. User authorizes publication/builds. Install
+ARMSX3_iOS16_INSTALL_THIS_IPA, Quick start -> Start game, same slow3Dmenu/car
+screen about60seconds, Stop, share log/responsiveness. Check frame progress,
+HOST CPU/RSX FIFO wall and any geometry batches/OOM. Driving remains unconfirmed.

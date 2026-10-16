@@ -1,0 +1,148 @@
+--- a/rpcs3/Emu/Cell/SPUInterpreter.cpp
++++ b/rpcs3/Emu/Cell/SPUInterpreter.cpp
+@@ -766,30 +766,65 @@
+ 	return true;
+ }
+ 
++#if defined(ARCH_ARM64) && defined(__APPLE__) && TARGET_OS_IOS
++static inline v128 ios_spu_rotate_bytes(const v128& a, u32 count)
++{
++	const uint8x16_t lanes{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15};
++	const auto indices = vandq_u8(vsubq_u8(lanes, vdupq_n_u8(count)), vdupq_n_u8(15));
++	return vqtbl1q_u8(a, indices);
++}
++
++static inline v128 ios_spu_shift_bytes_right(const v128& a, u32 count)
++{
++	const uint8x16_t lanes{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15};
++	// TBL zeros an index outside the source, including shifts >=16 bytes.
++	return vqtbl1q_u8(a, vaddq_u8(lanes, vdupq_n_u8(count)));
++}
++
++static inline v128 ios_spu_shift_bytes_left(const v128& a, u32 count)
++{
++	const uint8x16_t lanes{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15};
++	// Unsigned subtraction wraps negative indices outside the 16-byte table.
++	return vqtbl1q_u8(a, vsubq_u8(lanes, vdupq_n_u8(count)));
++}
++#endif
++
+ template <spu_exec_bit... Flags>
+ bool ROTQBYBI(spu_thread& spu, spu_opcode_t op)
+ {
++#if defined(ARCH_ARM64) && defined(__APPLE__) && TARGET_OS_IOS
++	spu.gpr[op.rt] = ios_spu_rotate_bytes(spu.gpr[op.ra], spu.gpr[op.rb]._u32[3] >> 3 & 0xf);
++#else
+ 	const __m128i a = spu.gpr[op.ra];
+ 	alignas(32) const __m128i buf[2]{a, a};
+ 	spu.gpr[op.rt] = _mm_loadu_si128(reinterpret_cast<const __m128i*>(reinterpret_cast<const u8*>(buf) + (16 - (spu.gpr[op.rb]._u32[3] >> 3 & 0xf))));
++#endif
+ 	return true;
+ }
+ 
+ template <spu_exec_bit... Flags>
+ bool ROTQMBYBI(spu_thread& spu, spu_opcode_t op)
+ {
++#if defined(ARCH_ARM64) && defined(__APPLE__) && TARGET_OS_IOS
++	spu.gpr[op.rt] = ios_spu_shift_bytes_right(spu.gpr[op.ra], (0 - (spu.gpr[op.rb]._u32[3] >> 3)) & 0x1f);
++#else
+ 	const __m128i a = spu.gpr[op.ra];
+ 	alignas(64) const __m128i buf[3]{a, _mm_setzero_si128(), _mm_setzero_si128()};
+ 	spu.gpr[op.rt] = _mm_loadu_si128(reinterpret_cast<const __m128i*>(reinterpret_cast<const u8*>(buf) + ((0 - (spu.gpr[op.rb]._u32[3] >> 3)) & 0x1f)));
++#endif
+ 	return true;
+ }
+ 
+ template <spu_exec_bit... Flags>
+ bool SHLQBYBI(spu_thread& spu, spu_opcode_t op)
+ {
++#if defined(ARCH_ARM64) && defined(__APPLE__) && TARGET_OS_IOS
++	spu.gpr[op.rt] = ios_spu_shift_bytes_left(spu.gpr[op.ra], spu.gpr[op.rb]._u32[3] >> 3 & 0x1f);
++#else
+ 	const __m128i a = spu.gpr[op.ra];
+ 	alignas(64) const __m128i buf[3]{_mm_setzero_si128(), _mm_setzero_si128(), a};
+ 	spu.gpr[op.rt] = _mm_loadu_si128(reinterpret_cast<const __m128i*>(reinterpret_cast<const u8*>(buf) + (32 - (spu.gpr[op.rb]._u32[3] >> 3 & 0x1f))));
++#endif
+ 	return true;
+ }
+ 
+@@ -879,27 +914,39 @@
+ template <spu_exec_bit... Flags>
+ bool ROTQBY(spu_thread& spu, spu_opcode_t op)
+ {
++#if defined(ARCH_ARM64) && defined(__APPLE__) && TARGET_OS_IOS
++	spu.gpr[op.rt] = ios_spu_rotate_bytes(spu.gpr[op.ra], spu.gpr[op.rb]._u32[3] & 0xf);
++#else
+ 	const __m128i a = spu.gpr[op.ra];
+ 	alignas(32) const __m128i buf[2]{a, a};
+ 	spu.gpr[op.rt] = _mm_loadu_si128(reinterpret_cast<const __m128i*>(reinterpret_cast<const u8*>(buf) + (16 - (spu.gpr[op.rb]._u32[3] & 0xf))));
++#endif
+ 	return true;
+ }
+ 
+ template <spu_exec_bit... Flags>
+ bool ROTQMBY(spu_thread& spu, spu_opcode_t op)
+ {
++#if defined(ARCH_ARM64) && defined(__APPLE__) && TARGET_OS_IOS
++	spu.gpr[op.rt] = ios_spu_shift_bytes_right(spu.gpr[op.ra], (0 - spu.gpr[op.rb]._u32[3]) & 0x1f);
++#else
+ 	const __m128i a = spu.gpr[op.ra];
+ 	alignas(64) const __m128i buf[3]{a, _mm_setzero_si128(), _mm_setzero_si128()};
+ 	spu.gpr[op.rt] = _mm_loadu_si128(reinterpret_cast<const __m128i*>(reinterpret_cast<const u8*>(buf) + ((0 - spu.gpr[op.rb]._u32[3]) & 0x1f)));
++#endif
+ 	return true;
+ }
+ 
+ template <spu_exec_bit... Flags>
+ bool SHLQBY(spu_thread& spu, spu_opcode_t op)
+ {
++#if defined(ARCH_ARM64) && defined(__APPLE__) && TARGET_OS_IOS
++	spu.gpr[op.rt] = ios_spu_shift_bytes_left(spu.gpr[op.ra], spu.gpr[op.rb]._u32[3] & 0x1f);
++#else
+ 	const __m128i a = spu.gpr[op.ra];
+ 	alignas(64) const __m128i buf[3]{_mm_setzero_si128(), _mm_setzero_si128(), a};
+ 	spu.gpr[op.rt] = _mm_loadu_si128(reinterpret_cast<const __m128i*>(reinterpret_cast<const u8*>(buf) + (32 - (spu.gpr[op.rb]._u32[3] & 0x1f))));
++#endif
+ 	return true;
+ }
+ 
+@@ -996,27 +1043,39 @@
+ template <spu_exec_bit... Flags>
+ bool ROTQBYI(spu_thread& spu, spu_opcode_t op)
+ {
++#if defined(ARCH_ARM64) && defined(__APPLE__) && TARGET_OS_IOS
++	spu.gpr[op.rt] = ios_spu_rotate_bytes(spu.gpr[op.ra], op.i7 & 0xf);
++#else
+ 	const __m128i a = spu.gpr[op.ra];
+ 	alignas(32) const __m128i buf[2]{a, a};
+ 	spu.gpr[op.rt] = _mm_loadu_si128(reinterpret_cast<const __m128i*>(reinterpret_cast<const u8*>(buf) + (16 - (op.i7 & 0xf))));
++#endif
+ 	return true;
+ }
+ 
+ template <spu_exec_bit... Flags>
+ bool ROTQMBYI(spu_thread& spu, spu_opcode_t op)
+ {
++#if defined(ARCH_ARM64) && defined(__APPLE__) && TARGET_OS_IOS
++	spu.gpr[op.rt] = ios_spu_shift_bytes_right(spu.gpr[op.ra], (0 - op.i7) & 0x1f);
++#else
+ 	const __m128i a = spu.gpr[op.ra];
+ 	alignas(64) const __m128i buf[3]{a, _mm_setzero_si128(), _mm_setzero_si128()};
+ 	spu.gpr[op.rt] = _mm_loadu_si128(reinterpret_cast<const __m128i*>(reinterpret_cast<const u8*>(buf) + ((0 - op.i7) & 0x1f)));
++#endif
+ 	return true;
+ }
+ 
+ template <spu_exec_bit... Flags>
+ bool SHLQBYI(spu_thread& spu, spu_opcode_t op)
+ {
++#if defined(ARCH_ARM64) && defined(__APPLE__) && TARGET_OS_IOS
++	spu.gpr[op.rt] = ios_spu_shift_bytes_left(spu.gpr[op.ra], op.i7 & 0x1f);
++#else
+ 	const __m128i a = spu.gpr[op.ra];
+ 	alignas(64) const __m128i buf[3]{_mm_setzero_si128(), _mm_setzero_si128(), a};
+ 	spu.gpr[op.rt] = _mm_loadu_si128(reinterpret_cast<const __m128i*>(reinterpret_cast<const u8*>(buf) + (32 - (op.i7 & 0x1f))));
++#endif
+ 	return true;
+ }
+ 

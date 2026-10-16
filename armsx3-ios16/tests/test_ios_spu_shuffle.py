@@ -115,13 +115,15 @@ int main(){
 with tempfile.TemporaryDirectory(prefix='armsx3-spu-shuffle-') as directory:
     work=Path(directory);file=work/path;file.parent.mkdir(parents=True)
     file.write_bytes(subprocess.check_output(['git','-C',str(native),'show',pin+':'+path]))
-    before=None
+    before=after_shuffle=None
     for patch in sorted((root/'patches').glob('*.patch')):
         if patch.name.startswith('0075'):before=file.read_text()
         subprocess.run(['git','apply','--include='+path,str(patch)],cwd=work,check=True)
-    after=file.read_text();assert before is not None
+        if patch.name.startswith('0075'):after_shuffle=file.read_text()
+    after=file.read_text();assert before is not None and after_shuffle is not None
     old=block(before,'bool SHUFB(spu_thread&');new=block(after,'bool SHUFB(spu_thread&')
-    assert after.replace(new,old,1)==before,'change escaped SHUFB body'
+    patched_shuffle=block(after_shuffle,'bool SHUFB(spu_thread&')
+    assert after_shuffle.replace(patched_shuffle,old,1)==before,'patch0075 escaped SHUFB body'
     assert old[old.index('// Select special values'):]==new[new.index('// Select special values'):]
     old=old.replace('bool SHUFB(', 'extern "C" bool armsx3_shufb_before(',1)
     new=new.replace('bool SHUFB(', 'extern "C" bool armsx3_shufb_a15(',1)
