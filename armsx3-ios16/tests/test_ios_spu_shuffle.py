@@ -18,6 +18,33 @@ def block(text,marker):
         depth+=(text[end]=='{')-(text[end]=='}');end+=1
     return text[start:end]
 
+def verify_a15_assembly(assembly):
+    marker=re.search(r'^_armsx3_shufb_a15:[^\n]*\n',assembly,re.M)
+    assert marker is not None,'missing SHUFB function in assembly'
+    body=assembly[marker.end():].split('.cfi_endproc',1)[0]
+    # Apple spells the vector arrangement on the mnemonic (tbl.16b),
+    # while GNU/LLVM syntax puts it on the operands (tbl v1.16b, ...).
+    assert len(re.findall(r'^\s*tbl(?:\.16b)?[ \t]+',body,re.M))==1,body
+    assert not re.search(r'^\s*ldrb[ \t]+',body,re.M),body
+
+def check_assembly_parser():
+    captured=(root/'tests/fixtures/a15-shufb-xcode16_4.txt').read_text()
+    verify_a15_assembly(captured)
+    gnu=captured.replace('tbl.16b\tv1, { v1, v2 }, v3','tbl\tv1.16b, { v1.16b, v2.16b }, v3.16b')
+    assert gnu!=captured
+    verify_a15_assembly(gnu)
+    verify_a15_assembly(captured+'\t.cfi_endproc\n_other_function:\n\tldrb w0, [x0]\n')
+    for invalid in [captured.replace('tbl.16b','orr.16b'),captured.replace('tbl.16b','tbl.8b'),
+                    captured+'\ttbl.16b v1, { v1, v2 }, v3\n',captured+'\tldrb w0, [x0]\n',
+                    captured.replace('_armsx3_shufb_a15:', '_other_function:')]:
+        try:verify_a15_assembly(invalid)
+        except AssertionError:pass
+        else:raise AssertionError('invalid assembly passed verification')
+    print('PASS: captured Xcode16.4 tbl.16b and GNU TBL accepted; missing/wrong-width/duplicate lookup, scalar byte loads and missing target rejected')
+
+check_assembly_parser()
+if '--assembly-only' in sys.argv:sys.exit(0)
+
 prefix=r'''
 #include <algorithm>
 #include <array>
@@ -109,10 +136,7 @@ with tempfile.TemporaryDirectory(prefix='armsx3-spu-shuffle-') as directory:
                         '-mcpu=apple-a15','-isysroot',sdk,'-DREAL_NEON=1','-DTARGET_OS_IOS=1',*includes,
                         '-S',str(cpp),'-o',str(asm)],check=True)
         assembly=asm.read_text()
-        body=assembly[assembly.index('_armsx3_shufb_a15:'):]
-        body=body.split('.cfi_endproc',1)[0]
-        assert len(re.findall(r'^\s+tbl\s',body,re.M))==1,body
-        assert not re.search(r'^\s+ldrb\s',body,re.M),body
+        verify_a15_assembly(assembly)
         print('PASS: real Xcode iOS16/apple-a15 SHUFB codegen emits one TBL and no scalar byte loads')
     else:
         cpp.write_text(code+cases)

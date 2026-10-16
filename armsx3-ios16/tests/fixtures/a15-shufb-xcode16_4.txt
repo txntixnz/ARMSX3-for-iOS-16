@@ -1,0 +1,28 @@
+; Actual assertion diagnostic from Build140, job116778306403 (Xcode16.4).
+; This fragment ends before .cfi_endproc, as printed by the original check.
+_armsx3_shufb_a15:                      ; @armsx3_shufb_a15
+	.cfi_startproc
+; %bb.0:
+	and	x8, x1, #0x7f
+	ldr	q0, [x0, x8, lsl #4]
+	ubfx	x8, x1, #14, #7
+	ldr	q1, [x0, x8, lsl #4]
+	ubfx	x8, x1, #7, #7
+	ldr	q2, [x0, x8, lsl #4]
+	movi.16b	v3, #31
+	bic.16b	v3, v3, v0
+	tbl.16b	v1, { v1, v2 }, v3
+	cmlt.16b	v2, v0, #0
+	movi.16b	v3, #191
+	cmhi.16b	v3, v0, v3
+	movi.16b	v4, #224
+	and.16b	v0, v0, v4
+	movi.16b	v4, #192
+	cmeq.16b	v0, v0, v4
+	bic.16b	v1, v1, v2
+	urhadd.16b	v0, v3, v0
+	orr.16b	v0, v1, v0
+	ubfx	x8, x1, #21, #7
+	str	q0, [x0, x8, lsl #4]
+	mov	w0, #1                          ; =0x1
+	ret

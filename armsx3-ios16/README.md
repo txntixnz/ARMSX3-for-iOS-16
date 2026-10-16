@@ -1,32 +1,26 @@
-# Current checkpoint — Build140
+# Current checkpoint — Build141
 
-Build139 completed a clean phone session with 2141 accepted presents and zero
-live CPU threads after Stop. There was no allocation failure or ring growth;
-the geometry-batch watermark was not reached, so that fix still needs device
-coverage. Seventeen slow windows averaged 2.24 FPS over 176.37 seconds. Three
-SPU workers remain near 97–99% of one core; RSX uses about 15% in late samples.
-Different manual sessions prevent a controlled before/after FPS comparison.
+Build140 passed the host jobs and Xcode compiled the new A15 SPU shuffle.
+Its assembly verification then rejected valid output: Apple spells the lookup
+`tbl.16b`, while the check expected `tbl`. The full emulator build had not
+started, and no new phone result or IPA came from that run.
 
-Build140 targets SPU SHUFB, a byte-shuffle instruction seen at multiple sites
-in the earlier busy-worker trace. On iOS ARM64, its 16 scalar table lookups
-become a native two-vector table lookup, following the pinned PPU VPERM path.
-The existing SPU special control values and register-alias behavior remain
-intact. This is an interpreter implementation change, with no guest-work
-skipping, decoder change or JIT enablement. Its phone FPS effect is unmeasured.
+Build141 corrects the checker to accept Apple and GNU instruction spelling.
+The actual failed Xcode output is now a regression fixture. Missing, wrong-width
+or duplicate lookups and scalar byte loads still fail verification. The native
+SPU optimization and all 75 patches remain as in Build140.
 
-All 75 patches apply. The old/new instruction bodies pass 127648 cases per
-host profile, using real native v128/opcode layouts and a modeled NEON lookup:
-every selector byte/lane, special values, alias combinations, all 128 registers
-and unchanged surrounding state. Five platform profiles verify the iOS-only
-selection. CI also checks actual iOS16/A15 assembly for one TBL and no scalar
-byte loads before compiling the full core; that Apple check is pending locally.
-SPU entry/JIT protections, runtime Stop, geometry retirement and Quickstart
-regressions pass. Existing graphics/input/memory policies remain in place.
+The assembly regression, five-platform SHUFB equivalence checks (127648 cases
+per profile), Build141/Quickstart fixture and Python syntax checks pass locally.
+Real A15 assembly verification and the complete iOS build run again in CI.
+The latest phone session remains Build139: clean Stop, 2141 presents, slow
+windows averaging 2.24 FPS, with three SPUs near 97–99% of a core. No FPS gain
+from the new shuffle has been measured yet.
 
-Install `ARMSX3_iOS16_INSTALL_THIS_IPA`, **Quick start -> Start game**, and spend
-about 60 seconds in the same slow 3D menu/car screen. Finish with **Stop game**
-and share the log and responsiveness. Full 120 checks are optional; imported
-firmware/disc/cache persist. Audio remains null; driving is unconfirmed.
+When the workflow finishes, install `ARMSX3_iOS16_INSTALL_THIS_IPA`, use
+**Quick start -> Start game**, and try the same slow 3D menu for about 60 seconds.
+Finish with **Stop game** and share the log/responsiveness. Imported state
+persists; full 120 checks are optional. Audio remains null; driving unconfirmed.
 Historical checkpoints follow.
 
 # ARMSX3 for iOS 16 — P0 port checkpoint

@@ -9202,3 +9202,49 @@ HOST CPU and RSX FIFO wall time; make no FPS promise from this isolated change.
 Keep Build139 geometry retirement/Build137 FIFO parking, texture quality/input,
 null audio and disabled-by-default SPU observer. Real LLVM/JIT work still needs
 proper iOS implementation; never bypass apple_jit_write_protect. Driving unconfirmed.
+
+## Build141 — accept Apple's valid vector mnemonic in the A15 assembly check
+
+User reported Build140 workflow failure. Inspected run38840055202, commit
+1b77f4ad952c1cbc8b727d8fcf87640c86110338, tree
+d26444932ed8ab7250b3358374f21fbb583921cb. All host jobs succeeded. Only core
+job116778306403 failed at step9 “Verify A15 SPU shuffle code generation”.
+
+Evidence/cause:
+- xcrun/Xcode16.4 successfully compiled the isolated real iOS16/apple-a15
+  instruction function. No compiler error. Its output has exactly one
+  `tbl.16b v1, { v1, v2 }, v3`, vector loads/stores and no scalar LDRB.
+- The Python regex `^\s+tbl\s` only accepted a bare TBL mnemonic. Apple's
+  assembly prints the arrangement suffix on the mnemonic, so the assertion
+  falsely counted zero. Failure happened before FFmpeg or the full core build.
+  Build140 produced no new phone/IPA evidence. Do not claim a native-code fix.
+
+Build141 changes:
+- Extract verify_a15_assembly and use it in both the fixture regression and the
+  real Xcode path. Accept `tbl` or `tbl.16b`, require exactly one, preserve the
+  no-scalar-byte-load requirement and scope checks to the target function.
+- Save actual failed diagnostic in tests/fixtures/a15-shufb-xcode16_4.txt.
+  It is the printed function fragment, ending before cfi_endproc as in the
+  original assertion; not a standalone executable assembly artifact.
+- Regression accepts captured Apple output and GNU operand suffix spelling,
+  accepts unrelated scalar loads after the target function ends, and rejects
+  missing/wrong-width/duplicate lookups, scalar LDRB inside the target, and a
+  missing target symbol. No checker skip or weakened instruction-count goal.
+- Version/fixture141, README and both handoffs updated. No native patch, decoder,
+  graphics, scheduler, Stop or JIT protection change; still75 patches. Retain
+  the Build140 vector optimization and the previous tested memory/idle fixes.
+
+Validation:
+- Captured assembly/parser regression passes, including negative cases.
+- All five sanitized native-layout SHUFB before/after/oracle profiles pass,
+  127648 cases each. Build141 frozen120stage/four-stage Quickstart fixture and
+  Python syntax checks pass. No need to rerun unrelated native suites locally;
+  all host prerequisites passed Build140 and CI retains all34+2 prerequisites.
+- The isolated Xcode compile is proven by the failed job's assembly; corrected
+  real-codegen assertion and full iOS archive/link still require the next CI run.
+
+Next publish141 with lease1b77f4a..., check queued installable workflow ONCE,
+DO NOT monitor. User authorizes publication/builds. Latest device log remains
+Build139 (2141presents/clean Stop); do not invent Build140 performance. Once
+ready use ARMSX3_iOS16_INSTALL_THIS_IPA, Quick start -> Start game, same slow3D
+menu about60seconds, Stop, share log. No promised FPS gain. Driving unconfirmed.
