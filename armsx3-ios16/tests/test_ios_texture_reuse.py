@@ -1,4 +1,4 @@
-"""Build134: reclaim completed idle allocations before evicting cached pixels.
+"""Historical Build134: reclaim completed idle allocations before evicting cached pixels.
 
 Compile exact native image retirement ctor/dtor, idle trim, quota, and renderer
 preflight. GPU completion, content lookup, FXO and fatal eviction are host
@@ -215,7 +215,7 @@ with tempfile.TemporaryDirectory(prefix='armsx3-reuse134-') as directory:
  for path in paths:
   target=directory/path;target.parent.mkdir(parents=True,exist_ok=True)
   target.write_bytes(subprocess.check_output(['git','show',pin+':'+path],cwd=native))
- patches=sorted((root/'patches').glob('*.patch'))
+ patches=sorted(p for p in (root/'patches').glob('*.patch') if int(p.name[:4])<=68)
  for patch in patches:
   if int(patch.name[:4])>67:break
   subprocess.run(['git','apply',*[f'--include={p}' for p in paths],str(patch)],cwd=directory,check=True,capture_output=True)

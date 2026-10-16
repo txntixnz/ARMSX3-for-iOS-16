@@ -1,39 +1,34 @@
-# Current checkpoint — Build143
+# Current checkpoint — Build144
 
-Build142's isolated Xcode compile succeeded, then its assembly check rejected a
-valid scalar byte read of the shift count. The captured ROTQBYBI body has one
-vector TBL lookup and no stack-memory access. Build143 corrects this check:
-the six register-count variants may read one byte at word3's offset12; the three
-immediate variants may not. One TBL and no stack-memory access remain required.
-Captured Apple assembly and positive/negative parser regressions cover this.
-The full iOS build and phone validation still require the corrected workflow.
+Build143 reached the menu, then slowed to about1.12FPS across four complete
+slow windows. Its61 texture-cache purges and462 completed upload batches moved
+14.66GiB of pixels. Repeated purges dropped roughly288MiB to37–41MiB, discarding
+useful scene content. The CPU/wakeups reports took no termination action. Stop
+completed cleanly with1900 accepted presents after about9seconds of cleanup.
 
-Build141 completed a clean phone session with 2058 accepted presents. Twelve
-slow windows averaged 2.60 FPS over 123.44 seconds, versus 2.24 in the previous
-phone run; these manual sessions are not a controlled comparison. The busiest
-SPUs still use about 96–98% of a core. No OOM, ring growth or geometry-batch
-trigger occurred; Stop completed with zero live CPU threads.
+Build144 changes soft-budget eviction to select older texture bindings until
+enough actual GPU allocation bytes are recovered. It keeps the288MiB quota,
+uses a256MiB target, releases completed idle images first, and preserves active
+fragment/vertex texture addresses. Shared protected pages, framebuffers, dirty
+and borrowed images are excluded. GPU completion, native page-unprotect logic,
+deferred destruction and driver drain protect every released allocation. Real
+allocation failures retain the existing emergency recovery path.
 
-Build142 replaces temporary stack-buffer code in nine SPU byte-rotate and
-byte-shift variants with iOS ARM64 vector table lookups. Counts, wrapping,
-zero-fill for large shifts and register aliases preserve the previous results.
-The family includes ROTQBY, seen repeatedly in the earlier busy-worker trace.
-This extends the tested byte-shuffle optimization; its FPS effect is unknown.
-
-All 76 patches apply. The nine old/new instruction bodies pass 224928 cases in
-five host profiles, using actual v128/opcode layouts with modeled NEON vector
-operations: every immediate value, shift boundaries, count high bits, source/
-destination aliases, all 128 registers and unchanged surrounding state. The
-existing shuffle, SPU-entry/JIT-protection and Quickstart checks also pass.
-CI checks actual iOS16/A15 code for one TBL per variant, no stack-memory access,
-and byte loads limited to register counts. Build143 changes validation only;
-its native optimization is the same as Build142's. Phone performance is unknown.
+All77 patches apply and the new patch reverses to the exact previous sources.
+The current native selection, view tagging, quota, idle trim and preflight pass
+host sanitizer tests: a warm scene keeps its pixels across120frames where the
+old policy reloads160MiB; an8GiB modeled stream peaks at304MiB including the
+existing check hysteresis. Shared-page/active-binding protection, cache-lock
+refusal, both GPU-wait failures, pinned sets, deferred GC and desktop behavior
+are covered. Historical reuse, upload retirement, runtime/Stop and Quick start
+checks pass. Full Xcode compilation and actual phone improvement remain pending.
+Scenes larger than the available cache may still require frequent uploads.
 
 Install `ARMSX3_iOS16_INSTALL_THIS_IPA`, **Quick start -> Start game**, and try
-the same slow 3D menu/car screen for about 60 seconds. Finish with **Stop game**
-and share the log/responsiveness. Imported state persists; full 120 checks are
-optional. Graphics/memory policies remain; audio is null; driving unconfirmed.
-Historical checkpoints follow.
+the same menu/car screen for about60seconds. Finish with **Stop game** and share
+the log/responsiveness. Imported state persists; full120 checks remain optional.
+Graphics, SPU vector optimizations and input remain; audio is null; driving is
+unconfirmed. Historical checkpoints follow.
 
 # ARMSX3 for iOS 16 — P0 port checkpoint
 

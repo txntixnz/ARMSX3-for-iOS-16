@@ -1,0 +1,220 @@
+diff --git a/rpcs3/Emu/RSX/Common/texture_cache.h b/rpcs3/Emu/RSX/Common/texture_cache.h
+index 0de533fb0..7f7ed6102 100644
+--- a/rpcs3/Emu/RSX/Common/texture_cache.h
++++ b/rpcs3/Emu/RSX/Common/texture_cache.h
+@@ -12,6 +12,10 @@
+ 
+ #include <unordered_map>
+ 
++#ifdef __APPLE__
++#include <TargetConditionals.h>
++#endif
++
+ #define RSX_GCM_FORMAT_IGNORED 0
+ 
+ namespace rsx
+@@ -2260,6 +2264,80 @@ namespace rsx
+ 			m_storage.trim_sections();
+ 		}
+ 
++#if defined(__APPLE__) && TARGET_OS_IOS
++		template <typename GetBytes>
++		u64 evict_unused_budgeted(const std::set<u32>& exclusion_list, u64 target_bytes, GetBytes&& get_bytes)
++		{
++			ensure(rsx::get_current_renderer()->is_current_thread());
++			if (!target_bytes) return 0;
++			std::unique_lock lock(m_cache_mutex, std::defer_lock);
++			if (!lock.try_lock()) return 0;
++
++			struct candidate
++			{
++				section_storage_type* section;
++				u64 last_use;
++				u64 bytes;
++			};
++			std::vector<candidate> candidates;
++			const u32 types = rsx::texture_upload_context::shader_read | rsx::texture_upload_context::blit_engine_src;
++			for (auto& block : m_storage)
++			{
++				for (auto& region : block)
++				{
++					if (region.is_dirty() || !(region.get_context() & types) ||
++						!region.exists() || !region.is_managed() ||
++						exclusion_list.contains(region.get_section_base()))
++					{
++						continue;
++					}
++					ensure(region.is_locked());
++					if (const u64 bytes = get_bytes(region))
++					{
++						candidates.push_back({&region, region.ios_last_use_tag.load(), bytes});
++					}
++				}
++			}
++			std::stable_sort(candidates.begin(), candidates.end(), [](const candidate& a, const candidate& b)
++			{
++				return a.last_use < b.last_use;
++			});
++
++			// Keep page protections of retained sections intact. In particular,
++			// textures/FBOs may share locked pages despite different base addresses.
++			u64 selected_bytes = 0;
++			for (const auto& entry : candidates)
++			{
++				auto& region = *entry.section;
++				if (region.is_locked(true))
++				{
++					bool shared_pages = false;
++					for (auto& block : m_storage)
++					{
++						for (auto& other : block)
++						{
++							if (&other != &region && other.is_locked(true) &&
++								other.get_locked_range().overlaps(region.get_locked_range()))
++							{
++								shared_pages = true;
++								break;
++							}
++						}
++						if (shared_pages) break;
++					}
++					if (shared_pages) continue;
++				}
++
++				if (region.is_locked(true)) region.unprotect();
++				else region.discard(true);
++				region.set_dirty(true); // Update unreleased accounting after unlocking, including blit sources.
++				selected_bytes += entry.bytes;
++				if (selected_bytes >= target_bytes) break;
++			}
++			return selected_bytes;
++		}
++#endif
++
+ 		bool evict_unused(const std::set<u32>& exclusion_list)
+ 		{
+ 			// Some sanity checks. Do not evict if the cache is currently in use.
+diff --git a/rpcs3/Emu/RSX/VK/VKGSRender.cpp b/rpcs3/Emu/RSX/VK/VKGSRender.cpp
+index fb4e6fcdc..de34c6980 100644
+--- a/rpcs3/Emu/RSX/VK/VKGSRender.cpp
++++ b/rpcs3/Emu/RSX/VK/VKGSRender.cpp
+@@ -1840,37 +1840,65 @@ void VKGSRender::reclaim_texture_cache()
+ 	ensure(is_current_thread());
+ 	constexpr u64 mb = 0x100000;
+ 	constexpr u64 watermark = 288 * mb;
+-	constexpr u64 idle_reserve = 32 * mb;
++	constexpr u64 target = 256 * mb;
+ 	const auto before = vk::vmm_get_application_pool_usage(VMM_ALLOCATION_POOL_TEXTURE_CACHE);
+ 	if (before < m_ios_texture_cache_next_check) return;
+ 
+-	// Pool usage includes completed images awaiting reuse, not just cached
+-	// content. Free those first: evicting clean textures to recover idle memory
+-	// discards useful pixels and made the phone reupload ~60 GiB in six minutes.
+-	const auto idle_freed = m_texture_cache.trim_reusable_images(idle_reserve);
+-	const auto trimmed = vk::vmm_get_application_pool_usage(VMM_ALLOCATION_POOL_TEXTURE_CACHE);
++	// At the budget boundary release all completed idle allocations first.
++	// Retain useful pixels; a reusable image no longer owns cached content.
++	m_texture_cache.trim_reusable_images(0);
+ 	if (!m_texture_cache.is_overallocated())
+ 	{
+-		m_ios_texture_cache_next_check = std::max<u64>(watermark, trimmed + 16 * mb);
+-		if (idle_freed)
+-		{
+-			rsx_log.warning("iOS: trimmed idle texture images %lluM -> %lluM; cached content preserved.",
+-				before / mb, trimmed / mb);
+-		}
++		const auto after = vk::vmm_get_application_pool_usage(VMM_ALLOCATION_POOL_TEXTURE_CACHE);
++		m_ios_texture_cache_next_check = std::max<u64>(watermark, after + 16 * mb);
+ 		return;
+ 	}
+ 
+-	// Native hard-sync eviction remains the fallback for real content pressure.
+-	const bool relieved = on_vram_exhausted(rsx::problem_severity::fatal);
++	// This preflight runs before sampler/cache locks. Complete prior GPU work
++	// before selecting victims, and first collect any newly completed idle pool.
++	flush_command_queue(true, true);
+ 	g_fxo->get<vk::driver_manager_thread>().drain();
+-	// Evicted sections return their images to the idle pool only after GC.
+-	// Release the excess now so those allocations do not cause another eviction.
+-	m_texture_cache.trim_reusable_images(idle_reserve);
+-	m_samplers_dirty.store(true);
++	m_texture_cache.trim_reusable_images(0);
++	u64 selected = 0;
++	if (m_texture_cache.is_overallocated())
++	{
++		std::set<u32> exclusions;
++		auto scan = [&](const auto& textures)
++		{
++			for (const auto& tex : textures)
++			{
++				exclusions.insert(rsx::get_address(tex.offset(), tex.location()));
++			}
++		};
++		scan(rsx::method_registers.fragment_textures);
++		scan(rsx::method_registers.vertex_textures);
++
++		// Preserve the native secondary/cache lock order and active-address
++		// exclusions. Only clean, managed shader-read/blit-source images qualify.
++		std::lock_guard lock(m_secondary_cb_guard);
++		const auto usage = vk::vmm_get_application_pool_usage(VMM_ALLOCATION_POOL_TEXTURE_CACHE);
++		selected = m_texture_cache.evict_unused_budgeted(exclusions, usage > target ? usage - target : 0,
++			[](auto& region) -> u64
++			{
++				const auto image = region.get_raw_texture();
++				return image ? image->memory->size() : 0;
++			});
++		if (selected) m_texture_cache.purge_unreleased_sections();
++	}
++
++	if (selected)
++	{
++		// Dirty sections use native deferred GC. Only trim images after the
++		// retirement fence and driver drain, never while the GPU can read them.
++		flush_command_queue(true, true);
++		g_fxo->get<vk::driver_manager_thread>().drain();
++		m_texture_cache.trim_reusable_images(0);
++		m_samplers_dirty.store(true);
++	}
+ 	const auto after = vk::vmm_get_application_pool_usage(VMM_ALLOCATION_POOL_TEXTURE_CACHE);
+ 	m_ios_texture_cache_next_check = std::max<u64>(watermark, after + 16 * mb);
+-	rsx_log.warning("iOS: texture-cache budget pass %lluM -> %lluM (released=%d).",
+-		before / mb, after / mb, static_cast<int>(relieved));
++	rsx_log.warning("iOS: bounded texture-cache pass %lluM -> %lluM; selected=%lluM.",
++		before / mb, after / mb, selected / mb);
+ #endif
+ }
+ 
+diff --git a/rpcs3/Emu/RSX/VK/VKTextureCache.h b/rpcs3/Emu/RSX/VK/VKTextureCache.h
+index d7caef837..852c63634 100644
+--- a/rpcs3/Emu/RSX/VK/VKTextureCache.h
++++ b/rpcs3/Emu/RSX/VK/VKTextureCache.h
+@@ -52,6 +52,10 @@ namespace vk
+ 	public:
+ 		using baseclass::cached_texture_section;
+ 
++#if defined(__APPLE__) && TARGET_OS_IOS
++		atomic_t<u64> ios_last_use_tag{0};
++#endif
++
+ 		void create(u16 w, u16 h, u16 depth, u16 mipmaps, vk::image* image, u32 rsx_pitch, bool managed, u32 gcm_format, bool pack_swap_bytes = false)
+ 		{
+ 			auto new_texture = static_cast<vk::viewable_image*>(image);
+@@ -172,12 +176,18 @@ namespace vk
+ 		vk::image_view* get_view(const rsx::texture_channel_remap_t& remap)
+ 		{
+ 			ensure(vram_texture != nullptr);
++#if defined(__APPLE__) && TARGET_OS_IOS
++			ios_last_use_tag.store(rsx::get_shared_tag());
++#endif
+ 			return vram_texture->get_view(remap);
+ 		}
+ 
+ 		vk::image_view* get_raw_view()
+ 		{
+ 			ensure(vram_texture != nullptr);
++#if defined(__APPLE__) && TARGET_OS_IOS
++			ios_last_use_tag.store(rsx::get_shared_tag());
++#endif
+ 			return vram_texture->get_view(rsx::default_remap_vector);
+ 		}
+ 

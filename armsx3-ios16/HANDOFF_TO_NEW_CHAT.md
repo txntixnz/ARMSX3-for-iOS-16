@@ -5412,3 +5412,110 @@ then DO NOT monitor. User authorizes publication/builds. No agents/images.
 Once ready install ARMSX3_iOS16_INSTALL_THIS_IPA, Quick start -> Start game,
 same slow3Dmenu/car screen about60seconds, Stop and share log/responsiveness.
 Driving remains unconfirmed. No promised FPS gain.
+
+
+## Build144 — bounded texture-cache budget eviction after Build143 menu stalls
+
+User: Hung up at the main menu. Read all three local attachments directly:
+ARMSX3-startup-20261016-110928-953-43434.txt,
+ARMSX3CoreLoadTest.cpu_resource-2026-10-16-130900.ips,
+ARMSX3CoreLoadTest.wakeups_resource-2026-10-16-130724.ips.
+Phone Build143/PID43434; parent main9912ca04a28c4181081f54ce8553b15f50a3cf03,
+tree9e461956c1c794fc668349c5ece90914529f73c0; installable run38845617965.
+
+Evidence:
+- Game runs1792148842.371123; early presents advance~30FPS. By8912.560938 the
+  count1846 advances only to1898 by8957.720017. Four complete slow RSX windows:
+  47frames/42.0021seconds=1.119FPS. Draw setup25.9–44.1%, texture lookup26.1–31.9%,
+  empty FIFO7.0–17.9%. This run has substantially more active renderer work than
+  the older mostly-empty-FIFO sessions; do not blindly attribute it all to SPU.
+-61texture-cache budget passes,462completed32MiB-ish upload batches/14.6577GiB.
+  Last45.6357seconds alone58passes/13.8619GiB. Typical sweep288MiB ->37–41MiB.
+  Repeated whole-cache invalidation/reupload is directly supported by logs/source.
+- User Stop8958.164470; RSX final8958.168663; shader workers continue compiling
+  during join; device/instance8967.148197; FXO8967.249435; VM8967.252295;
+  fully stopped zero CPU threads8967.255678; RENDER/UI PASS8967.257575/8967.264370.
+  Final1900accepted presents;28PPU+6SPU joined;11,600,254,541 estimated PPU
+  instructions/2,152,296completed HLE/LV2 calls. No OOM/fatal/unclean teardown.
+  Respect the reported perceived hang; log proves very slow continuing progress,
+  not its exact visible appearance or input behavior. Cleanup took9.09seconds.
+- Both IPS files say Action taken:none. Wakeups45001/5.833seconds~7714/s; CPU
+  report90CPU-seconds/97.76seconds, footprint211.97->1121.36MB. These are resource
+  reports, not an observed iOS kill. Do not disable resource protection or infer
+  a deadlocked UIKit thread from them. SPUs remain highly utilized in host data.
+- Downloaded matching Build143 core symbols artifact12023362763; SHA256
+  d5e6d53a9f4fd62743fccd9659d523e537326932afb27dd8c2ffe7f7e39b2bdf.
+  UUID8E333E75-5F7C-3D53-A13D-983EB59C9D79 matches the resource-report core image.
+  Local symbols143 Mach-O symbol table maps offsets0x274ba4 to SPU old_interpreter,
+ 0x25c9c0 to RDCH,0x299798 to get_ch_value,0x859c84 to RSX semaphore_acquire,
+ 0xa0bea8 to load_texture_env,0xab4418 to upload_image_from_cpu and0xab3e54 to
+  create_new_texture. Reports span startup/intro as well as menu; samples alone
+  do not establish a new interpreter correctness defect. The other unknown UUID
+  in stacks was not identified; do not invent its function names.
+
+Patch0077-ios-bound-texture-budget-eviction.patch, three native files only:
+- Add iOS-only atomic recent-view tag to vk::cached_texture_section, updated
+  by exact get_view/get_raw_view with existing monotonic rsx::get_shared_tag().
+  No new sampling thread, guest-state probe, cache-hit logging or JIT changes.
+- New iOS common function template evict_unused_budgeted(exclusions,target,bytes)
+  try-locks native cache mutex and considers clean, existing, managed shader-read/
+  blit-source sections outside active-address exclusions. Sort by recent-view tag
+  and stop once selected actual GPU allocation sizes reach the requested bytes.
+- Preserve all retained page protections: refuse a candidate sharing locked pages
+  with ANY other locked section, including an active texture/FBO at a different
+  base address. This conservative check avoids using bulk unprotect_set without
+  its required complete overlap exclusions. Native region.unprotect()/discard()
+  handles individual independent pages/hash sections. Set dirty AFTER unlocking
+  so unreleased accounting updates for blit sources as well as shader textures.
+- Same288MiB soft quota/watermark;256MiB target. Preflight remains before sampler/
+  cache locks at existing draw/blit boundaries and skips uninterruptible/flushing/
+  deadlock states. Trim completed idle images to0 when pressure is checked. If
+  still above quota, hard-sync GPU, drain GC, trim newly completed idle images,
+  then recheck before choosing any content victim.
+- Preserve native secondary-before-cache lock order and all current fragment/
+  vertex guest-address exclusions. Byte weights use image->memory->size(), not
+  compressed guest section lengths. Purge selected unreleased sections through
+  native APIs, perform retirement fence and driver drain, THEN trim completed
+  idle allocations and mark samplers dirty. Failed waits never free GPU-owned data.
+- Retain16MiB check hysteresis for unreclaimable/pinned sets; add marker
+  iOS: bounded texture-cache pass beforeM -> afterM; selected=M.
+- Existing on_vram_exhausted emergency callback, whole-cache emergency eviction,
+  allocation quotas and recovery paths are byte-for-byte unchanged. No increased
+  memory cap, lower texture/resolution quality or relaxed ownership/protection.
+  A scene larger than the cache may still churn; physical phone benefit is unknown.
+
+Validation144:
+- All77patches check/apply to pin92b931b9fb5eef7f1317cb482917dfc19aceebd9 in
+  native144-validation. Patch77 reverses to exact indexed Build143 sources,
+  reapplies cleanly; native whitespace and changed Python syntax pass.
+- New test_ios_texture_budget.py reconstructs actual native current methods and
+  compiles bounded selection, view tags, quota, idle trim and renderer preflight
+  under ASAN+UBSAN/warnings-as-errors for iOS and desktop, plus historical policy.
+  Explicit host GPU/storage/VM/GC interfaces, not a real Metal game benchmark.
+- Modeled304MiB initial cache contains128MiB old scene and176MiB warm scene.
+  New policy removes48MiB older content, retains all warm pixels across120frames;
+  historical whole-cache policy reuploads160MiB.8GiB streaming peak304MiB includes
+  original16MiB check hysteresis; active vertex/fragment references survive.
+- Cover recent raw-view rebinding, dirty/borrowed/FBO/blit-destination exclusions,
+  eligible blit sources, hash-only sections, target0/oversized object, mutex
+  refusal, shared pages between textures AND FBOs, delayed GC, idle-only pressure,
+  newly completed idle pressure, pinned-set backoff, skip gates and failures of
+  first/second GPU fence. No freed image is still marked GPU-owned in the model.
+- Historical Build134 reuse test now explicitly reconstructs patches1..68 so its
+  previous policy remains reproducible. It passes completion-only/concurrent idle
+  retirement and the original200MiB scene/old192MiB negative comparison.
+- Production runtime/Stop/failure/config restoration, upload retirement/failure
+  regressions and Build144120-stage/four-foundation fixture pass. CMake is absent
+  locally: broader test_native_renderer.py passes its native present/extension
+  fragment then cannot start the CMake importer check. That test remains required
+  in Actions; no missing-dependency workaround/false pass was added.
+- Workflow adds current budget test to intake; all34+2 prerequisites retained.
+  Real Xcode compilation/full linked IPA and phone validation remain pending.
+
+Next publish144 with lease9912ca0..., verify installable workflow queued ONCE,
+DO NOT monitor. User authorizes publication/builds; no agents/images. Once ready,
+install ARMSX3_iOS16_INSTALL_THIS_IPA; Quick start -> Start game; same menu/car
+screen about60seconds; Stop and share log/responsiveness. Check new bounded-pass
+sizes/frequency, upload totals, FIFO/draw/texture timing, frame progress and OOM.
+Keep SPU vector paths/FIFO parking/input/graphics; null audio unchanged. Driving
+unconfirmed. No claimed or promised device FPS gain from host cache models.

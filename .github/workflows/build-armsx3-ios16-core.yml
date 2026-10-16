@@ -154,6 +154,7 @@ jobs:
           python3 armsx3-ios16/tests/test_ios_pad_input.py upstream-armsx3
           python3 armsx3-ios16/tests/test_ios_menu_memory.py upstream-armsx3
           python3 armsx3-ios16/tests/test_ios_texture_reuse.py upstream-armsx3
+          python3 armsx3-ios16/tests/test_ios_texture_budget.py upstream-armsx3
           python3 armsx3-ios16/tests/test_ios_rsx_timing.py upstream-armsx3
           python3 armsx3-ios16/tests/test_ios_ppu_dispatch_cache.py upstream-armsx3
           python3 armsx3-ios16/tests/test_host_cpu.py
