@@ -5579,3 +5579,16 @@ Publish using expected parent; check workflow queued once, do not monitor.
 Git shell push has no credentials; use connected GitHub blob/tree/commit/ref.
 No agents/images. Once green install ARMSX3_iOS16_INSTALL_THIS_IPA, Quick
 start -> Start game, same menu/car ~60seconds, Stop and share log/graphics/FPS.
+
+
+## Build147 — repair byte-shift regression scope
+Build146 run38935996069 failed intake job117091519238 before iOS compilation.
+test_ios_spu_byte_shifts.py compared the entire current interpreter with the
+pre0076 snapshot after undoing only byte-shift changes; independent CNTB/CLZ
+patch0077 therefore triggered changes-escaped assertion. Capture post0076
+snapshot for the scope assertion, and assert all nine current byte-shift
+bodies and helpers still match it. Execute current bodies as before; no test
+is removed. Production patches unchanged from146; graphics baseline145 retained.
+Local byte-shift and bit-count suites plus147 fixture checked; full CI/iOS pending.
+Publish to main; verify queued once, do not monitor. Phone test once green:
+Quick start -> Start game, same menu60seconds, Stop and share log.

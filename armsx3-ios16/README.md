@@ -1,4 +1,9 @@
-# Current checkpoint — Build146
+# Current checkpoint — Build147
+
+Fixes the older byte-shift regression test to isolate patch0076 from the new
+bit-count patch. Production code matches Build146; iOS build pending.
+
+## Previous checkpoint — Build146
 
 Build145 graphics were confirmed OK. Build146 preserves that renderer and
 uses iOS ARM64 vector operations for SPU byte population count and word

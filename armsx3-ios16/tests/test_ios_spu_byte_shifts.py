@@ -134,17 +134,21 @@ int main(){
 with tempfile.TemporaryDirectory(prefix='armsx3-spu-byte-shifts-') as directory:
     work=Path(directory);file=work/path;file.parent.mkdir(parents=True)
     file.write_bytes(subprocess.check_output(['git','-C',str(native),'show',pin+':'+path]))
-    before=None
+    before=after_shift_patch=None
     for patch in sorted((root/'patches').glob('*.patch')):
         if patch.name.startswith('0076'):before=file.read_text()
         subprocess.run(['git','apply','--include='+path,str(patch)],cwd=work,check=True)
-    after=file.read_text();assert before is not None
+        if patch.name.startswith('0076'):after_shift_patch=file.read_text()
+    after=file.read_text();assert before is not None and after_shift_patch is not None
     start=after.index('#if defined(ARCH_ARM64) && defined(__APPLE__) && TARGET_OS_IOS\nstatic inline v128 ios_spu_rotate_bytes')
     end=after.index('template <spu_exec_bit... Flags>\nbool ROTQBYBI(',start)
     helpers=after[start:end]
-    restored=after.replace(helpers,'',1);bodies=[];entries=[]
+    # Scope belongs to patch0076; later independent instruction changes are valid.
+    assert helpers in after_shift_patch,'byte-shift helpers changed after patch0076'
+    restored=after_shift_patch.replace(helpers,'',1);bodies=[];entries=[]
     for i,name in enumerate(names):
         old=block(before,'bool '+name+'(');new=block(after,'bool '+name+'(')
+        assert new==block(after_shift_patch,'bool '+name+'('),'byte-shift body changed after patch0076: '+name
         restored=restored.replace(new,old,1)
         bodies.extend([old.replace('bool '+name+'(', 'extern "C" bool before_'+name+'(',1),
                        new.replace('bool '+name+'(', 'extern "C" bool ios_'+name+'(',1)])
