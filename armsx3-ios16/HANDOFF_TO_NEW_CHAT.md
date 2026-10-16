@@ -5359,3 +5359,56 @@ DO NOT monitor. User authorizes publication/builds. Install
 ARMSX3_iOS16_INSTALL_THIS_IPA, Quick start -> Start game, same slow3Dmenu/car
 screen about60seconds, Stop, share log/responsiveness. Check frame progress,
 HOST CPU/RSX FIFO wall and any geometry batches/OOM. Driving remains unconfirmed.
+
+
+## Build143 — accept Xcode's scalar byte read of the SPU shift count
+
+User reported Workflow failed for Build142. Parent main
+ d37aeefbd2389b6869f2d3be3cf1824406f7e1eb, tree
+ d3d303f78955ad2ecf7bcfd47a654122770a5086.
+Run38844716162, core job116792967183, failed step10:
+Verify A15 SPU byte rotate and shift code generation. All host prerequisite
+jobs and the preceding real SHUFB A15 assembly check succeeded.
+
+Actual failure: isolated Xcode16.4 iOS16/apple-a15 C++ compilation completed;
+Python line122 rejected LDRB in the first ROTQBYBI body. The emitted code has
+one tbl.16b and no stack memory. Xcode narrowed the scalar RB word3 count read
+into `ldrb w9, [x9, #12]`; x9 is gpr(RB), computed from x0 plus RB shifted4.
+ROTQBYBI only uses RB bits3..6, so a low-byte count read is valid. Other
+register-count forms use at most RB bits0..7. This is not scalar loading of
+sixteen payload bytes. No compiler/native correctness failure was observed;
+the old assertion was too strict. Full core compile/link had not started.
+
+Build143 changes validation, app build number and docs only. Native patch0076
+and all76 patches are identical to Build142; no performance change is claimed.
+- New verify_a15_assembly requires the named function and its cfi_endproc,
+  exactly one Apple tbl.16b or GNU tbl, and no SP/x29 stack-memory access.
+- The six register-count variants may contain zero or one scalar LDRB with
+  word3 offset12; extra/misplaced byte loads fail. The three immediate-count
+  variants permit none. Wider scalar count loads are also valid.
+- Captured actual failed ROTQBYBI body is tests/fixtures/
+  a15-spu-rotqbybi-xcode16_4.txt. The symbol/end delimiters are restored and
+  labeled as such because the assertion printed only the function body.
+- Parser regression accepts captured Apple/GNU spellings and a wider scalar
+  count load. Exercises all nine load policies; rejects missing/wrong-width/
+  duplicate TBL, extra/wrong-offset byte loads, stack access, missing target
+  and missing function end. Later unrelated functions are outside its scope.
+
+Local validation143:
+- Full test_ios_spu_byte_shifts.py passes ASAN+UBSAN/warnings-as-errors in all
+  five profiles,224928cases per profile, using exact native before/after bodies
+  and real layouts with modeled NEON. Captured assembly parser regressions pass.
+- test_p114_fixture.py passes frozen bridge/120ordered stages, four-stage
+  Quickstart/cancellable frontend and Build143/iOS16/34+2 workflow dependencies.
+- Existing SHUFB captured Apple/GNU parser check, Python syntax and whitespace
+  checks pass. No native source edit; no need to repeat unrelated native suites.
+- No local Apple SDK. Corrected full nine-function real codegen assertions and
+  the complete iOS archive/link still require the newly queued workflow.
+
+Latest device evidence remains Build141,2058presents/clean Stop and slow manual
+windows2.60FPS; see Build142 notes. There is no Build142 phone result.
+Next publish143 with lease d37aeef..., check installable workflow queued ONCE,
+then DO NOT monitor. User authorizes publication/builds. No agents/images.
+Once ready install ARMSX3_iOS16_INSTALL_THIS_IPA, Quick start -> Start game,
+same slow3Dmenu/car screen about60seconds, Stop and share log/responsiveness.
+Driving remains unconfirmed. No promised FPS gain.

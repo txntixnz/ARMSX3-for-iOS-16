@@ -1,4 +1,12 @@
-# Current checkpoint — Build142
+# Current checkpoint — Build143
+
+Build142's isolated Xcode compile succeeded, then its assembly check rejected a
+valid scalar byte read of the shift count. The captured ROTQBYBI body has one
+vector TBL lookup and no stack-memory access. Build143 corrects this check:
+the six register-count variants may read one byte at word3's offset12; the three
+immediate variants may not. One TBL and no stack-memory access remain required.
+Captured Apple assembly and positive/negative parser regressions cover this.
+The full iOS build and phone validation still require the corrected workflow.
 
 Build141 completed a clean phone session with 2058 accepted presents. Twelve
 slow windows averaged 2.60 FPS over 123.44 seconds, versus 2.24 in the previous
@@ -17,8 +25,9 @@ five host profiles, using actual v128/opcode layouts with modeled NEON vector
 operations: every immediate value, shift boundaries, count high bits, source/
 destination aliases, all 128 registers and unchanged surrounding state. The
 existing shuffle, SPU-entry/JIT-protection and Quickstart checks also pass.
-CI checks actual iOS16/A15 code for one TBL per variant and no scalar byte loads
-or stack-memory access. Apple compilation and phone validation remain pending.
+CI checks actual iOS16/A15 code for one TBL per variant, no stack-memory access,
+and byte loads limited to register counts. Build143 changes validation only;
+its native optimization is the same as Build142's. Phone performance is unknown.
 
 Install `ARMSX3_iOS16_INSTALL_THIS_IPA`, **Quick start -> Start game**, and try
 the same slow 3D menu/car screen for about 60 seconds. Finish with **Stop game**

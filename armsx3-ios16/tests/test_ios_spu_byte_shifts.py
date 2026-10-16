@@ -12,6 +12,52 @@ pin='92b931b9fb5eef7f1317cb482917dfc19aceebd9'
 path='rpcs3/Emu/Cell/SPUInterpreter.cpp'
 names=['ROTQBYBI','ROTQMBYBI','SHLQBYBI','ROTQBY','ROTQMBY','SHLQBY','ROTQBYI','ROTQMBYI','SHLQBYI']
 
+def verify_a15_assembly(assembly,name):
+    marker=re.search(r'^_ios_'+name+r':[^\n]*\n',assembly,re.M)
+    assert marker is not None,'missing '+name+' function in assembly'
+    body,end,_=assembly[marker.end():].partition('.cfi_endproc')
+    assert end,'missing end of '+name+' function'
+    assert len(re.findall(r'^\s*tbl(?:\.16b)?[ \t]+',body,re.M))==1,body
+    assert not re.search(r'\[\s*(?:sp|x29)\b',body),body
+    # Only the low byte of RB word3 contributes to these register counts.
+    # Xcode can narrow that scalar count read to LDRB [gpr(RB), #12]; it
+    # does not replace the vector payload lookup with scalar byte loads.
+    byte_loads=re.findall(r'^[ \t]*ldrb[ \t]+([^\n;]+)',body,re.M)
+    assert len(byte_loads)<=(1 if name in names[:6] else 0),body
+    assert all(re.fullmatch(r'w\d+,\s*\[x\d+,\s*#12\]',load.strip()) for load in byte_loads),body
+
+def check_assembly_parser():
+    captured=(root/'tests/fixtures/a15-spu-rotqbybi-xcode16_4.txt').read_text()
+    verify_a15_assembly(captured,'ROTQBYBI')
+    gnu=captured.replace('tbl.16b\tv0, { v0 }, v1','tbl\tv0.16b, { v0.16b }, v1.16b')
+    assert gnu!=captured
+    verify_a15_assembly(gnu,'ROTQBYBI')
+    count_load='\tldrb\tw9, [x9, #12]\n'
+    assert count_load in captured
+    verify_a15_assembly(captured.replace(count_load,'\tldr\tw9, [x9, #12]\n'),'ROTQBYBI')
+    verify_a15_assembly(captured+'\n_other_function:\n\tldrb w0, [x0]\n','ROTQBYBI')
+    # Exercise each variant's byte-load policy with the captured body.
+    for name in names:
+        renamed=captured.replace('_ios_ROTQBYBI:', '_ios_'+name+':')
+        verify_a15_assembly(renamed if name in names[:6] else renamed.replace(count_load,''),name)
+    invalid=[captured.replace('tbl.16b','orr.16b'),captured.replace('tbl.16b','tbl.8b'),
+             captured.replace('\tret\n','\ttbl.16b v0, { v0 }, v1\n\tret\n'),
+             captured.replace(count_load,count_load+'\tldrb w10, [x9, #12]\n'),
+             captured.replace('[x9, #12]','[x9, #13]'),
+             captured.replace('[x9, #12]','[sp, #12]'),
+             captured.replace('[x9, #12]','[x29, #12]'),
+             captured.replace('_ios_ROTQBYBI:', '_other_function:'),
+             captured.replace('.cfi_endproc','')]
+    for assembly,name in [(text,'ROTQBYBI') for text in invalid]+[
+            (captured.replace('_ios_ROTQBYBI:', '_ios_'+name+':'),name) for name in names[6:]]:
+        try:verify_a15_assembly(assembly,name)
+        except AssertionError:pass
+        else:raise AssertionError('invalid '+name+' assembly passed verification')
+    print('PASS: captured Xcode byte-count load and Apple/GNU TBL accepted; all nine load policies, missing/wrong-width/duplicate TBL, extra or misplaced byte loads, stack access and function bounds checked')
+
+check_assembly_parser()
+if '--assembly-only' in sys.argv:sys.exit(0)
+
 def block(source,marker):
     start=source.index(marker);opening=source.index('{',start);end=opening+1;depth=1
     while depth:
@@ -116,11 +162,8 @@ with tempfile.TemporaryDirectory(prefix='armsx3-spu-byte-shifts-') as directory:
                         '-S',str(cpp),'-o',str(asm)],check=True)
         assembly=asm.read_text()
         for name in names:
-            marker=re.search(r'^_ios_'+name+r':[^\n]*\n',assembly,re.M);assert marker is not None,name
-            body=assembly[marker.end():].split('.cfi_endproc',1)[0]
-            assert len(re.findall(r'^\s*tbl(?:\.16b)?[ \t]+',body,re.M))==1,body
-            assert not re.search(r'^\s*ldrb[ \t]+|\[\s*(?:sp|x29)\b',body,re.M),body
-        print('PASS: real iOS16/apple-a15 codegen; all nine byte rotates/shifts use one TBL and no scalar byte loads/stack memory')
+            verify_a15_assembly(assembly,name)
+        print('PASS: real iOS16/apple-a15 codegen; all nine byte rotates/shifts use one TBL and no stack memory; byte loads limited to register counts')
     else:
         cpp.write_text(code+cases.replace('/* CASE_TABLE */',','.join(entries)))
         for name,apple,ios,arm in [('ios-arm',True,True,True),('mac-arm',True,False,True),
