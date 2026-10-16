@@ -1,36 +1,32 @@
-# Current checkpoint — Build139
+# Current checkpoint — Build140
 
-Build138 ended with VK_ERROR_OUT_OF_DEVICE_MEMORY. The attribute ring grew
-from 64 to 160 MiB in six steps for requests of only 67–550 KiB; the final
-160 MiB replacement was refused. Native cleanup completed with zero live CPU
-threads. Its nine complete slow windows averaged 1.52 FPS; different manual
-sessions and profiling overhead prevent a controlled FPS comparison.
+Build139 completed a clean phone session with 2141 accepted presents and zero
+live CPU threads after Stop. There was no allocation failure or ring growth;
+the geometry-batch watermark was not reached, so that fix still needs device
+coverage. Seventeen slow windows averaged 2.24 FPS over 176.37 seconds. Three
+SPU workers remain near 97–99% of one core; RSX uses about 15% in late samples.
+Different manual sessions prevent a controlled before/after FPS comparison.
 
-Build139 submits and waits for a geometry batch between guest draws when
-unretired attributes reach 32 MiB or indices reach 8 MiB. A successful command
-buffer fence returns ring space through the existing snapshots, even without
-a present or texture upload. Vertex-cache references, unused bulk allocations
-and shader environment data are renewed before subsequent draws reuse bytes.
-Timeouts/errors do not release pending memory. Large individual draws retain
-the native growth path; these thresholds are not a universal hard memory cap.
+Build140 targets SPU SHUFB, a byte-shuffle instruction seen at multiple sites
+in the earlier busy-worker trace. On iOS ARM64, its 16 scalar table lookups
+become a native two-vector table lookup, following the pinned PPU VPERM path.
+The existing SPU special control values and register-alias behavior remain
+intact. This is an interpreter implementation change, with no guest-work
+skipping, decoder change or JIT enablement. Its phone FPS effect is unmeasured.
 
-The SPU trace showed varied instruction sites and substantial missing coverage,
-so it does not establish a safe guest-loop shortcut. Per-instruction profiling
-is now opt-in with ARMSX3_IOS_SPU_DISPATCH_PROFILE=1; the normal build has no
-profiling countdown. RSX wall timing and kernel CPU reports remain active.
-Build137's verified renderer idle-CPU saving remains in place.
+All 75 patches apply. The old/new instruction bodies pass 127648 cases per
+host profile, using real native v128/opcode layouts and a modeled NEON lookup:
+every selector byte/lane, special values, alias combinations, all 128 registers
+and unchanged surrounding state. Five platform profiles verify the iOS-only
+selection. CI also checks actual iOS16/A15 assembly for one TBL and no scalar
+byte loads before compiling the full core; that Apple check is pending locally.
+SPU entry/JIT protections, runtime Stop, geometry retirement and Quickstart
+regressions pass. Existing graphics/input/memory policies remain in place.
 
-All 74 patches apply to the pinned native source. Sanitized host checks pass
-for exact geometry batch/ring/fence/snapshot code with modeled queue/GPU/cache
-interfaces: 6.25 GiB of small geometry uploads without growth, the missing-hook
-failure, success-only cache/state renewal, guard conditions and failed waits.
-Runtime, texture memory/reuse, upload retirement and frozen Quickstart checks
-pass. Apple SDK compilation, real graphics and phone performance remain pending.
-
-Install `ARMSX3_iOS16_INSTALL_THIS_IPA`, **Quick start -> Start game**, and repeat
-the menu/car sequence that failed, then stay there about 60 seconds. Finish
-with **Stop game** and share the log. Imported firmware/disc/cache persist;
-full 120 checks are optional. Audio remains null; driving is unconfirmed.
+Install `ARMSX3_iOS16_INSTALL_THIS_IPA`, **Quick start -> Start game**, and spend
+about 60 seconds in the same slow 3D menu/car screen. Finish with **Stop game**
+and share the log and responsiveness. Full 120 checks are optional; imported
+firmware/disc/cache persist. Audio remains null; driving is unconfirmed.
 Historical checkpoints follow.
 
 # ARMSX3 for iOS 16 — P0 port checkpoint

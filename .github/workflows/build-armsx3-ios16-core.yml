@@ -159,6 +159,7 @@ jobs:
           python3 armsx3-ios16/tests/test_host_cpu.py
           python3 armsx3-ios16/tests/test_ios_fifo_idle.py upstream-armsx3
           python3 armsx3-ios16/tests/test_ios_spu_profile.py upstream-armsx3
+          python3 armsx3-ios16/tests/test_ios_spu_shuffle.py upstream-armsx3
           python3 armsx3-ios16/tests/test_native_renderer.py upstream-armsx3
           python3 armsx3-ios16/tests/test_ios_signal_recovery.py upstream-armsx3
           python3 armsx3-ios16/tests/test_ios_zcull_reports.py upstream-armsx3
@@ -260,6 +261,8 @@ jobs:
           xcrun --sdk iphoneos --show-sdk-version
           cmake --version
           ninja --version
+      - name: Verify A15 SPU shuffle code generation
+        run: python3 armsx3-ios16/tests/test_ios_spu_shuffle.py upstream-armsx3 --a15-codegen
       - name: Build iOS FFmpeg libraries
         shell: bash
         run: |

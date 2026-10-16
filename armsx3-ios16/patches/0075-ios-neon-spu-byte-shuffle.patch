@@ -1,0 +1,29 @@
+--- a/rpcs3/Emu/Cell/SPUInterpreter.cpp
++++ b/rpcs3/Emu/Cell/SPUInterpreter.cpp
+@@ -2025,16 +2025,24 @@
+ template <spu_exec_bit... Flags>
+ bool SHUFB(spu_thread& spu, spu_opcode_t op)
+ {
+-	__m128i ab[2]{__m128i(spu.gpr[op.rb]), __m128i(spu.gpr[op.ra])};
+ 	v128 c = spu.gpr[op.rc];
+ 	v128 x = _mm_andnot_si128(c, _mm_set1_epi8(0x1f));
+ 	v128 res;
+ 
+-	// Select bytes
++#if defined(ARCH_ARM64) && defined(__APPLE__) && TARGET_OS_IOS
++	// Match PPU VPERM's host byte order: the low half is RB, then RA.
++	// Keep SHUFB's special control-byte handling below unchanged.
++	uint8x16x2_t ab;
++	ab.val[0] = spu.gpr[op.rb];
++	ab.val[1] = spu.gpr[op.ra];
++	res = vqtbl2q_u8(ab, x);
++#else
++	__m128i ab[2]{__m128i(spu.gpr[op.rb]), __m128i(spu.gpr[op.ra])};
+ 	for (int i = 0; i < 16; i++)
+ 	{
+ 		res._u8[i] = reinterpret_cast<u8*>(ab)[x._u8[i]];
+ 	}
++#endif
+ 
+ 	// Select special values
+ 	const auto xc0 = _mm_set1_epi8(static_cast<s8>(0xc0));

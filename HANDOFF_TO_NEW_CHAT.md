@@ -9121,3 +9121,84 @@ sequence that led to OOM and stay in that scene about60seconds, Stop, share log.
 Check geometry batch pending bytes, any further attribute growth/OOM, cleanup,
 RSX CPU/wall and FPS. Profiling disabled may remove overhead but promise no gain.
 Graphics/input/starter-car purchase work; driving remains unconfirmed.
+
+## Build140 — native iOS ARM64 SPU byte shuffle
+
+Latest attachment read directly from upload:
+ARMSX3-startup-20261016-021029-832-38137.txt, PID38137, Build139.
+Parent main18040f331f081cce53edc3bafada8ff802366440; tree
+2b02c5f5193e868d8676e31df475e1ddc11e5d21; installable run38836907011.
+
+Phone evidence:
+- Native running1792116384.832777; user Stop6626.107975; final2141 accepted
+  presents. Final RSX profile6626.118351; GPU idle6626.133406; device/instance
+  gone6627.063271; FXO6627.240537; VM6627.243621; fully stopped with zero CPUs
+  6627.250759; RENDER/UI PASS6627.252641/6627.266506. No fatal/OOM/hung cleanup.
+- No attribute-ring growth, no completed geometry-batch report. This session
+  did not reach the Build139 watermark, so absence of OOM alone does not prove
+  the geometry batching path on-device. Retain its host-verified lifetime fix.
+-17 complete slow windows:395frames/176.3714seconds=2.2396FPS. Weighted
+  FIFO-empty wall54.41%; later stable windows about70–79%. Initial slow scene
+  windows instead spend21–32% in texcache lookup and19–29% waiting on fences.
+  Last20 kernel samples: RSX15.3%; Primary SPURS Kernel2/3 98.5/98.4%; Secondary
+  Kernel0 97.0%. Other SPUs about58/58.5/66.7%; PPU Render Thread16.4%.
+-600 completed texture-upload batches/about19.04GiB;82texture budget passes,
+  one idle-image trim. Native PPU estimate18,676,265,006;4,842,254completed
+  HLE/LV2 calls;28PPU+6SPU contexts. Normal SPU observer correctly emits no logs.
+- Runs/scene/thermal conditions differ. Do not claim controlled gains against
+  Build138's1.52FPS or Build137's1.98FPS. Static SPU work remains the priority.
+
+Native source finding / patch0075-ios-neon-spu-byte-shuffle.patch:
+- Build138's incomplete owner-only trace contains SHUFB opcodes at many busy
+  Primary2/3 sites (top nibble0xb, e.g. b0c30252/bbc7c325). This proves use, not
+  a CPU-time percentage. Its full frequency is unknown because coverage missed
+  about82% on those workers. No idle-loop shortcut is justified by those reports.
+- SPUInterpreter.cpp::SHUFB used16 scalar dependent byte lookups even on ARM64.
+  Pinned PPUInterpreter.cpp::VPERM already uses vqtbl2q_u8 with RB/B in the low
+  table half and RA/A in the high half. Apply that same host byte-order shape
+  only under ARCH_ARM64 && __APPLE__ && TARGET_OS_IOS. Utilities/JIT.h includes
+  the existing apple_jit.hpp/TargetConditionals header in the actual core build.
+- Preserve index calculation ~control&31 and the complete original SIMD special
+  selection: normal bytes for controls<0x80, zero for0x80..bf, ff for c0..df,
+  80 for e0..ff. Snapshot all sources before writing destination, retaining
+  all RA/RB/RC/RT4 aliases. Remaining function/table/PC/state behavior is intact.
+- No new guest-memory reads, cache, TLS, counter, JIT code, decoder setting,
+  scheduler change or floating-point/rounding change. Non-iOS paths retain
+  scalar selection. x86 optimized_shufb and INIT(SHUFB) routing stay untouched.
+- Official Arm reference confirms vqtbl2q_u8 maps to A64 TBL over two vectors:
+  https://documentation-service.arm.com/static/5f7b5205bcda971b14568107 (p145).
+  This establishes the instruction interface, not an emulator speedup.
+
+Validation completed / CI validation added:
+- All75 patches check/apply to exact92b931b9fb5eef7f1317cb482917dfc19aceebd9
+  in native140-validation; native whitespace clean; changed Python scripts parse.
+- New test_ios_spu_shuffle.py reconstructs exact original/new SHUFB bodies and
+  asserts no source changes outside that body or special-value block. Compiles
+  real native util/types/v128, BitField/SPUOpcodes headers. Mock spu_thread owns
+  128actual v128 GPRs plus PC/guard; only the new NEON table intrinsic is modeled
+  on Linux. Existing SSE masks run on x86. This is not real ARM instruction
+  execution or a full native spu_thread layout/scheduler/game test.
+- ASAN+UBSAN, warnings as errors, five compile profiles pass: iOS ARM selects
+  lookup; macOS ARM/other ARM/iOS x86/Linux x86 retain original path.127648cases
+  each: every control byte in each lane, all combinations of aliased three
+  source registers and four destinations,100000mixed random cases across128
+  architectural registers, byte-for-byte old/new/oracle/full-context comparison.
+  Return=true and untouched PC/neighbor GPR/guard are checked through comparison.
+- Workflow intake-host adds this regression. Core job adds --a15-codegen after
+  patch application/toolchain setup and before FFmpeg/core build. It uses real
+  xcrun iphoneos clang++, iOS16target/apple-a15, native sse2neon/intrinsic headers,
+  and asserts new function assembly has one TBL and no scalar LDRB. Apple SDK
+  unavailable locally: this check and full archive/link remain pending CI.
+- Historical SPU entry/missing mutable-JIT API rejection, production runtime/Stop/
+  finalizer, geometry batch/timeout/ownership and frozen120stage/Quickstart
+  Build140 fixture all pass. Existing ASAN_OPTIONS=detect_leaks=0 limitation.
+  34+2 host prerequisites unchanged. No agents/images or new standalone artifact.
+
+Next publish140 with lease18040f3..., verify installable workflow queued ONCE,
+DO NOT monitor. User authorizes publication/builds. Install
+ARMSX3_iOS16_INSTALL_THIS_IPA, Quick start -> Start game, same slow3Dmenu/car
+screen about60seconds, Stop, share log/responsiveness. Compare frame progress,
+HOST CPU and RSX FIFO wall time; make no FPS promise from this isolated change.
+Keep Build139 geometry retirement/Build137 FIFO parking, texture quality/input,
+null audio and disabled-by-default SPU observer. Real LLVM/JIT work still needs
+proper iOS implementation; never bypass apple_jit_write_protect. Driving unconfirmed.
