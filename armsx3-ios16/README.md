@@ -1,4 +1,14 @@
-# Current checkpoint — Build145
+# Current checkpoint — Build146
+
+Build145 graphics were confirmed OK. Build146 preserves that renderer and
+uses iOS ARM64 vector operations for SPU byte population count and word
+leading-zero count. Host correctness tests pass; iOS compilation and phone
+performance remain unconfirmed. No FPS gain promised.
+
+Once green, install ARMSX3_iOS16_INSTALL_THIS_IPA, Quick start -> Start game,
+repeat the same menu/car for about60seconds, Stop and share the log.
+
+## Previous checkpoint — Build145
 
 Build144 produced very glitchy graphics on the phone with roughly unchanged
 FPS. Its bounded texture eviction is reverted. Build145 restores Build143's
@@ -10,7 +20,7 @@ Once ready, install ARMSX3_iOS16_INSTALL_THIS_IPA, use Quick start -> Start game
 test the same menu for about60seconds, then Stop and share the log and whether
 graphics are restored. This recovery build does not promise an FPS gain.
 
-# Current checkpoint — Build144
+## Previous checkpoint — Build144
 
 Build143 reached the menu, then slowed to about1.12FPS across four complete
 slow windows. Its61 texture-cache purges and462 completed upload batches moved

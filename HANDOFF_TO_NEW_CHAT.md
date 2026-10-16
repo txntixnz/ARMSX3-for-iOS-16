@@ -9516,3 +9516,35 @@ visual baseline is recovered, investigate FIFO/SPU bottleneck separately.
 
 Local validation passed: Build145 fixture, diff whitespace check, exact Build143
 76-patch/workflow/reuse-test parity. Full iOS CI and phone test pending.
+
+
+## Build146 — vector SPU bit counts; Build145 graphics preserved
+
+User confirmed Build145 graphics OK and requested SPU performance work.
+Log ARMSX3-startup-20261016-121533-391-43997.txt /PID43997:2073 accepted
+presents, clean Stop/zero CPUs,12 complete slow windows about2.84445FPS.
+15 historical budget passes, no bounded eviction. Busy SPUs near97–98%
+of a core, renderer often FIFO-starved. Not a controlled FPS comparison;
+no evidence establishes CNTB/CLZ's time share.
+Parent main2cc6775bad3cbf9199e82f6399d2937694b4f5a3.
+
+New0077-ios-neon-spu-bit-counts.patch touches only SPUInterpreter CNTB/CLZ:
+iOS ARM64 vcntq_u8/vclzq_u32 replace staged masks/shifts/adds or scalar counts.
+Fallback bodies unchanged. Renderer/texture patches1..76, input, scheduler,
+JIT protections and floating-point behavior unchanged. No promised FPS gain.
+
+Validation:76 baseline patches apply to92b931b9fb5eef7f1317cb482917dfc19aceebd9;
+new patch reverses/checks/reapplies. Changed native interpreter whitespace
+passes (whole upstream diff includes existing CRLF warnings in unrelated
+RSX files).212992 exact old/new/reference cases per each of five platform
+configurations pass ASAN+UBSAN/-O2/warnings-as-errors: every byte/lane, CLZ
+boundaries/zero/mixed words, random data,128 registers, aliases/full context.
+Host models NEON; actual Apple compilation is pending. CI checks one vector
+CNT.16B/CLZ.4S per new body with no stack/calls. Build146 foundation/intake/
+cleanup fixture passes. Full iOS build and phone performance remain pending.
+
+User authorized publishing to txntixnz/ARMSX3-for-iOS-16 main in this session.
+Publish using expected parent; check workflow queued once, do not monitor.
+Git shell push has no credentials; use connected GitHub blob/tree/commit/ref.
+No agents/images. Once green install ARMSX3_iOS16_INSTALL_THIS_IPA, Quick
+start -> Start game, same menu/car ~60seconds, Stop and share log/graphics/FPS.

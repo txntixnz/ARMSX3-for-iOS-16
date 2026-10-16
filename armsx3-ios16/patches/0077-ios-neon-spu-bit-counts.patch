@@ -1,0 +1,35 @@
+--- a/rpcs3/Emu/Cell/SPUInterpreter.cpp
++++ b/rpcs3/Emu/Cell/SPUInterpreter.cpp
+@@ -1154,10 +1154,14 @@
+ template <spu_exec_bit... Flags>
+ bool CLZ(spu_thread& spu, spu_opcode_t op)
+ {
++#if defined(ARCH_ARM64) && defined(__APPLE__) && TARGET_OS_IOS
++	spu.gpr[op.rt] = vclzq_u32(static_cast<uint32x4_t>(spu.gpr[op.ra]));
++#else
+ 	for (u32 i = 0; i < 4; i++)
+ 	{
+ 		spu.gpr[op.rt]._u32[i] = std::countl_zero(spu.gpr[op.ra]._u32[i]);
+ 	}
++#endif
+ 	return true;
+ }
+ 
+@@ -1179,6 +1183,9 @@
+ template <spu_exec_bit... Flags>
+ bool CNTB(spu_thread& spu, spu_opcode_t op)
+ {
++#if defined(ARCH_ARM64) && defined(__APPLE__) && TARGET_OS_IOS
++	spu.gpr[op.rt] = vcntq_u8(spu.gpr[op.ra]);
++#else
+ 	const auto a = spu.gpr[op.ra];
+ 	const auto mask1 = _mm_set1_epi8(0x55);
+ 	const auto sum1 = _mm_add_epi8(_mm_and_si128(_mm_srli_epi64(a, 1), mask1), _mm_and_si128(a, mask1));
+@@ -1187,6 +1194,7 @@
+ 	const auto mask3 = _mm_set1_epi8(0x0f);
+ 	const auto sum3 = _mm_add_epi8(_mm_and_si128(_mm_srli_epi64(sum2, 4), mask3), _mm_and_si128(sum2, mask3));
+ 	spu.gpr[op.rt] = sum3;
++#endif
+ 	return true;
+ }
+ 
