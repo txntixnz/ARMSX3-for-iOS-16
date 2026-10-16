@@ -1,35 +1,36 @@
-# Current checkpoint — Build137
+# Current checkpoint — Build138
 
-Build136 completed a clean phone session and Stop with2352 accepted presents.
-The22 slow windows averaged1.78FPS over225.26seconds, with66.8% of RSX wall time
-waiting on an empty FIFO. Later kernel samples show about555% sampled live CPU
-usage (100%=one core). Three SPU workers use roughly96–98% each; the RSX thread
-still consumes about70% of a core on average. This indicates CPU contention even
-while the renderer waits for commands. Runs differ, so these are not controlled
-before/after FPS measurements.
+Build137 completed a clean phone session and Stop with 2243 accepted presents.
+Its 25 complete slow windows averaged 1.98 FPS over 257.88 seconds. The last
+20 CPU samples show the RSX thread using 17.1% of one core, versus 78.9% in
+the previous run's comparable late samples. The timed empty-FIFO wait reduced
+renderer CPU use; three SPU workers still consume about 97–99% each. These
+user-driven sessions are not a controlled before/after FPS benchmark.
 
-Build137 preserves the initial8 empty-FIFO hot polls, then uses the native
-interruptible timed wait with a requested100-microsecond duration. GET remains
-published before waiting; the next poll checks for commands normally. The sleep
-is timed because guest PUT writes do not notify this wait. Actual wake latency
-depends on iOS scheduling and may exceed the requested duration.
+Build138 adds sparse instruction-dispatch sampling inside each SPU worker's
+own static interpreter. Every 16384–32767 fetched instructions, it records
+the existing PC/opcode pair in a fixed 128-entry table. Reports every ten
+seconds list six frequent pairs, total samples and samples the full table
+could not track. The data persists across gateway re-entries; collection
+does not read another worker's registers or guest memory.
 
-After parking, the outer loop services local tasks, ZCULL and host DMA on its
-next iteration. This prevents the usual64-poll service interval from becoming
-a millisecond-scale maintenance delay. macOS/Android/x86 wait policies are
-unchanged. This change aims to reduce idle renderer CPU contention; its effect
-on phone FPS remains unmeasured. Both existing timing reports remain active.
+This measures sampled instruction frequency, not CPU time. The table can
+miss later instruction sites when full, and the per-instruction countdown
+has device overhead that remains unmeasured. The reports are evidence for
+the next optimization; this diagnostic change does not promise higher FPS.
+The verified renderer wait remains active alongside RSX wall/host CPU reports.
 
-Host checks pass for the exact native FIFO wait case and outer poll loop:
-GET publication, hot polls, repeated parking, command arrival, fresh hot windows,
-Stop/pause, and next-poll maintenance. All71 patches apply. Runtime, RSX timing,
-CPU sampling and the frozen120-stage/Quickstart contracts also pass. Apple SDK
-compilation and real device performance remain pending the next test.
+All 72 patches apply to the pinned native source. Sanitized host checks pass
+for the exact SPU interpreter/profile with modeled instruction and platform
+interfaces: matching PC/branch/Stop behavior, bounded coverage reporting,
+short gateway re-entries and six-worker isolation. Runtime, SPU entry, FIFO
+maintenance and frozen 120-stage/Quickstart regressions also pass. Apple SDK
+compilation and actual device profiling still require the next test.
 
-Install `ARMSX3_iOS16_INSTALL_THIS_IPA`, **Quick start -> Start game**, and try the
-same menu/car sequence for about60seconds. Finish with **Stop game** and share
-the log and responsiveness. Imported firmware/disc/cache persist. Full120 checks
-are optional. Graphics/input/texture policies remain as before; audio remains null.
+Install `ARMSX3_iOS16_INSTALL_THIS_IPA`, **Quick start -> Start game**, and spend
+about 60 seconds in the **slow 3D menu/car screen**. Finish with **Stop game**
+and share the log and responsiveness. Imported firmware/disc/cache persist.
+Full 120 checks are optional. Audio remains null; driving is unconfirmed.
 Historical checkpoints follow.
 
 # ARMSX3 for iOS 16 — P0 port checkpoint

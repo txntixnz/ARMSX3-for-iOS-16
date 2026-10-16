@@ -8932,3 +8932,90 @@ real-work-bound or spinning in guest loops; utilization alone cannot distinguish
 those. If lag persists, investigate SPU work using owner-thread-safe evidence
 and/or real iOS recompiler implementation. Do not enable native live guest sampler
 or bypass the missing mutable-JIT boundary. Driving remains unconfirmed.
+
+
+## Build138 — SPU-owned sparse dispatch profiling after verified RSX CPU savings
+
+Latest attachment read directly from upload:
+ARMSX3-startup-20261015-233940-517-37371.txt, PID 37371, Build137.
+Parent main 18d592fb9784325058cdb8d1465b9dc5d51d7bd6; tree
+272de1dd0efe1d42e0737fdbeeb5e898bcb77fae; installable run 38822889067.
+
+Phone evidence:
+- Clean user Stop at 1792107575.214346; final 2243 accepted presents. RSX final
+  7575.218951, GPU idle 7575.233717, device/instance gone 7576.166075, FXO done
+  7576.353942, VM done 7576.356738, fully stopped with zero CPUs 7576.361438,
+  RENDER/UI PASS 7576.363271/7576.367242. No fatal/crash or hung teardown.
+- 25 complete slow RSX windows: 510 frames / 257.88 seconds = 1.98 FPS, weighted
+  empty-FIFO wall time 55.8%. Later stable windows remain about 79–80% idle.
+  Build136 had 22 slow windows, 400 frames / 225.26 seconds = 1.78 FPS.
+  Different manual sessions: do not claim a controlled FPS gain.
+- Last 20 CPU snapshots: RSX mean 17.1% of one core, versus 78.9% in the prior
+  run's late 20. Build137 timed parking clearly reduced renderer CPU use.
+  Primary SPURS Kernel2/3 still average 98.8%/98.7%, Secondary Kernel0 97.1%.
+  Total sampled live CPU is about 495–500% late versus about 555% previously.
+  PPU render thread is about 16%; other SPUs vary around 35–65%.
+- 28 PPU + 6 SPU joined contexts; 21,865,732,711 estimated instructions and
+  6,690,721 completed HLE/LV2 calls. Utilization alone does not tell whether
+  SPUs perform useful work or spin in guest loops. Native SPU log/kernel names
+  use lv2_id; joined runtime registry IDs are different and must not be equated.
+
+Patch0072-ios-spu-owned-dispatch-profile.patch:
+- Only SPUCommonRecompiler.cpp changes. iOS-only, static thread_local profile
+  per SPU host worker, cached pointer once on entry to old_interpreter. The
+  fixed table/countdown persists across short gateway re-entries. Destruction
+  stays trivial because SPU g_escape can abandon interpreter stack frames.
+- Sample the opcode ALREADY fetched by the owner, with its current PC. Jittered
+  LCG stride 16384..32767 dispatches avoids one fixed sampling interval. There
+  is a decrement/branch each instruction; actual phone overhead is unmeasured.
+  No extra guest-memory read, remote live register/LS/registry access or thread.
+- Sample handling is noinline, fixed 128-entry open-address table keyed by
+  PC AND opcode, so code changes at the same address remain separate. Full
+  tables count untracked samples; they do not silently claim full coverage.
+  Entries retained early in a window can omit later sites: interpret coverage.
+- Clock checks occur only on sparse samples. Every >=10 seconds report total
+  samples, untracked count, window wall time, final flag and six frequent
+  PC/opcode pairs with percentage of ALL samples. Ranked copy/string formatting
+  happens only when reporting. The fixed table itself needs no heap allocation.
+- Normal stopped-loop return flushes the remaining window. Gateway escape or
+  exception can bypass that final report; periodic reports remain the evidence.
+  Normal fallback re-entry does not clear the histogram or emit per-entry logs.
+- The log explicitly calls this instruction frequency, not CPU-time attribution.
+  High dispatch counts alone do not justify skipping instructions or sleeping
+  SPUs. Keep the native guest semantics, state checks and fallback/decoder gates.
+- Keep Build137 FIFO parking/next-poll maintenance, all graphics/texture policies,
+  input, PPU dispatch cache, null audio and current JIT protections. Full native
+  profiler stays disabled: its remote guest register/memory sampler is unsafe.
+  SPU dynamic requires LLVM-generated code, not a free C++ decoder setting.
+  Real recompiler performance still needs the actual iOS LLVM/JIT implementation;
+  never bypass apple_jit_write_protect or enable mutable code speculatively.
+
+Validation completed:
+- All 72 patches applied to exact 92b931b9fb5eef7f1317cb482917dfc19aceebd9 in
+  native138-validation; native whitespace clean. No submodules/Apple SDK locally.
+- New test_ios_spu_profile.py reconstructs the exact pinned native SPU file
+  through all patches, compiles the production old_interpreter before/after72
+  and actual profile class. ISA/storage/clock/log/state interfaces are explicit
+  host models; this is not full SPU ISA or ARM gateway/device validation.
+- ASAN+UBSAN, warnings as errors, iOS/macOS/Linux compile profiles all pass:
+  200000 dispatches retain exact branch/PC/accumulator/state-check results;
+  stride range/endpoints, 70/30 counts, coverage/misses, changed opcodes, reset,
+  zero samples/frequency, periodic/final reports and trivial destruction pass.
+  40000 short fallback invocations retain one TLS histogram/countdown, and six
+  concurrent host workers keep independent profiles. Non-iOS execution unchanged.
+- Historical SPU entry/missing Apple API boundary, production runtime/Stop/JIT
+  finalizer, four-platform exact FIFO wait/outer maintenance and frozen fixture
+  all pass; changed Python scripts compile. LeakSanitizer cannot inspect this
+  sandbox's /proc tasks, so rerun the two historical tests with the same
+  ASAN_OPTIONS=detect_leaks=0 already configured in CI; ASAN+UBSAN remain enabled.
+- Workflow adds the SPU profile regression to intake-host; 34+2 prerequisites
+  unchanged. App/fixture version138. No agents/images. No promised FPS increase.
+
+Next publish138 with lease18d592fb..., verify installable workflow queued ONCE,
+DO NOT monitor. User authorizes publication/builds. Install
+ARMSX3_iOS16_INSTALL_THIS_IPA, Quick start -> Start game, spend about60seconds
+in the SLOW 3D menu/car screen (startup copyright screens can already run30FPS),
+Stop game, share log/responsiveness. Look for “iOS SPU dispatch profile” together
+with HOST CPU and iOS RSX timing. Decode repeated PC/opcodes with native sources,
+account for untracked coverage and quantify overhead before a targeted change.
+Graphics/input/starter-car purchase work; driving remains unconfirmed.

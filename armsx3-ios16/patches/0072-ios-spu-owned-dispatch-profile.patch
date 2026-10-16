@@ -1,0 +1,109 @@
+--- a/rpcs3/Emu/Cell/SPUCommonRecompiler.cpp
++++ b/rpcs3/Emu/Cell/SPUCommonRecompiler.cpp
+@@ -2942,6 +2942,75 @@
+ 	spu_runtime::g_tail_escape(&spu, func, rip);
+ }
+ 
++#if defined(__APPLE__) && TARGET_OS_IOS
++// Owned entirely by this SPU worker, persisting across gateway re-entries.
++// Only an already-fetched opcode and this worker's PC enter the table.
++// Keep destruction trivial: the SPU gateway may abandon interpreter frames.
++struct ios_spu_dispatch_profile
++{
++	struct entry { u32 pc = 0, op = 0, hits = 0; };
++	std::array<entry, 128> entries{};
++	u32 id, seed, remaining = 0;
++	u64 samples = 0, untracked = 0;
++	u64 window_start = utils::get_tsc();
++	const u64 frequency = utils::get_tsc_freq();
++
++	explicit ios_spu_dispatch_profile(u32 thread_id)
++		: id(thread_id), seed(thread_id ^ 0x9e3779b9u)
++	{
++		remaining = next_interval();
++		spu_log.success("iOS SPU dispatch sampling started: id=0x%x; stride=16384..32767; instruction frequency only", id);
++	}
++
++	u32 next_interval()
++	{
++		seed = seed * 1664525u + 1013904223u;
++		return 16384u + (seed & 16383u);
++	}
++
++	void report(bool final)
++	{
++		const u64 now = utils::get_tsc();
++		auto ranked = entries;
++		std::partial_sort(ranked.begin(), ranked.begin() + 6, ranked.end(),
++			[](const entry& a, const entry& b) { return a.hits > b.hits; });
++		std::string detail;
++		for (usz i = 0; i < 6 && ranked[i].hits; ++i)
++		{
++			const auto& e = ranked[i];
++			fmt::append(detail, "; pc=0x%05x op=0x%08x n=%u (%.1f%%)",
++				e.pc, e.op, e.hits, 100.0 * e.hits / samples);
++		}
++		const double wall_ms = frequency ? 1000.0 * (now - window_start) / frequency : 0.0;
++		spu_log.success("iOS SPU dispatch profile: id=0x%x; samples=%u; untracked=%u; wall=%.1f ms; final=%u%s",
++			id, samples, untracked, wall_ms, final ? 1u : 0u, detail);
++		entries = {};
++		samples = untracked = 0;
++		window_start = utils::get_tsc();
++	}
++
++	[[gnu::noinline]] void record(u32 pc, u32 op)
++	{
++		++samples;
++		const usz hash = ((pc >> 2) * 0x9e3779b9u ^ op) & (entries.size() - 1);
++		bool tracked = false;
++		for (usz n = 0; n < entries.size(); ++n)
++		{
++			auto& e = entries[(hash + n) & (entries.size() - 1)];
++			if (!e.hits || (e.pc == pc && e.op == op))
++			{
++				e.pc = pc; e.op = op; ++e.hits;
++				tracked = true;
++				break;
++			}
++		}
++		if (!tracked) ++untracked;
++		const u64 now = utils::get_tsc();
++		if (frequency && now - window_start >= frequency * 10) report(false);
++	}
++};
++#endif
++
+ void spu_recompiler_base::old_interpreter(spu_thread& spu, void* ls, u8* /*rip*/)
+ {
+ 	// Also reachable with a recompiler selected, as the per-thread fallback for a block that
+@@ -2960,6 +3029,10 @@
+ 
+ 	// LS pointer
+ 	const auto base = static_cast<const u8*>(ls);
++#if defined(__APPLE__) && TARGET_OS_IOS
++	static thread_local ios_spu_dispatch_profile thread_profile(spu.lv2_id);
++	auto* const profile = &thread_profile;
++#endif
+ 
+ 	while (true)
+ 	{
+@@ -2992,9 +3065,19 @@
+ 		}
+ 
+ 		const u32 op = *reinterpret_cast<const be_t<u32>*>(base + spu.pc);
++#if defined(__APPLE__) && TARGET_OS_IOS
++		if (--profile->remaining == 0) [[unlikely]]
++		{
++			profile->record(spu.pc, op);
++			profile->remaining = profile->next_interval();
++		}
++#endif
+ 		if (table.decode(op)(spu, {op}))
+ 			spu.pc += 4;
+ 	}
++#if defined(__APPLE__) && TARGET_OS_IOS
++	if (::is_stopped(spu.state)) profile->report(true);
++#endif
+ }
+ 
+ std::vector<u32> spu_thread::discover_functions(u32 base_addr, std::span<const u8> ls, bool is_known_addr, u32 /*entry*/)
